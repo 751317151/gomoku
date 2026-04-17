@@ -1,0 +1,123 @@
+package com.gomoku.game;
+
+/**
+ * 五子棋棋盘逻辑
+ */
+public class GomokuBoard {
+
+    public static final int SIZE = 15;
+    public static final int EMPTY = 0;
+    public static final int BLACK = 1;
+    public static final int WHITE = 2;
+
+    private final int[][] board;
+    private int currentTurn; // 当前轮到谁
+    private int moveCount;
+
+    public GomokuBoard() {
+        this.board = new int[SIZE][SIZE];
+        this.currentTurn = BLACK; // 黑棋先手
+        this.moveCount = 0;
+    }
+
+    /**
+     * 尝试落子
+     * @return true 如果落子成功
+     */
+    public boolean placeStone(int row, int col, int stone) {
+        if (!isValidMove(row, col)) return false;
+        if (stone != currentTurn) return false;
+
+        board[row][col] = stone;
+        moveCount++;
+        currentTurn = (currentTurn == BLACK) ? WHITE : BLACK;
+        return true;
+    }
+
+    /**
+     * 检查是否有效位置
+     */
+    public boolean isValidMove(int row, int col) {
+        return row >= 0 && row < SIZE
+                && col >= 0 && col < SIZE
+                && board[row][col] == EMPTY;
+    }
+
+    /**
+     * 检查指定石子是否获胜
+     */
+    public boolean checkWin(int row, int col) {
+        int stone = board[row][col];
+        if (stone == EMPTY) return false;
+
+        // 四个方向：横、竖、左斜、右斜
+        int[][] directions = {{0,1},{1,0},{1,1},{1,-1}};
+
+        for (int[] dir : directions) {
+            int count = 1;
+            // 正方向
+            count += countDirection(row, col, dir[0], dir[1], stone);
+            // 反方向
+            count += countDirection(row, col, -dir[0], -dir[1], stone);
+
+            if (count >= 5) return true;
+        }
+        return false;
+    }
+
+    /**
+     * 计算某方向连续同色棋子数
+     */
+    private int countDirection(int row, int col, int dr, int dc, int stone) {
+        int count = 0;
+        int r = row + dr;
+        int c = col + dc;
+
+        while (r >= 0 && r < SIZE && c >= 0 && c < SIZE && board[r][c] == stone) {
+            count++;
+            r += dr;
+            c += dc;
+        }
+        return count;
+    }
+
+    /**
+     * 检查是否平局（棋盘已满）
+     */
+    public boolean isDraw() {
+        return moveCount >= SIZE * SIZE;
+    }
+
+    /**
+     * 重置棋盘
+     */
+    public void reset() {
+        for (int i = 0; i < SIZE; i++) {
+            for (int j = 0; j < SIZE; j++) {
+                board[i][j] = EMPTY;
+            }
+        }
+        currentTurn = BLACK;
+        moveCount = 0;
+    }
+
+    /**
+     * 将棋盘序列化为字符串（用于传输）
+     */
+    public String serialize() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < SIZE; i++) {
+            for (int j = 0; j < SIZE; j++) {
+                sb.append(board[i][j]);
+                if (j < SIZE - 1) sb.append(',');
+            }
+            if (i < SIZE - 1) sb.append(';');
+        }
+        return sb.toString();
+    }
+
+    public int[][] getBoard() { return board; }
+    public int getCurrentTurn() { return currentTurn; }
+    public int getMoveCount() { return moveCount; }
+    public int getCell(int row, int col) { return board[row][col]; }
+}
