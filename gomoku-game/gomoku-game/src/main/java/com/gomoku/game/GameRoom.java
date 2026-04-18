@@ -11,8 +11,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -22,11 +22,22 @@ public class GameRoom {
 
     private static final Logger logger = LoggerFactory.getLogger(GameRoom.class);
     private static final Gson gson = new Gson();
-    private static final ScheduledExecutorService aiExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
-        Thread t = new Thread(r, "AI-Move-Thread");
-        t.setDaemon(true);
-        return t;
-    });
+    // 多线程 AI 线程池：支持多个房间同时计算 AI 落子
+    private static final int AI_POOL_SIZE = Math.max(2, Runtime.getRuntime().availableProcessors());
+    private static final ScheduledExecutorService aiExecutor = createAIExecutor();
+
+    private static ScheduledExecutorService createAIExecutor() {
+        ScheduledThreadPoolExecutor pool = new ScheduledThreadPoolExecutor(
+                AI_POOL_SIZE,
+                r -> {
+                    Thread t = new Thread(r, "AI-Move-Thread");
+                    t.setDaemon(true);
+                    return t;
+                }
+        );
+        pool.setRemoveOnCancelPolicy(true);
+        return pool;
+    }
 
     private static final int AI_DELAY_MS = 600;
 
