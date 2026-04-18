@@ -41,6 +41,7 @@ let roomId = '';
 let gameState = 'LOBBY'; // LOBBY | WAITING | PLAYING | OVER | SPECTATING
 let currentTurn = 1; // 1=黑, 2=白
 let moveCount = 0;
+let moveSeq = 0; // 落子序列号（防重复）
 let board = Array.from({length: BOARD_SIZE}, () => new Array(BOARD_SIZE).fill(0));
 let lastMove = null;
 let players = {};
@@ -391,7 +392,8 @@ function send(obj) {
 }
 
 function sendMove(row, col) {
-  send({ type: 'MOVE', row, col });
+  moveSeq++;
+  send({ type: 'MOVE', row, col, moveSeq });
 }
 
 function sendChat() {
@@ -676,6 +678,7 @@ function handleGameStart(msg) {
   gameState = 'PLAYING';
   currentTurn = 1; // 黑棋先
   moveCount = 0;
+  moveSeq = 0;
   board = Array.from({length: BOARD_SIZE}, () => new Array(BOARD_SIZE).fill(0));
   lastMove = null;
 
@@ -712,6 +715,10 @@ function handleGameMove(msg) {
   lastMove = [r, c];
   currentTurn = parseInt(msg.data) || (msg.stone === 1 ? 2 : 1);
   moveCount++;
+  // 同步 moveSeq（以服务端为准）
+  if (msg.moveSeq && msg.moveSeq > moveSeq) {
+    moveSeq = msg.moveSeq;
+  }
 
   document.getElementById('move-count').textContent = '落子数: ' + moveCount;
   updateTurnStatus();

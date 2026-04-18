@@ -17,12 +17,14 @@ public class GomokuBoard {
     private final int[][] board;
     private int currentTurn; // 当前轮到谁
     private int moveCount;
+    private int moveSeq; // 全局递增序列号（用于消息幂等）
     private final List<int[]> moveHistory = new ArrayList<>();
 
     public GomokuBoard() {
         this.board = new int[SIZE][SIZE];
         this.currentTurn = BLACK; // 黑棋先手
         this.moveCount = 0;
+        this.moveSeq = 0;
     }
 
     /**
@@ -35,6 +37,7 @@ public class GomokuBoard {
 
         board[row][col] = stone;
         moveCount++;
+        moveSeq++;
         moveHistory.add(new int[]{row, col, stone});
         currentTurn = (currentTurn == BLACK) ? WHITE : BLACK;
         return true;
@@ -105,6 +108,7 @@ public class GomokuBoard {
         }
         currentTurn = BLACK;
         moveCount = 0;
+        moveSeq = 0;
         moveHistory.clear();
     }
 
@@ -132,5 +136,6 @@ public class GomokuBoard {
  int[][] getBoard() { return board; }
     public int getCurrentTurn() { return currentTurn; }
     public int getMoveCount() { return moveCount; }
+    public int getMoveSeq() { return moveSeq; }
     public int getCell(int row, int col) { return board[row][col]; }
 }

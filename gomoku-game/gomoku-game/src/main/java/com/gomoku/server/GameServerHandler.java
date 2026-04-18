@@ -18,6 +18,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.net.InetSocketAddress;
+import java.util.EnumMap;
+import java.util.function.BiConsumer;
+
 @Component
 @ChannelHandler.Sharable
 public class GameServerHandler extends SimpleChannelInboundHandler<TextWebSocketFrame> {
@@ -26,14 +30,38 @@ public class GameServerHandler extends SimpleChannelInboundHandler<TextWebSocket
     private static final Gson gson = new Gson();
     private final RoomManager roomManager;
 
+    // Handler Registry：替代 switch-case，可扩展
+    private final EnumMap<GameMessage.Type, BiConsumer<Channel, GameMessage>> handlers = new EnumMap<>(GameMessage.Type.class);
+
     @Autowired
     public GameServerHandler(RoomManager roomManager) {
         this.roomManager = roomManager;
+        registerHandlers();
+    }
+
+    private void registerHandlers() {
+        handlers.put(GameMessage.Type.GET_ROOMS, (conn, msg) -> handleGetRooms(conn));
+        handlers.put(GameMessage.Type.JOIN, this::handleJoin);
+        handlers.put(GameMessage.Type.SPECTATE, this::handleSpectate);
+        handlers.put(GameMessage.Type.ADD_AI, (conn, msg) -> handleAddAI(conn));
+        handlers.put(GameMessage.Type.MOVE, this::handleMove);
+        handlers.put(GameMessage.Type.CHAT, this::handleChat);
+        handlers.put(GameMessage.Type.RESTART, (conn, msg) -> handleRestart(conn));
+        handlers.put(GameMessage.Type.LEAVE, (conn, msg) -> handleLeave(conn));
+        handlers.put(GameMessage.Type.RECONNECT, this::handleReconnect);
+        handlers.put(GameMessage.Type.SURRENDER, (conn, msg) -> handleSurrender(conn));
+        handlers.put(GameMessage.Type.PING, (conn, msg) -> {}); // 心跳无操作
     }
 
     @Override
     public void handlerAdded(ChannelHandlerContext ctx) {
-        logger.info("新连接：{}", ctx.channel().remoteAddress());
+        String ip = getIp(ctx.channel());
+        if (ip != null && !roomManager.checkIpLimit(ip)) {
+            logger.warn("IP 连接数超限，拒绝: {}", ip);
+            ctx.close();
+            return;
+        }
+        logger.info("新连接：{} (IP: {})", ctx.channel().remoteAddress(), ip);
     }
 
     @Override
@@ -76,9 +104,6 @@ public class GameServerHandler extends SimpleChannelInboundHandler<TextWebSocket
         ctx.close();
     }
 
-    /**
-     * 处理 IdleStateEvent（心跳超时）
-     */
     @Override
     public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
         if (evt instanceof IdleStateEvent) {
@@ -94,47 +119,18 @@ public class GameServerHandler extends SimpleChannelInboundHandler<TextWebSocket
     }
 
     /**
-     * 处理客户端消息
+     * Handler Registry 分发：替代 switch-case
      */
     private void handleMessage(Channel conn, GameMessage msg) {
-        switch (msg.getType()) {
-            case GET_ROOMS:
-                handleGetRooms(conn);
-                break;
-            case JOIN:
-                handleJoin(conn, msg);
-                break;
-            case SPECTATE:
-                handleSpectate(conn, msg);
-                break;
-            case ADD_AI:
-                handleAddAI(conn);
-                break;
-            case MOVE:
-                handleMove(conn, msg);
-                break;
-            case CHAT:
-                handleChat(conn, msg);
-                break;
-            case RESTART:
-                handleRestart(conn);
-                break;
-            case LEAVE:
-                handleLeave(conn);
-                break;
-            case RECONNECT:
-                handleReconnect(conn, msg);
-                break;
-            case SURRENDER:
-                handleSurrender(conn);
-                break;
-            case PING:
-                // 心跳响应，无需处理
-                break;
-            default:
-                sendError(conn, "未知消息类型");
+        BiConsumer<Channel, GameMessage> handler = handlers.get(msg.getType());
+        if (handler != null) {
+            handler.accept(conn, msg);
+        } else {
+            sendError(conn, "未知消息类型");
         }
     }
+
+    // ============ Handler 实现 ============
 
     private void handleGetRooms(Channel conn) {
         GameMessage res = new GameMessage(GameMessage.Type.ROOM_LIST);
@@ -144,14 +140,9 @@ public class GameServerHandler extends SimpleChannelInboundHandler<TextWebSocket
         }
     }
 
-    /**
-     * 处理加入游戏
-     */
     private void handleJoin(Channel conn, GameMessage msg) {
         Player existing = roomManager.getPlayer(conn);
-        if (existing != null && !existing.canPerformAction()) {
-            return; // 操作限流
-        }
+        if (existing != null && !existing.canPerformAction()) return;
 
         String playerName = NameSanitizer.sanitize(msg.getPlayerName());
         GameRoom room = roomManager.joinGame(conn, playerName, msg.getRoomId());
@@ -159,7 +150,6 @@ public class GameServerHandler extends SimpleChannelInboundHandler<TextWebSocket
             sendError(conn, "加入房间失败（房间可能已满或不存在）");
             return;
         }
-        // 只在等待状态时发送 WAITING（含 sessionId），避免覆盖 GAME_START
         if (room.getState() == GameRoom.State.WAITING) {
             Player player = roomManager.getPlayer(conn);
             if (player != null && player.getSessionId() != null) {
@@ -173,20 +163,15 @@ public class GameServerHandler extends SimpleChannelInboundHandler<TextWebSocket
         }
     }
 
-    /**
-     * 处理观战
-     */
     private void handleSpectate(Channel conn, GameMessage msg) {
         String playerName = NameSanitizer.sanitize(msg.getPlayerName());
         if (msg.getPlayerName() == null || msg.getPlayerName().trim().isEmpty()) {
             playerName = "观众" + (int) (Math.random() * 9000 + 1000);
         }
-
         if (msg.getRoomId() == null) {
             sendError(conn, "观战需要指定房间ID");
             return;
         }
-
         GameRoom room = roomManager.spectateGame(conn, playerName, msg.getRoomId());
         if (room == null) {
             sendError(conn, "观战失败（房间可能不存在）");
@@ -195,110 +180,61 @@ public class GameServerHandler extends SimpleChannelInboundHandler<TextWebSocket
 
     private void handleLeave(Channel conn) {
         roomManager.leaveRoom(conn);
-        handleGetRooms(conn); // 返回大厅后刷新房间列表
+        handleGetRooms(conn);
     }
 
     private void handleAddAI(Channel conn) {
         Player player = roomManager.getPlayer(conn);
-        if (player != null && !player.canPerformAction()) {
-            return; // 操作限流
-        }
-
+        if (player != null && !player.canPerformAction()) return;
         GameRoom room = roomManager.addAI(conn);
-        if (room == null) {
-            sendError(conn, "添加电脑失败");
-        }
+        if (room == null) sendError(conn, "添加电脑失败");
     }
 
-    /**
-     * 处理落子
-     */
     private void handleMove(Channel conn, GameMessage msg) {
         Player player = roomManager.getPlayer(conn);
-        if (player == null) {
-            sendError(conn, "请先加入游戏");
-            return;
-        }
-
-        if (!player.canPerformAction()) {
-            return; // 操作限流
-        }
+        if (player == null) { sendError(conn, "请先加入游戏"); return; }
+        if (!player.canPerformAction()) return;
 
         GameRoom room = roomManager.getRoomByPlayer(player);
-        if (room == null) {
-            sendError(conn, "房间不存在");
-            return;
-        }
+        if (room == null) { sendError(conn, "房间不存在"); return; }
 
-        boolean success = room.handleMove(player, msg.getRow(), msg.getCol());
-        if (!success) {
-            sendError(conn, "无效落子");
-        }
+        boolean success = room.handleMove(player, msg.getRow(), msg.getCol(), msg.getMoveSeq());
+        if (!success) sendError(conn, "无效落子");
     }
 
-    /**
-     * 处理聊天
-     */
     private void handleChat(Channel conn, GameMessage msg) {
         Player player = roomManager.getPlayer(conn);
         if (player == null) return;
-
         GameRoom room = roomManager.getRoomByPlayer(player);
         if (room == null) return;
-
         String text = NameSanitizer.sanitizeChat(msg.getMessage());
         if (text == null) return;
-
         room.handleChat(player, text);
     }
 
-    /**
-     * 处理重新开始
-     */
     private void handleRestart(Channel conn) {
         Player player = roomManager.getPlayer(conn);
         if (player == null) return;
-
-        if (!player.canPerformAction()) {
-            return; // 操作限流
-        }
-
+        if (!player.canPerformAction()) return;
         GameRoom room = roomManager.getRoomByPlayer(player);
         if (room == null) return;
-
         room.requestRestart(player);
     }
 
-    /**
-     * 处理认输
-     */
     private void handleSurrender(Channel conn) {
         Player player = roomManager.getPlayer(conn);
-        if (player == null) {
-            sendError(conn, "请先加入游戏");
-            return;
-        }
-
+        if (player == null) { sendError(conn, "请先加入游戏"); return; }
         GameRoom room = roomManager.getRoomByPlayer(player);
         if (room == null) return;
-
         room.surrender(player);
     }
 
-    /**
-     * 处理断线重连
-     */
     private void handleReconnect(Channel conn, GameMessage msg) {
-        if (msg.getSessionId() == null) {
-            sendError(conn, "重连需要 sessionId");
-            return;
-        }
-
+        if (msg.getSessionId() == null) { sendError(conn, "重连需要 sessionId"); return; }
         GameRoom room = roomManager.reconnect(conn, msg.getSessionId());
         if (room == null) {
             sendError(conn, "重连失败（会话已过期）");
         } else {
-            // 重连成功，发送完整游戏状态
             Player player = roomManager.getPlayer(conn);
             if (player != null) {
                 GameMessage syncMsg = new GameMessage(GameMessage.Type.GAME_SYNC);
@@ -314,14 +250,18 @@ public class GameServerHandler extends SimpleChannelInboundHandler<TextWebSocket
         }
     }
 
-    /**
-     * 发送错误消息
-     */
     private void sendError(Channel conn, String errorMsg) {
         GameMessage error = new GameMessage(GameMessage.Type.ERROR);
         error.setMessage(errorMsg);
         if (conn != null && conn.isActive()) {
             conn.writeAndFlush(new TextWebSocketFrame(gson.toJson(error)));
         }
+    }
+
+    private String getIp(Channel channel) {
+        if (channel.remoteAddress() instanceof InetSocketAddress) {
+            return ((InetSocketAddress) channel.remoteAddress()).getAddress().getHostAddress();
+        }
+        return null;
     }
 }

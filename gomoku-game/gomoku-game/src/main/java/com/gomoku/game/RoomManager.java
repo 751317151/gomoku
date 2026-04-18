@@ -8,9 +8,10 @@ import io.netty.channel.Channel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import io.micrometer.core.instrument.MeterRegistry;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
 /**
@@ -21,6 +22,8 @@ public class RoomManager {
 
     private static final Logger logger = LoggerFactory.getLogger(RoomManager.class);
     private static final Gson gson = new Gson();
+    private static final int MAX_CONNECTIONS_PER_IP = 5;
+    private static final long ROOM_IDLE_TIMEOUT_MS = TimeUnit.MINUTES.toMillis(5);
 
     // 房间ID -> 房间
     private final ConcurrentHashMap<String, GameRoom> rooms = new ConcurrentHashMap<>();
@@ -32,10 +35,67 @@ public class RoomManager {
     private final ConcurrentHashMap<String, String> sessionToPlayer = new ConcurrentHashMap<>();
     // 玩家ID -> 房间ID
     private final ConcurrentHashMap<String, String> playerRoom = new ConcurrentHashMap<>();
+    // IP -> 连接数（IP 限流）
+    private final ConcurrentHashMap<String, Integer> ipConnectionCount = new ConcurrentHashMap<>();
+
+    // 僵尸房间清理定时任务
+    private final ScheduledExecutorService cleanupExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "Room-Cleanup-Thread");
+        t.setDaemon(true);
+        return t;
+    });
+
+    public RoomManager(MeterRegistry meterRegistry) {
+        // 每 60 秒扫描一次僵尸房间
+        cleanupExecutor.scheduleAtFixedRate(this::cleanupIdleRooms, 60, 60, TimeUnit.SECONDS);
+
+        // 注册 Micrometer 自定义指标
+        meterRegistry.gauge("gomoku.players.online", playerByConn, ConcurrentHashMap::size);
+        meterRegistry.gauge("gomoku.rooms.total", rooms, ConcurrentHashMap::size);
+        meterRegistry.gauge("gomoku.rooms.playing", rooms, m ->
+                m.values().stream().filter(r -> r.getState() == GameRoom.State.PLAYING).count());
+        meterRegistry.gauge("gomoku.rooms.waiting", rooms, m ->
+                m.values().stream().filter(r -> r.getState() == GameRoom.State.WAITING).count());
+    }
 
     /**
-     * 获取所有房间列表（DTO）
+     * IP 连接数检查（返回 true 表示允许）
      */
+    public boolean checkIpLimit(String ip) {
+        int count = ipConnectionCount.merge(ip, 1, Integer::sum);
+        if (count > MAX_CONNECTIONS_PER_IP) {
+            ipConnectionCount.merge(ip, -1, Integer::sum);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * IP 连接释放
+     */
+    private void releaseIp(String ip) {
+        if (ip != null) {
+            ipConnectionCount.computeIfPresent(ip, (k, v) -> v <= 1 ? null : v - 1);
+        }
+    }
+
+    /**
+     * 清理超时空房间
+     */
+    private void cleanupIdleRooms() {
+        long now = System.currentTimeMillis();
+        for (Map.Entry<String, GameRoom> entry : rooms.entrySet()) {
+            GameRoom room = entry.getValue();
+            // 只清理 WAITING 状态且超过 5 分钟无活动的空房间
+            if (room.getState() == GameRoom.State.WAITING
+                    && room.getPlayerCount() == 0
+                    && now - room.getLastActivityTime() > ROOM_IDLE_TIMEOUT_MS) {
+                rooms.remove(entry.getKey());
+                logger.info("[CLEANUP] 清理僵尸房间 {}", entry.getKey());
+            }
+        }
+    }
+
     public String getRoomsListJson() {
         List<RoomListItemDto> list = new ArrayList<>();
         for (GameRoom room : rooms.values()) {
@@ -53,9 +113,6 @@ public class RoomManager {
         return gson.toJson(list);
     }
 
-    /**
-     * 玩家加入：指定房间或自动匹配
-     */
     public synchronized GameRoom joinGame(Channel conn, String playerName, String targetRoomId) {
         Player player = getOrCreatePlayer(conn, playerName);
 
@@ -84,9 +141,6 @@ public class RoomManager {
         return room;
     }
 
-    /**
-     * 玩家观战
-     */
     public synchronized GameRoom spectateGame(Channel conn, String playerName, String targetRoomId) {
         GameRoom room = rooms.get(targetRoomId);
         if (room == null) return null;
@@ -99,9 +153,6 @@ public class RoomManager {
         return room;
     }
 
-    /**
-     * 为单人房间添加电脑
-     */
     public synchronized GameRoom addAI(Channel conn) {
         Player player = playerByConn.get(conn);
         if (player == null) return null;
@@ -115,9 +166,6 @@ public class RoomManager {
         return null;
     }
 
-    /**
-     * 断线重连
-     */
     public synchronized GameRoom reconnect(Channel conn, String sessionId) {
         String playerId = sessionToPlayer.get(sessionId);
         if (playerId == null) return null;
@@ -131,27 +179,21 @@ public class RoomManager {
         GameRoom room = rooms.get(roomId);
         if (room == null) return null;
 
-        // 更新连接：先移除旧连接映射，再创建新 Player 并更新房间中的引用
         playerByConn.remove(oldPlayer.getConnection());
 
-        // 创建新 Player 对象，保留原有的 stone/wins/losses
         Player newPlayer = new Player(playerId, oldPlayer.getName(), conn, sessionId);
         newPlayer.setStone(oldPlayer.getStone());
         newPlayer.setWins(oldPlayer.getWins());
         newPlayer.setLosses(oldPlayer.getLosses());
-        // 需要确保新玩家对象在房间中替换旧引用
         room.replacePlayer(oldPlayer, newPlayer);
 
         playerByConn.put(conn, newPlayer);
         playerById.put(playerId, newPlayer);
 
-        logger.info("玩家 {} 断线重连，房间 {}", newPlayer.getName(), roomId);
+        logger.info("[AUDIT] reconnect playerId={} roomId={}", playerId, roomId);
         return room;
     }
 
-    /**
-     * 创建或获取玩家
-     */
     private Player getOrCreatePlayer(Channel conn, String playerName) {
         Player player = playerByConn.get(conn);
         if (player == null) {
@@ -167,9 +209,6 @@ public class RoomManager {
         return player;
     }
 
-    /**
-     * 广播房间列表给所有不在房间内的玩家
-     */
     public void broadcastRoomsList() {
         String dataJson = getRoomsListJson();
         GameMessage msg = new GameMessage(GameMessage.Type.ROOM_LIST);
@@ -183,9 +222,6 @@ public class RoomManager {
         }
     }
 
-    /**
-     * 玩家断开
-     */
     public synchronized void handleDisconnect(Channel conn) {
         Player player = playerByConn.remove(conn);
         if (player == null) return;
@@ -193,11 +229,14 @@ public class RoomManager {
         playerById.remove(player.getId());
         sessionToPlayer.remove(player.getSessionId());
         leaveRoom(player);
+
+        // 释放 IP 连接计数
+        if (conn.remoteAddress() instanceof java.net.InetSocketAddress) {
+            String ip = ((java.net.InetSocketAddress) conn.remoteAddress()).getAddress().getHostAddress();
+            releaseIp(ip);
+        }
     }
 
-    /**
-     * 离开房间（通过 Channel）
-     */
     public synchronized void leaveRoom(Channel conn) {
         Player player = playerByConn.get(conn);
         if (player != null) {
@@ -211,7 +250,6 @@ public class RoomManager {
             GameRoom room = rooms.get(roomId);
             if (room != null) {
                 room.handleDisconnect(player);
-                // 清理空房间
                 if (room.getPlayerCount() == 0) {
                     GameMessage kickMsg = new GameMessage(GameMessage.Type.ERROR);
                     kickMsg.setMessage("房间内玩家已全部离开，房间解散");
@@ -224,32 +262,23 @@ public class RoomManager {
                     room.getSpectators().clear();
 
                     rooms.remove(roomId);
-                    logger.info("房间 {} 已清理", roomId);
+                    logger.info("[CLEANUP] 房间 {} 已清理", roomId);
                 }
                 broadcastRoomsList();
             }
         }
     }
 
-    /**
-     * 根据连接获取玩家
-     */
     public Player getPlayer(Channel conn) {
         return playerByConn.get(conn);
     }
 
-    /**
-     * 根据玩家获取其房间
-     */
     public GameRoom getRoomByPlayer(Player player) {
         String roomId = playerRoom.get(player.getId());
         if (roomId == null) return null;
         return rooms.get(roomId);
     }
 
-    /**
-     * 查找等待中的房间
-     */
     private GameRoom findWaitingRoom() {
         for (GameRoom room : rooms.values()) {
             if (room.getState() == GameRoom.State.WAITING && !room.isFull()) {
@@ -259,9 +288,6 @@ public class RoomManager {
         return null;
     }
 
-    /**
-     * 获取服务器统计信息
-     */
     public Map<String, Object> getStats() {
         Map<String, Object> stats = new HashMap<>();
         stats.put("totalPlayers", playerByConn.size());
@@ -271,5 +297,15 @@ public class RoomManager {
         stats.put("waitingRooms", rooms.values().stream()
                 .filter(r -> r.getState() == GameRoom.State.WAITING).count());
         return stats;
+    }
+
+    /**
+     * 优雅停机：通知所有房间内玩家服务器即将关闭
+     */
+    public void notifyAllShutdown() {
+        for (GameRoom room : rooms.values()) {
+            room.notifyShutdown();
+        }
+        logger.info("[SHUTDOWN] 已通知所有 {} 个房间的玩家", rooms.size());
     }
 }

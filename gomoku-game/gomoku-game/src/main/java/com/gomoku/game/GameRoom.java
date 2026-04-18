@@ -4,6 +4,11 @@ import com.gomoku.dto.*;
 import com.gomoku.model.GameMessage;
 import com.gomoku.model.Player;
 import com.google.gson.Gson;
+import io.netty.channel.Channel;
+import io.netty.channel.group.ChannelGroup;
+import io.netty.channel.group.DefaultChannelGroup;
+import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
+import io.netty.util.concurrent.GlobalEventExecutor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -14,6 +19,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
  * 游戏房间 - 管理两名玩家的对战
@@ -22,7 +29,6 @@ public class GameRoom {
 
     private static final Logger logger = LoggerFactory.getLogger(GameRoom.class);
     private static final Gson gson = new Gson();
-    // 多线程 AI 线程池：支持多个房间同时计算 AI 落子
     private static final int AI_POOL_SIZE = Math.max(2, Runtime.getRuntime().availableProcessors());
     private static final ScheduledExecutorService aiExecutor = createAIExecutor();
 
@@ -42,93 +48,130 @@ public class GameRoom {
     private static final int AI_DELAY_MS = 600;
 
     public enum State {
-        WAITING,   // 等待玩家
-        PLAYING,   // 对战中
-        FINISHED   // 游戏结束
+        WAITING, PLAYING, FINISHED
     }
 
     private final String roomId;
     private final CopyOnWriteArrayList<Player> players;
     private final CopyOnWriteArrayList<Player> spectators;
     private final GomokuBoard board;
+    private final ChannelGroup channelGroup;
+    // ReadWriteLock：读操作（查状态、广播）并发执行，写操作（落子、状态变更）互斥
+    private final ReadWriteLock lock = new ReentrantReadWriteLock();
+
     private volatile State state;
     private volatile Player currentPlayer;
     private volatile Player winner;
     private Player aiPlayer;
     private int roundCount;
-
-    // 重启确认
-    private volatile String restartRequestedBy; // playerId who requested restart
+    private volatile long lastActivityTime;
+    private volatile String restartRequestedBy;
 
     public GameRoom(String roomId) {
         this.roomId = roomId;
+        this.channelGroup = new DefaultChannelGroup("room-" + roomId, GlobalEventExecutor.INSTANCE);
         this.players = new CopyOnWriteArrayList<>();
         this.spectators = new CopyOnWriteArrayList<>();
         this.board = new GomokuBoard();
         this.state = State.WAITING;
         this.roundCount = 0;
+        this.lastActivityTime = System.currentTimeMillis();
     }
 
-    /**
-     * 玩家加入房间
-     */
-    public synchronized boolean addPlayer(Player player) {
-        if (players.size() >= 2) return false;
-        // 清除上一局的 stone 残留，避免 ROOM_INFO 带旧值
-        player.setStone(0);
-        players.add(player);
-        logger.info("玩家 {} 加入房间 {}", player.getName(), roomId);
+    private void touchActivity() {
+        this.lastActivityTime = System.currentTimeMillis();
+    }
 
-        if (players.size() == 2) {
-            startGame();
-        } else {
-            // 通知等待
-            GameMessage msg = new GameMessage(GameMessage.Type.WAITING);
-            msg.setRoomId(roomId);
-            msg.setPlayerId(player.getId());
-            msg.setMessage("等待对手加入...");
-            player.sendMessage(gson.toJson(msg));
+    public long getLastActivityTime() {
+        return lastActivityTime;
+    }
+
+    // ============ 状态语义方法（替代分散的 if/else） ============
+
+    public boolean canJoin() {
+        return players.size() < 2;
+    }
+
+    public boolean canMove() {
+        return state == State.PLAYING;
+    }
+
+    public boolean canRestart() {
+        return state == State.FINISHED;
+    }
+
+    public boolean canSurrender() {
+        return state == State.PLAYING;
+    }
+
+    // ============ 玩家管理 ============
+
+    public boolean addPlayer(Player player) {
+        lock.writeLock().lock();
+        try {
+            if (players.size() >= 2) return false;
+            player.setStone(0);
+            players.add(player);
+            if (player.isConnected()) {
+                channelGroup.add(player.getConnection());
+            }
+            touchActivity();
+            logger.info("[AUDIT] player_join roomId={} playerId={} playerName={}", roomId, player.getId(), player.getName());
+
+            if (players.size() == 2) {
+                startGame();
+            } else {
+                GameMessage msg = new GameMessage(GameMessage.Type.WAITING);
+                msg.setRoomId(roomId);
+                msg.setPlayerId(player.getId());
+                msg.setMessage("等待对手加入...");
+                player.sendMessage(gson.toJson(msg));
+            }
+            broadcastRoomInfo();
+            return true;
+        } finally {
+            lock.writeLock().unlock();
         }
-        broadcastRoomInfo();
-        return true;
     }
 
-    /**
-     * 添加电脑
-     */
-    public synchronized void addAI() {
-        if (players.size() >= 2) return;
-        String aiId = "AI-" + UUID.randomUUID().toString().substring(0, 4);
-        aiPlayer = new Player(aiId, "电脑", null);
-        addPlayer(aiPlayer);
+    public void addAI() {
+        lock.writeLock().lock();
+        try {
+            if (players.size() >= 2) return;
+            String aiId = "AI-" + UUID.randomUUID().toString().substring(0, 4);
+            aiPlayer = new Player(aiId, "电脑", null);
+            addPlayer(aiPlayer);
+        } finally {
+            lock.writeLock().unlock();
+        }
     }
 
-    /**
-     * 观战者加入
-     */
     public void addSpectator(Player player) {
         spectators.add(player);
-        logger.info("玩家 {} 观战房间 {}", player.getName(), roomId);
+        if (player.isConnected()) {
+            channelGroup.add(player.getConnection());
+        }
+        touchActivity();
+        logger.info("[AUDIT] spectator_join roomId={} playerId={}", roomId, player.getId());
 
         GameMessage msg = new GameMessage(GameMessage.Type.GAME_SYNC);
         msg.setRoomId(roomId);
         msg.setMessage("你已加入观战");
         msg.setData(gson.toJson(buildSyncData()));
         player.sendMessage(gson.toJson(msg));
-
         broadcastRoomInfo();
     }
 
-    /**
-     * 开始游戏
-     */
-    private synchronized void startGame() {
+    // ============ 游戏流程 ============
+
+    private void startGame() {
+        // 调用方已持有 writeLock
         state = State.PLAYING;
         roundCount++;
         board.reset();
         restartRequestedBy = null;
+        touchActivity();
 
-        // 奇数局黑棋先手，交替
         if (roundCount % 2 == 1) {
             players.get(0).setStone(GomokuBoard.BLACK);
             players.get(1).setStone(GomokuBoard.WHITE);
@@ -138,7 +181,6 @@ public class GameRoom {
         }
         currentPlayer = getBlackPlayer();
 
-        // 通知双方游戏开始
         for (Player p : players) {
             GameMessage msg = new GameMessage(GameMessage.Type.GAME_START);
             msg.setRoomId(roomId);
@@ -149,7 +191,6 @@ public class GameRoom {
             p.sendMessage(gson.toJson(msg));
         }
 
-        // 通知观战者
         GameMessage syncMsg = new GameMessage(GameMessage.Type.GAME_SYNC);
         syncMsg.setRoomId(roomId);
         syncMsg.setMessage("游戏开始");
@@ -157,76 +198,85 @@ public class GameRoom {
         broadcastSpectators(gson.toJson(syncMsg));
 
         broadcastRoomInfo();
-        logger.info("房间 {} 游戏开始，第 {} 局", roomId, roundCount);
+        logger.info("[AUDIT] game_start roomId={} round={}", roomId, roundCount);
 
         if (currentPlayer == aiPlayer) {
             triggerAIMove();
         }
     }
 
-    /**
-     * 处理落子
-     */
-    public synchronized boolean handleMove(Player player, int row, int col) {
-        if (state != State.PLAYING) return false;
-        // 用 playerId 比较而非引用比较，避免断线重连后引用不一致
-        if (!player.getId().equals(currentPlayer.getId())) return false;
-        if (player.getStone() != currentPlayer.getStone()) return false;
-        if (!board.placeStone(row, col, player.getStone())) return false;
+    public boolean handleMove(Player player, int row, int col, int expectedSeq) {
+        lock.writeLock().lock();
+        try {
+            if (!canMove()) return false;
+            if (!player.getId().equals(currentPlayer.getId())) return false;
+            if (player.getStone() != currentPlayer.getStone()) return false;
 
-        // 广播落子
-        GameMessage moveMsg = new GameMessage(GameMessage.Type.GAME_MOVE);
-        moveMsg.setRoomId(roomId);
-        moveMsg.setPlayerId(player.getId());
-        moveMsg.setPlayerName(player.getName());
-        moveMsg.setRow(row);
-        moveMsg.setCol(col);
-        moveMsg.setStone(player.getStone());
-        moveMsg.setData(String.valueOf(board.getCurrentTurn()));
-        broadcastMessage(gson.toJson(moveMsg));
-
-        // 检查胜负
-        if (board.checkWin(row, col)) {
-            endGame(player, "五子连珠！");
-        } else if (board.isDraw()) {
-            endGame(null, "平局！棋盘已满");
-        } else {
-            currentPlayer = findPlayerById(getOpponent(player).getId());
-            if (currentPlayer == aiPlayer) {
-                triggerAIMove();
+            // moveSeq 幂等校验（-1 表示跳过，AI 走棋用）
+            if (expectedSeq >= 0 && expectedSeq != board.getMoveSeq() + 1) {
+                logger.warn("[AUDIT] move_seq_mismatch roomId={} playerId={} expected={} actual={}",
+                        roomId, player.getId(), expectedSeq, board.getMoveSeq() + 1);
+                return false;
             }
+
+            if (!board.placeStone(row, col, player.getStone())) return false;
+            touchActivity();
+
+            GameMessage moveMsg = new GameMessage(GameMessage.Type.GAME_MOVE);
+            moveMsg.setRoomId(roomId);
+            moveMsg.setPlayerId(player.getId());
+            moveMsg.setPlayerName(player.getName());
+            moveMsg.setRow(row);
+            moveMsg.setCol(col);
+            moveMsg.setStone(player.getStone());
+            moveMsg.setMoveSeq(board.getMoveSeq());
+            moveMsg.setData(String.valueOf(board.getCurrentTurn()));
+            broadcastMessage(gson.toJson(moveMsg));
+
+            logger.info("[AUDIT] move roomId={} playerId={} row={} col={} stone={} seq={}",
+                    roomId, player.getId(), row, col, player.getStone(), board.getMoveSeq());
+
+            if (board.checkWin(row, col)) {
+                endGame(player, "五子连珠！");
+            } else if (board.isDraw()) {
+                endGame(null, "平局！棋盘已满");
+            } else {
+                currentPlayer = findPlayerById(getOpponent(player).getId());
+                if (currentPlayer == aiPlayer) {
+                    triggerAIMove();
+                }
+            }
+            return true;
+        } finally {
+            lock.writeLock().unlock();
         }
-        return true;
+    }
+
+    public boolean handleMove(Player player, int row, int col) {
+        return handleMove(player, row, col, -1);
     }
 
     private void triggerAIMove() {
-        if (state != State.PLAYING || aiPlayer == null) return;
-        if (currentPlayer != aiPlayer) return;
-
+        if (state != State.PLAYING || aiPlayer == null || currentPlayer != aiPlayer) return;
         aiExecutor.schedule(() -> {
             if (state != State.PLAYING) return;
             int[] move = GomokuAI.getBestMove(board, aiPlayer.getStone());
             if (move != null) {
-                synchronized (GameRoom.this) {
-                    handleMove(aiPlayer, move[0], move[1]);
-                }
+                handleMove(aiPlayer, move[0], move[1]);
             }
         }, AI_DELAY_MS, TimeUnit.MILLISECONDS);
     }
 
-    /**
-     * 结束游戏
-     */
-    private synchronized void endGame(Player winnerPlayer, String reason) {
+    private void endGame(Player winnerPlayer, String reason) {
+        // 调用方已持有 writeLock
         state = State.FINISHED;
         this.winner = winnerPlayer;
+        touchActivity();
 
         if (winnerPlayer != null) {
             winnerPlayer.addWin();
             Player opponent = getOpponent(winnerPlayer);
-            if (opponent != null) {
-                opponent.addLoss();
-            }
+            if (opponent != null) opponent.addLoss();
         }
 
         GameMessage msg = new GameMessage(GameMessage.Type.GAME_OVER);
@@ -237,60 +287,50 @@ public class GameRoom {
         broadcastMessage(gson.toJson(msg));
         broadcastRoomInfo();
 
-        logger.info("房间 {} 游戏结束，获胜者: {}", roomId,
-                winnerPlayer != null ? winnerPlayer.getName() : "平局");
+        logger.info("[AUDIT] game_over roomId={} winner={} reason=\"{}\"", roomId,
+                winnerPlayer != null ? winnerPlayer.getId() : "draw", reason);
     }
 
-    /**
-     * 玩家认输
-     */
-    public synchronized void surrender(Player player) {
-        if (state != State.PLAYING) return;
-        Player found = findPlayerById(player.getId());
-        if (found == null) return;
-
-        Player opponent = findPlayerById(getOpponent(found).getId());
-        if (opponent != null) {
-            endGame(opponent, player.getName() + " 认输");
+    public void surrender(Player player) {
+        lock.writeLock().lock();
+        try {
+            if (!canSurrender()) return;
+            Player found = findPlayerById(player.getId());
+            if (found == null) return;
+            Player opponent = findPlayerById(getOpponent(found).getId());
+            if (opponent != null) endGame(opponent, player.getName() + " 认输");
+        } finally {
+            lock.writeLock().unlock();
         }
     }
 
-    /**
-     * 请求重新开始 - 需要双方确认
-     */
-    public synchronized void requestRestart(Player player) {
-        if (state != State.FINISHED) return;
-        // 用 id 查找确保引用在 players 列表中
-        Player found = findPlayerById(player.getId());
-        if (found == null) return;
+    public void requestRestart(Player player) {
+        lock.writeLock().lock();
+        try {
+            if (!canRestart()) return;
+            Player found = findPlayerById(player.getId());
+            if (found == null) return;
 
-        // AI 对手直接同意重新开始
-        Player opponent = findPlayerById(getOpponent(found).getId());
-        if (opponent == aiPlayer) {
-            startGame();
-            return;
-        }
+            Player opponent = findPlayerById(getOpponent(found).getId());
+            if (opponent == aiPlayer) { startGame(); return; }
 
-        if (restartRequestedBy == null) {
-            restartRequestedBy = found.getId();
-            if (opponent != null) {
-                GameMessage msg = new GameMessage(GameMessage.Type.RESTART_REQUEST);
-                msg.setRoomId(roomId);
-                msg.setPlayerName(found.getName());
-                msg.setMessage(found.getName() + " 请求再来一局");
-                opponent.sendMessage(gson.toJson(msg));
+            if (restartRequestedBy == null) {
+                restartRequestedBy = found.getId();
+                if (opponent != null) {
+                    GameMessage msg = new GameMessage(GameMessage.Type.RESTART_REQUEST);
+                    msg.setRoomId(roomId);
+                    msg.setPlayerName(found.getName());
+                    msg.setMessage(found.getName() + " 请求再来一局");
+                    opponent.sendMessage(gson.toJson(msg));
+                }
+            } else if (!restartRequestedBy.equals(found.getId())) {
+                startGame();
             }
-        } else if (restartRequestedBy.equals(found.getId())) {
-            // 同一个人重复请求，忽略
-        } else {
-            // 对方确认，开始新一局
-            startGame();
+        } finally {
+            lock.writeLock().unlock();
         }
     }
 
-    /**
-     * 处理聊天
-     */
     public void handleChat(Player player, String message) {
         if (!player.canSendChat()) return;
         GameMessage msg = new GameMessage(GameMessage.Type.GAME_CHAT);
@@ -301,70 +341,66 @@ public class GameRoom {
         broadcastMessage(gson.toJson(msg));
     }
 
-    /**
-     * 玩家断开连接
-     */
-    public synchronized void handleDisconnect(Player player) {
-        if (spectators.contains(player)) {
-            spectators.remove(player);
+    public void handleDisconnect(Player player) {
+        lock.writeLock().lock();
+        try {
+            if (player.getConnection() != null) {
+                channelGroup.remove(player.getConnection());
+            }
+
+            if (spectators.contains(player)) {
+                spectators.remove(player);
+                broadcastRoomInfo();
+                return;
+            }
+
+            if (state == State.PLAYING) {
+                Player remaining = findPlayerById(getOpponent(player).getId());
+                if (remaining != null && remaining.isConnected()) {
+                    endGame(remaining, "玩家断开连接");
+                }
+            }
+            players.remove(player);
+
+            if (players.size() == 1 && players.get(0) == aiPlayer) {
+                players.remove(aiPlayer);
+                aiPlayer = null;
+            }
+
+            state = State.WAITING;
+            board.reset();
+            restartRequestedBy = null;
+            touchActivity();
+
+            if (!players.isEmpty()) {
+                GameMessage waitMsg = new GameMessage(GameMessage.Type.WAITING);
+                waitMsg.setRoomId(roomId);
+                waitMsg.setMessage("玩家已离开，等待新玩家加入...");
+                broadcastMessage(gson.toJson(waitMsg));
+            }
             broadcastRoomInfo();
-            return;
+            logger.info("[AUDIT] player_leave roomId={} playerId={}", roomId, player.getId());
+        } finally {
+            lock.writeLock().unlock();
         }
-
-        if (state == State.PLAYING) {
-            Player remaining = findPlayerById(getOpponent(player).getId());
-            if (remaining != null && remaining.isConnected()) {
-                endGame(remaining, "玩家断开连接");
-            }
-        }
-        players.remove(player);
-
-        if (players.size() == 1 && players.get(0) == aiPlayer) {
-            players.remove(aiPlayer);
-            aiPlayer = null;
-        }
-
-        state = State.WAITING;
-        board.reset(); // 清空棋盘，避免下一个观战者或新玩家看到残局
-        restartRequestedBy = null;
-
-        if (!players.isEmpty()) {
-            GameMessage waitMsg = new GameMessage(GameMessage.Type.WAITING);
-            waitMsg.setRoomId(roomId);
-            waitMsg.setMessage("玩家已离开，等待新玩家加入...");
-            broadcastMessage(gson.toJson(waitMsg));
-        }
-
-        broadcastRoomInfo();
-        logger.info("玩家 {} 离开房间 {}", player.getName(), roomId);
     }
 
-    /**
-     * 广播消息给所有玩家和观战者
-     */
+    // ============ 广播 ============
+
     public void broadcastMessage(String json) {
-        for (Player p : players) {
-            if (p != aiPlayer && p.isConnected()) {
-                p.sendMessage(json);
-            }
-        }
-        broadcastSpectators(json);
+        TextWebSocketFrame frame = new TextWebSocketFrame(json);
+        channelGroup.writeAndFlush(frame.retain());
+        frame.release();
     }
 
-    /**
-     * 只广播给观战者
-     */
     public void broadcastSpectators(String json) {
         for (Player p : spectators) {
-            if (p.isConnected()) {
-                p.sendMessage(json);
-            }
+            if (p.isConnected()) p.sendMessage(json);
         }
     }
 
-    /**
-     * 获取对手
-     */
+    // ============ 辅助方法 ============
+
     public Player getOpponent(Player player) {
         for (Player p : players) {
             if (!p.getId().equals(player.getId())) return p;
@@ -386,7 +422,7 @@ public class GameRoom {
         return null;
     }
 
-    // ============ DTO 构建方法 ============
+    // ============ DTO 构建 ============
 
     private RoomDataDto buildRoomData() {
         RoomDataDto data = new RoomDataDto();
@@ -425,46 +461,47 @@ public class GameRoom {
         broadcastMessage(gson.toJson(msg));
     }
 
-    /**
-     * 为重连玩家构建完整的同步数据
-     */
     public GameSyncDto buildSyncDataForReconnect(Player player) {
-        GameSyncDto data = new GameSyncDto();
-        data.setState(state.name());
-        data.setRoomData(buildRoomData());
-        data.setBoard(board.getBoardSnapshot());
-        // 重连时附带额外信息
-        if (player != null && player.getStone() != 0) {
-            data.setMoveCount(board.getMoveCount());
-        }
-        return data;
-    }
-
-    /**
-     * 替换玩家对象（断线重连用）
-     */
-    public synchronized void replacePlayer(Player oldPlayer, Player newPlayer) {
-        int idx = players.indexOf(oldPlayer);
-        if (idx >= 0) {
-            players.set(idx, newPlayer);
-        }
-        // 如果是当前回合玩家，也需要更新引用
-        if (currentPlayer == oldPlayer) {
-            currentPlayer = newPlayer;
-        }
-        // 如果是赢家，也需要更新
-        if (winner == oldPlayer) {
-            winner = newPlayer;
-        }
-        // 如果是 AI 玩家，更新引用
-        if (aiPlayer == oldPlayer) {
-            aiPlayer = newPlayer;
+        // 读操作：用读锁
+        lock.readLock().lock();
+        try {
+            GameSyncDto data = new GameSyncDto();
+            data.setState(state.name());
+            data.setRoomData(buildRoomData());
+            data.setBoard(board.getBoardSnapshot());
+            if (player != null && player.getStone() != 0) {
+                data.setMoveCount(board.getMoveCount());
+            }
+            return data;
+        } finally {
+            lock.readLock().unlock();
         }
     }
 
+    public void replacePlayer(Player oldPlayer, Player newPlayer) {
+        lock.writeLock().lock();
+        try {
+            int idx = players.indexOf(oldPlayer);
+            if (idx >= 0) players.set(idx, newPlayer);
+            if (currentPlayer == oldPlayer) currentPlayer = newPlayer;
+            if (winner == oldPlayer) winner = newPlayer;
+            if (aiPlayer == oldPlayer) aiPlayer = newPlayer;
+            if (oldPlayer.getConnection() != null) channelGroup.remove(oldPlayer.getConnection());
+            if (newPlayer.isConnected()) channelGroup.add(newPlayer.getConnection());
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
     /**
-     * 优雅关闭 AI 线程池
+     * 优雅停机：向房间内所有人发送 SHUTDOWN 通知
      */
+    public void notifyShutdown() {
+        GameMessage msg = new GameMessage(GameMessage.Type.ERROR);
+        msg.setMessage("服务器正在关闭，请稍后重连");
+        broadcastMessage(gson.toJson(msg));
+    }
+
     public static void shutdownAIExecutor() {
         aiExecutor.shutdown();
         try {

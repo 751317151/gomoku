@@ -4,3 +4,12 @@ server:
 netty:
   port: 8887
   idle-timeout: 120
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always

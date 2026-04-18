@@ -43,6 +43,7 @@ public class GameMessage {
     private String message;
     private String data;     // JSON 附加数据
     private String sessionId; // 用于断线重连
+    private int moveSeq;     // 落子序列号（防重复）
 
     public GameMessage() {}
 
@@ -83,4 +84,7 @@ public class GameMessage {
 
     public String getSessionId() { return sessionId; }
     public void setSessionId(String sessionId) { this.sessionId = sessionId; }
+
+    public int getMoveSeq() { return moveSeq; }
+    public void setMoveSeq(int moveSeq) { this.moveSeq = moveSeq; }
 }

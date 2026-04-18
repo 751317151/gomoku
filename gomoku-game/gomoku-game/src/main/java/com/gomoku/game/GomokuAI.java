@@ -1,11 +1,15 @@
 package com.gomoku.game;
 
 import java.util.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 五子棋 AI 引擎（Minimax + Alpha-Beta 剪枝 + 方向级评估）
  */
 public class GomokuAI {
+
+    private static final Logger logger = LoggerFactory.getLogger(GomokuAI.class);
 
     // 评分常量 — 冲四 > 活三 > 眠三，确保紧迫性正确
     private static final int SCORE_FIVE = 100000;
@@ -21,8 +25,12 @@ public class GomokuAI {
     // 防守权重：堵截对手比进攻略高
     private static final double DEFENSE_WEIGHT = 1.1;
 
-    // 搜索深度
-    private static final int SEARCH_DEPTH = 4;
+    // 搜索深度范围（动态调整）
+    private static final int SEARCH_DEPTH_MIN = 2;
+    private static final int SEARCH_DEPTH_MAX = 6;
+    // 候选数阈值
+    private static final int CANDIDATE_HIGH = 40;
+    private static final int CANDIDATE_LOW = 20;
 
     // 候选位置搜索范围
     private static final int SEARCH_RANGE = 2;
@@ -64,6 +72,10 @@ public class GomokuAI {
         // 着法排序：按启发式评分降序，提升 Alpha-Beta 剪枝效率
         candidates = sortCandidates(board, candidates, aiStone, humanStone);
 
+        // 动态搜索深度：候选多时浅搜，候选少时深搜
+        int searchDepth = calculateSearchDepth(candidates.size());
+        logger.info("AI搜索: candidates={}, depth={}", candidates.size(), searchDepth);
+
         // Minimax 搜索
         int bestScore = Integer.MIN_VALUE;
         int bestRow = -1;
@@ -73,7 +85,7 @@ public class GomokuAI {
             int r = pos[0], c = pos[1];
             board[r][c] = aiStone;
 
-            int score = minimax(board, SEARCH_DEPTH - 1, Integer.MIN_VALUE, Integer.MAX_VALUE, false, aiStone, humanStone);
+            int score = minimax(board, searchDepth - 1, Integer.MIN_VALUE, Integer.MAX_VALUE, false, aiStone, humanStone, searchDepth);
 
             board[r][c] = GomokuBoard.EMPTY;
 
@@ -91,10 +103,19 @@ public class GomokuAI {
     }
 
     /**
+     * 根据候选点数量动态计算搜索深度
+     */
+    private static int calculateSearchDepth(int candidateCount) {
+        if (candidateCount > CANDIDATE_HIGH) return SEARCH_DEPTH_MIN;
+        if (candidateCount > CANDIDATE_LOW) return 4;
+        return SEARCH_DEPTH_MAX;
+    }
+
+    /**
      * Minimax + Alpha-Beta 剪枝
      */
     private static int minimax(int[][] board, int depth, int alpha, int beta,
-                               boolean isMaximizing, int aiStone, int humanStone) {
+                               boolean isMaximizing, int aiStone, int humanStone, int rootDepth) {
         if (depth <= 0) {
             return evaluateBoard(board, aiStone, humanStone);
         }
@@ -106,7 +127,7 @@ public class GomokuAI {
         }
 
         // 深层搜索时限制候选数，提升性能
-        if (depth < SEARCH_DEPTH - 1) {
+        if (depth < rootDepth - 1) {
             candidates = sortCandidates(board, candidates, aiStone, humanStone);
             if (candidates.size() > MAX_CANDIDATES) {
                 candidates = candidates.subList(0, MAX_CANDIDATES);
@@ -124,7 +145,7 @@ public class GomokuAI {
                     return SCORE_FIVE * 10;
                 }
 
-                int eval = minimax(board, depth - 1, alpha, beta, false, aiStone, humanStone);
+                int eval = minimax(board, depth - 1, alpha, beta, false, aiStone, humanStone, rootDepth);
                 board[r][c] = GomokuBoard.EMPTY;
 
                 maxEval = Math.max(maxEval, eval);
@@ -143,7 +164,7 @@ public class GomokuAI {
                     return -SCORE_FIVE * 10;
                 }
 
-                int eval = minimax(board, depth - 1, alpha, beta, true, aiStone, humanStone);
+                int eval = minimax(board, depth - 1, alpha, beta, true, aiStone, humanStone, rootDepth);
                 board[r][c] = GomokuBoard.EMPTY;
 
                 minEval = Math.min(minEval, eval);
