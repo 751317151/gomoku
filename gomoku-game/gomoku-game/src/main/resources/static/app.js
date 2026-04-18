@@ -44,13 +44,200 @@ let moveCount = 0;
 let moveSeq = 0; // 落子序列号（防重复）
 let board = Array.from({length: BOARD_SIZE}, () => new Array(BOARD_SIZE).fill(0));
 let lastMove = null;
+let winLine = null; // 获胜连线坐标 [[row,col],...]
 let players = {};
 let myWins = 0, myLosses = 0;
 let mySessionId = localStorage.getItem('gomoku_session') || null;
 let heartbeatTimer = null;
 let reconnectAttempts = 0;
-const MAX_RECONNECT = 5;
+const MAX_RECONNECT = 8;
 const HEARTBEAT_INTERVAL = 30000;
+const RECONNECT_BASE_DELAY = 500;  // 指数退避基础延迟 500ms
+const RECONNECT_MAX_DELAY = 30000; // 最大延迟 30s
+
+// ============================================================
+// 二进制协议引擎
+// ============================================================
+const PROTOCOL_MAGIC = 0xCAFE;
+const PROTOCOL_VERSION = 0x01;
+let useBinary = false; // 是否使用二进制协议（默认 JSON）
+
+// 类型码映射
+const BIN_TYPE = {
+  GET_ROOMS: 1, JOIN: 2, SPECTATE: 3, ADD_AI: 4, MOVE: 5,
+  CHAT: 6, RESTART: 7, LEAVE: 8, RECONNECT: 9, SURRENDER: 10, PING: 11,
+  ROOM_LIST: 50, ROOM_INFO: 51, GAME_START: 52, GAME_SYNC: 53,
+  GAME_MOVE: 54, GAME_OVER: 55, GAME_CHAT: 56, WAITING: 57,
+  RESTART_REQUEST: 58, ERROR: 59
+};
+const BIN_TYPE_NAME = {};
+Object.keys(BIN_TYPE).forEach(k => BIN_TYPE_NAME[BIN_TYPE[k]] = k);
+
+function encodeBinary(msg) {
+  const typeCode = BIN_TYPE[msg.type];
+  if (typeCode === undefined) return null;
+
+  const parts = [];
+  // Header: magic(2) + version(1) + type(1)
+  const header = new ArrayBuffer(4);
+  const dv = new DataView(header);
+  dv.setUint16(0, PROTOCOL_MAGIC);
+  dv.setUint8(2, PROTOCOL_VERSION);
+  dv.setUint8(3, typeCode);
+  parts.push(new Uint8Array(header));
+
+  // Payload by type
+  switch (typeCode) {
+    case BIN_TYPE.PING:
+    case BIN_TYPE.GET_ROOMS:
+    case BIN_TYPE.LEAVE:
+    case BIN_TYPE.ADD_AI:
+    case BIN_TYPE.RESTART:
+    case BIN_TYPE.SURRENDER:
+      break; // no payload
+    case BIN_TYPE.JOIN:
+      parts.push(encodeStr(msg.playerName || ''));
+      parts.push(encodeNullableStr(msg.roomId));
+      break;
+    case BIN_TYPE.SPECTATE:
+      parts.push(encodeStr(msg.playerName || ''));
+      parts.push(encodeStr(msg.roomId || ''));
+      break;
+    case BIN_TYPE.MOVE:
+      parts.push(new Uint8Array([msg.row, msg.col]));
+      const seqBuf = new ArrayBuffer(4);
+      new DataView(seqBuf).setInt32(0, msg.moveSeq || 0);
+      parts.push(new Uint8Array(seqBuf));
+      break;
+    case BIN_TYPE.CHAT:
+      parts.push(encodeStr(msg.message || ''));
+      break;
+    case BIN_TYPE.RECONNECT:
+      parts.push(encodeStr(msg.sessionId || ''));
+      break;
+  }
+
+  // 合并
+  let totalLen = 0;
+  for (const p of parts) totalLen += p.length;
+  const result = new Uint8Array(totalLen);
+  let offset = 0;
+  for (const p of parts) { result.set(p, offset); offset += p.length; }
+  return result.buffer;
+}
+
+function encodeStr(str) {
+  const encoder = new TextEncoder();
+  const bytes = encoder.encode(str);
+  const lenBuf = new ArrayBuffer(2);
+  new DataView(lenBuf).setUint16(0, bytes.length);
+  const result = new Uint8Array(2 + bytes.length);
+  result.set(new Uint8Array(lenBuf), 0);
+  result.set(bytes, 2);
+  return result;
+}
+
+function encodeNullableStr(str) {
+  if (str === null || str === undefined) return new Uint8Array([0]);
+  const encoder = new TextEncoder();
+  const bytes = encoder.encode(str);
+  const lenBuf = new ArrayBuffer(2);
+  new DataView(lenBuf).setUint16(0, bytes.length);
+  const result = new Uint8Array(1 + 2 + bytes.length);
+  result[0] = 1;
+  result.set(new Uint8Array(lenBuf), 1);
+  result.set(bytes, 3);
+  return result;
+}
+
+function decodeBinary(arrayBuffer) {
+  const data = new DataView(arrayBuffer);
+  if (data.byteLength < 4) return null;
+  const magic = data.getUint16(0);
+  if (magic !== PROTOCOL_MAGIC) return null;
+  const version = data.getUint8(2);
+  const typeCode = data.getUint8(3);
+  const typeName = BIN_TYPE_NAME[typeCode];
+  if (!typeName) return null;
+
+  const msg = { type: typeName };
+  let offset = 4;
+
+  function readStr() {
+    if (offset + 2 > data.byteLength) return '';
+    const len = data.getUint16(offset); offset += 2;
+    if (offset + len > data.byteLength) return '';
+    const bytes = new Uint8Array(arrayBuffer, offset, len);
+    offset += len;
+    return new TextDecoder().decode(bytes);
+  }
+  function readNullableStr() {
+    if (offset + 1 > data.byteLength) return null;
+    const flag = data.getUint8(offset); offset += 1;
+    if (flag === 0) return null;
+    return readStr();
+  }
+
+  switch (typeCode) {
+    case BIN_TYPE.WAITING:
+      msg.roomId = readNullableStr();
+      msg.playerId = readNullableStr();
+      msg.sessionId = readNullableStr();
+      msg.message = readNullableStr();
+      break;
+    case BIN_TYPE.GAME_START:
+      msg.roomId = readNullableStr();
+      msg.playerId = readNullableStr();
+      msg.stone = offset < data.byteLength ? data.getUint8(offset++) : 0;
+      msg.message = readNullableStr();
+      msg.data = readNullableStr();
+      break;
+    case BIN_TYPE.GAME_MOVE:
+      msg.roomId = readNullableStr();
+      msg.playerId = readNullableStr();
+      msg.playerName = readNullableStr();
+      msg.row = offset < data.byteLength ? data.getUint8(offset++) : 0;
+      msg.col = offset < data.byteLength ? data.getUint8(offset++) : 0;
+      msg.stone = offset < data.byteLength ? data.getUint8(offset++) : 0;
+      if (offset + 4 <= data.byteLength) { msg.moveSeq = data.getInt32(offset); offset += 4; }
+      msg.data = readNullableStr();
+      break;
+    case BIN_TYPE.GAME_OVER:
+      msg.roomId = readNullableStr();
+      msg.winner = readNullableStr();
+      msg.message = readNullableStr();
+      msg.data = readNullableStr();
+      break;
+    case BIN_TYPE.GAME_CHAT:
+      msg.roomId = readNullableStr();
+      msg.playerId = readNullableStr();
+      msg.playerName = readNullableStr();
+      msg.message = readNullableStr();
+      break;
+    case BIN_TYPE.GAME_SYNC:
+      msg.roomId = readNullableStr();
+      msg.playerId = readNullableStr();
+      msg.sessionId = readNullableStr();
+      msg.stone = offset < data.byteLength ? data.getUint8(offset++) : 0;
+      msg.message = readNullableStr();
+      msg.data = readNullableStr();
+      break;
+    case BIN_TYPE.ROOM_INFO:
+    case BIN_TYPE.ROOM_LIST:
+      msg.roomId = readNullableStr();
+      msg.data = readNullableStr();
+      break;
+    case BIN_TYPE.RESTART_REQUEST:
+      msg.roomId = readNullableStr();
+      msg.playerName = readNullableStr();
+      msg.message = readNullableStr();
+      break;
+    case BIN_TYPE.ERROR:
+      msg.message = readNullableStr();
+      break;
+  }
+  return msg;
+}
 
 // ============================================================
 // 棋盘绘制
@@ -126,13 +313,14 @@ function drawBoard() {
   for (let r = 0; r < BOARD_SIZE; r++) {
     for (let c = 0; c < BOARD_SIZE; c++) {
       if (board[r][c] !== 0) {
-        drawStone(r, c, board[r][c], lastMove && lastMove[0]===r && lastMove[1]===c);
+        const isWin = winLine && winLine.some(p => p[0]===r && p[1]===c);
+        drawStone(r, c, board[r][c], lastMove && lastMove[0]===r && lastMove[1]===c, isWin);
       }
     }
   }
 }
 
-function drawStone(row, col, stone, isLast=false) {
+function drawStone(row, col, stone, isLast=false, isWin=false) {
   const x = PADDING + col * CELL;
   const y = PADDING + row * CELL;
   const r = CELL * 0.44;
@@ -178,6 +366,19 @@ function drawStone(row, col, stone, isLast=false) {
     ctx.beginPath();
     ctx.arc(x, y, r*0.25, 0, Math.PI*2);
     ctx.fill();
+  }
+
+  // 获胜连线高亮：红色发光环
+  if (isWin) {
+    ctx.strokeStyle = 'rgba(255,60,60,0.9)';
+    ctx.lineWidth = 3;
+    ctx.shadowColor = 'rgba(255,60,60,0.8)';
+    ctx.shadowBlur = 12;
+    ctx.beginPath();
+    ctx.arc(x, y, r + 3, 0, Math.PI*2);
+    ctx.stroke();
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
   }
 
   ctx.restore();
@@ -263,6 +464,8 @@ function connect(url) {
     return;
   }
 
+  ws.binaryType = 'arraybuffer'; // 支持接收二进制帧
+
   ws.onopen = () => {
     setStatus(true, '已连接');
     reconnectAttempts = 0;
@@ -286,7 +489,24 @@ function connect(url) {
 
   ws.onmessage = (e) => {
     try {
-      const msg = JSON.parse(e.data);
+      let msg;
+      if (typeof e.data === 'string') {
+        // JSON 协议
+        msg = JSON.parse(e.data);
+      } else if (e.data instanceof ArrayBuffer) {
+        // 二进制协议
+        msg = decodeBinary(e.data);
+        if (!msg) return;
+      } else if (e.data instanceof Blob) {
+        // Blob 模式（某些浏览器）
+        e.data.arrayBuffer().then(buf => {
+          const decoded = decodeBinary(buf);
+          if (decoded) handleMessage(decoded);
+        });
+        return;
+      } else {
+        return;
+      }
       handleMessage(msg);
     } catch(err) {
       console.error('消息解析失败', err);
@@ -297,14 +517,24 @@ function connect(url) {
     setStatus(false, '已断开');
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
 
-    // Auto-reconnect if we had a session
+    // 指数退避重连：delay = min(BASE * 2^attempt, MAX_DELAY) + jitter
     if (mySessionId && reconnectAttempts < MAX_RECONNECT) {
       reconnectAttempts++;
+      const exponentialDelay = Math.min(
+        RECONNECT_BASE_DELAY * Math.pow(2, reconnectAttempts - 1),
+        RECONNECT_MAX_DELAY
+      );
+      // 加随机抖动 ±20%，避免雷群效应
+      const jitter = exponentialDelay * (0.8 + Math.random() * 0.4);
+      const delay = Math.round(jitter);
       document.getElementById('reconnect-bar').classList.add('show');
+      document.getElementById('reconnect-bar').textContent =
+        `连接断开，${(delay/1000).toFixed(1)}秒后重连 (${reconnectAttempts}/${MAX_RECONNECT})...`;
+      console.log(`[重连] 指数退避: attempt=${reconnectAttempts}, delay=${delay}ms`);
       setTimeout(() => {
         const url = document.getElementById('ws-url').value.trim() || 'ws://localhost:8887';
         connect(url);
-      }, 2000 * reconnectAttempts);
+      }, delay);
     } else {
       gameState = 'LOBBY';
       showLogin();
@@ -386,9 +616,16 @@ function addAI() {
 }
 
 function send(obj) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(obj));
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  if (useBinary) {
+    const binary = encodeBinary(obj);
+    if (binary) {
+      ws.send(binary);
+      return;
+    }
+    // 二进制编码失败，降级到 JSON
   }
+  ws.send(JSON.stringify(obj));
 }
 
 function sendMove(row, col) {
@@ -429,8 +666,16 @@ function showConfirm(message, onOk) {
   cancelBtn.addEventListener('click', onCancel);
 }
 
+function dismissOverlay() {
+  document.getElementById('gameover-overlay').classList.remove('show');
+  // 在棋盘下方显示再来一局按钮
+  const bar = document.getElementById('restart-bar');
+  if (bar && myId !== 'SPECTATOR') bar.style.display = 'flex';
+}
+
 function requestRestart() {
   document.getElementById('gameover-overlay').classList.remove('show');
+  document.getElementById('restart-bar').style.display = 'none';
   if (myId === 'SPECTATOR') return;
 
   if (gameState === 'OVER') {
@@ -439,6 +684,7 @@ function requestRestart() {
     board = Array.from({length: BOARD_SIZE}, () => new Array(BOARD_SIZE).fill(0));
     moveCount = 0;
     lastMove = null;
+    winLine = null;
     document.getElementById('move-count').textContent = '落子数: 0';
     drawBoard();
   }
@@ -681,6 +927,7 @@ function handleGameStart(msg) {
   moveSeq = 0;
   board = Array.from({length: BOARD_SIZE}, () => new Array(BOARD_SIZE).fill(0));
   lastMove = null;
+  winLine = null;
 
   // 解析房间数据
   try {
@@ -693,6 +940,7 @@ function handleGameStart(msg) {
 
   document.getElementById('room-id').textContent = 'ROOM: ' + roomId;
   document.getElementById('gameover-overlay').classList.remove('show');
+  document.getElementById('restart-bar').style.display = 'none';
 
   updatePlayerPanel();
   updateTurnStatus();
@@ -737,6 +985,28 @@ function handleGameOver(msg) {
   const isDraw = msg.winner === 'draw';
   const isWin = msg.winner === myId;
 
+  // 解析附加数据（分数 + 获胜连线）
+  let winLineData = null;
+  try {
+    const data = JSON.parse(msg.data);
+    winLineData = data.winLine || null;
+    // 分数
+    let scoresHtml = '';
+    data.scores.forEach(p => {
+      scoresHtml += `<div class="score-item">
+        <div class="score-num">${p.wins}</div>
+        <div class="score-label">${escHtml(p.name.substring(0,6))} 胜</div>
+      </div>`;
+    });
+    scores.innerHTML = scoresHtml;
+  } catch(e) { scores.innerHTML = ''; }
+
+  // 高亮获胜连线
+  if (winLineData) {
+    winLine = winLineData;
+    drawBoard();
+  }
+
   if (isSpectator) {
     result.className = 'gameover-result ' + (isDraw ? 'draw' : 'win');
     if (isDraw) {
@@ -755,30 +1025,20 @@ function handleGameOver(msg) {
 
   sub.textContent = msg.message || '';
 
+  // 按钮控制：overlay 中有 btn-review 和 btn-restart 两个
   const restartBtn = overlay.querySelector('.btn-restart');
-  if (restartBtn) {
-    if (isSpectator) {
-      restartBtn.textContent = '查看棋盘';
-      restartBtn.style.display = 'inline-block';
-    } else {
-      restartBtn.textContent = '再来一局';
-      restartBtn.style.display = 'inline-block';
-    }
+  const reviewBtn = overlay.querySelector('.btn-review');
+  if (isSpectator) {
+    // 观战者：只显示"查看棋盘"，隐藏"再来一局"
+    if (reviewBtn) reviewBtn.style.display = 'inline-block';
+    if (restartBtn) restartBtn.style.display = 'none';
+  } else {
+    // 对战者：两个都显示
+    if (reviewBtn) reviewBtn.style.display = 'inline-block';
+    if (restartBtn) restartBtn.style.display = 'inline-block';
   }
 
-  // 分数
-  try {
-    const data = JSON.parse(msg.data);
-    let scoresHtml = '';
-    data.scores.forEach(p => {
-      scoresHtml += `<div class="score-item">
-        <div class="score-num">${p.wins}</div>
-        <div class="score-label">${escHtml(p.name.substring(0,6))} 胜</div>
-      </div>`;
-    });
-    scores.innerHTML = scoresHtml;
-  } catch(e) { scores.innerHTML = ''; }
-
+  // 新开局时清除 winLine
   overlay.classList.add('show');
 }
 

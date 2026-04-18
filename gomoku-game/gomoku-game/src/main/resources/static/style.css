@@ -460,6 +460,26 @@
 
   .btn-restart:hover { background: var(--accent); color: var(--bg); }
 
+  .gameover-btns {
+    display: flex;
+    gap: 12px;
+    margin-top: 4px;
+  }
+
+  .btn-review {
+    background: transparent;
+    border: 1px solid var(--text-dim);
+    color: var(--text-dim);
+    padding: 10px 24px;
+    font-family: 'Noto Serif SC', serif;
+    font-size: 0.9rem;
+    cursor: pointer;
+    letter-spacing: 0.15em;
+    transition: all 0.2s;
+  }
+
+  .btn-review:hover { border-color: var(--text); color: var(--text); }
+
   /* === CONFIRM DIALOG === */
   .confirm-overlay {
     display: none;

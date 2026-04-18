@@ -101,8 +101,14 @@
         <div class="gameover-result" id="gameover-result">胜利！</div>
         <div class="gameover-sub" id="gameover-sub"></div>
         <div class="gameover-scores" id="gameover-scores"></div>
-        <button class="btn-restart" onclick="requestRestart()">再来一局</button>
+        <div class="gameover-btns">
+          <button class="btn-review" onclick="dismissOverlay()">查看棋盘</button>
+          <button class="btn-restart" onclick="requestRestart()">再来一局</button>
+        </div>
       </div>
+    </div>
+    <div id="restart-bar" style="display:none;justify-content:center;padding:8px 0;gap:12px;">
+      <button class="btn-restart" onclick="requestRestart()">再来一局</button>
     </div>
     <div class="board-footer" id="board-footer">15×15 标准五子棋 · 黑棋先手</div>
   </div>

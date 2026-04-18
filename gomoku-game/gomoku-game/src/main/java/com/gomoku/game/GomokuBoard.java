@@ -56,22 +56,43 @@ public class GomokuBoard {
      * 检查指定位置是否获胜
      */
     public boolean checkWin(int row, int col) {
-        int stone = board[row][col];
-        if (stone == EMPTY) return false;
+        return getWinLine(row, col) != null;
+    }
 
-        // 四个方向：横、竖、左斜、右斜
+    /**
+     * 获取获胜连线坐标（五连的 5 个点），未获胜返回 null
+     */
+    public int[][] getWinLine(int row, int col) {
+        int stone = board[row][col];
+        if (stone == EMPTY) return null;
+
         int[][] directions = {{0, 1}, {1, 0}, {1, 1}, {1, -1}};
 
         for (int[] dir : directions) {
-            int count = 1;
-            // 正方向
-            count += countDirection(row, col, dir[0], dir[1], stone);
-            // 反方向
-            count += countDirection(row, col, -dir[0], -dir[1], stone);
+            List<int[]> line = new ArrayList<>();
+            line.add(new int[]{row, col});
 
-            if (count >= 5) return true;
+            // 正方向
+            int r = row + dir[0], c = col + dir[1];
+            while (r >= 0 && r < SIZE && c >= 0 && c < SIZE && board[r][c] == stone) {
+                line.add(new int[]{r, c});
+                r += dir[0];
+                c += dir[1];
+            }
+            // 反方向
+            r = row - dir[0];
+            c = col - dir[1];
+            while (r >= 0 && r < SIZE && c >= 0 && c < SIZE && board[r][c] == stone) {
+                line.add(new int[]{r, c});
+                r -= dir[0];
+                c -= dir[1];
+            }
+
+            if (line.size() >= 5) {
+                return line.toArray(new int[0][]);
+            }
         }
-        return false;
+        return null;
     }
 
     /**

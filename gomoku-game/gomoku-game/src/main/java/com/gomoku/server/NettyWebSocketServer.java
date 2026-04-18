@@ -36,6 +36,7 @@ public class NettyWebSocketServer implements CommandLineRunner {
     private int idleTimeout;
 
     private final GameServerHandler gameServerHandler;
+    private final BinaryMessageEncoder binaryEncoder;
 
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
@@ -44,6 +45,7 @@ public class NettyWebSocketServer implements CommandLineRunner {
     @Autowired
     public NettyWebSocketServer(GameServerHandler gameServerHandler) {
         this.gameServerHandler = gameServerHandler;
+        this.binaryEncoder = new BinaryMessageEncoder();
     }
 
     @Override
@@ -66,8 +68,14 @@ public class NettyWebSocketServer implements CommandLineRunner {
                             // 心跳检测：读空闲超时
                             ch.pipeline().addLast(new IdleStateHandler(
                                     idleTimeout, 0, 0, TimeUnit.SECONDS));
+                            // WebSocket 协议升级（路径 "/" 支持 JSON 和 Binary）
                             ch.pipeline().addLast(new WebSocketServerProtocolHandler(
                                     "/", null, true, MAX_FRAME_PAYLOAD_LENGTH));
+                            // 帧路由器：Text帧走JSON，Binary帧走二进制解码
+                            ch.pipeline().addLast(new WebSocketFrameRouter());
+                            // 二进制编码器（出站：GameMessage → BinaryWebSocketFrame）
+                            ch.pipeline().addLast(binaryEncoder);
+                            // 业务处理器（入站：GameMessage 或 TextWebSocketFrame）
                             ch.pipeline().addLast(gameServerHandler);
                         }
                     });
@@ -80,6 +88,7 @@ public class NettyWebSocketServer implements CommandLineRunner {
             logger.info(" Spring Boot Web 已启动 (端口: {})", httpPort);
             logger.info(" 前端页面: http://localhost:{}", httpPort);
             logger.info(" 心跳超时: {}s", idleTimeout);
+            logger.info(" 协议: JSON(Text) + Binary(ByteBuf)");
             logger.info("========================================");
         } catch (Exception e) {
             logger.error("Netty启动失败: {}", e.getMessage());

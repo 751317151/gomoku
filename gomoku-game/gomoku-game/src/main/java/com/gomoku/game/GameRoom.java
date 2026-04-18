@@ -237,9 +237,9 @@ public class GameRoom {
                     roomId, player.getId(), row, col, player.getStone(), board.getMoveSeq());
 
             if (board.checkWin(row, col)) {
-                endGame(player, "五子连珠！");
+                endGame(player, "五子连珠！", board.getWinLine(row, col));
             } else if (board.isDraw()) {
-                endGame(null, "平局！棋盘已满");
+                endGame(null, "平局！棋盘已满", null);
             } else {
                 currentPlayer = findPlayerById(getOpponent(player).getId());
                 if (currentPlayer == aiPlayer) {
@@ -267,7 +267,7 @@ public class GameRoom {
         }, AI_DELAY_MS, TimeUnit.MILLISECONDS);
     }
 
-    private void endGame(Player winnerPlayer, String reason) {
+    private void endGame(Player winnerPlayer, String reason, int[][] winLine) {
         // 调用方已持有 writeLock
         state = State.FINISHED;
         this.winner = winnerPlayer;
@@ -283,7 +283,17 @@ public class GameRoom {
         msg.setRoomId(roomId);
         msg.setWinner(winnerPlayer != null ? winnerPlayer.getId() : "draw");
         msg.setMessage(reason);
-        msg.setData(gson.toJson(buildScoreData()));
+
+        // 构建附加数据：分数 + 获胜连线
+        java.util.Map<String, Object> dataMap = new java.util.LinkedHashMap<>();
+        dataMap.put("scores", buildScoreData().getScores());
+        if (winLine != null) {
+            // 将 int[][] 转为 [[row,col], ...] 格式
+            List<int[]> lineList = java.util.Arrays.asList(winLine);
+            dataMap.put("winLine", lineList);
+        }
+        msg.setData(gson.toJson(dataMap));
+
         broadcastMessage(gson.toJson(msg));
         broadcastRoomInfo();
 
@@ -298,7 +308,7 @@ public class GameRoom {
             Player found = findPlayerById(player.getId());
             if (found == null) return;
             Player opponent = findPlayerById(getOpponent(found).getId());
-            if (opponent != null) endGame(opponent, player.getName() + " 认输");
+            if (opponent != null) endGame(opponent, player.getName() + " 认输", null);
         } finally {
             lock.writeLock().unlock();
         }
@@ -357,7 +367,7 @@ public class GameRoom {
             if (state == State.PLAYING) {
                 Player remaining = findPlayerById(getOpponent(player).getId());
                 if (remaining != null && remaining.isConnected()) {
-                    endGame(remaining, "玩家断开连接");
+                    endGame(remaining, "玩家断开连接", null);
                 }
             }
             players.remove(player);

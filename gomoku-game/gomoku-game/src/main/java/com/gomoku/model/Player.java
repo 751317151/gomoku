@@ -35,9 +35,20 @@ public class Player {
         this.losses = 0;
     }
 
+    /**
+     * 通过 Player 对象发送 JSON 消息
+     */
     public void sendMessage(String json) {
-        if (connection != null && connection.isActive()) {
-            connection.writeAndFlush(new TextWebSocketFrame(json));
+        sendMessageTo(connection, json);
+    }
+
+    /**
+     * 静态发送方法：直接通过 Channel 发送，无需 Player 对象
+     * Pipeline 中有 BinaryMessageEncoder 时，TextWebSocketFrame 会被正常发送
+     */
+    public static void sendMessageTo(Channel conn, String json) {
+        if (conn != null && conn.isActive()) {
+            conn.writeAndFlush(new TextWebSocketFrame(json));
         }
     }
 
@@ -45,9 +56,6 @@ public class Player {
         return connection != null && connection.isActive();
     }
 
-    /**
-     * 聊天限流检查
-     */
     public boolean canSendChat() {
         long now = System.currentTimeMillis();
         long last = lastChatTime.get();
@@ -57,9 +65,6 @@ public class Player {
         return lastChatTime.compareAndSet(last, now);
     }
 
-    /**
-     * 操作限流检查（落子、加入、重启等）
-     */
     public boolean canPerformAction() {
         long now = System.currentTimeMillis();
         long last = lastActionTime.get();

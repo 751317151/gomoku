@@ -22,15 +22,23 @@ import java.net.InetSocketAddress;
 import java.util.EnumMap;
 import java.util.function.BiConsumer;
 
+/**
+ * 游戏消息处理器
+ *
+ * 支持两种输入：
+ * 1. TextWebSocketFrame — JSON 协议（传统方式）
+ * 2. GameMessage — 二进制协议（由 WebSocketFrameRouter 解码后传入）
+ *
+ * 出站时通过 BinaryMessageEncoder 自动编码二进制帧（如果客户端支持）。
+ */
 @Component
 @ChannelHandler.Sharable
-public class GameServerHandler extends SimpleChannelInboundHandler<TextWebSocketFrame> {
+public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
 
     private static final Logger logger = LoggerFactory.getLogger(GameServerHandler.class);
     private static final Gson gson = new Gson();
     private final RoomManager roomManager;
 
-    // Handler Registry：替代 switch-case，可扩展
     private final EnumMap<GameMessage.Type, BiConsumer<Channel, GameMessage>> handlers = new EnumMap<>(GameMessage.Type.class);
 
     @Autowired
@@ -50,8 +58,41 @@ public class GameServerHandler extends SimpleChannelInboundHandler<TextWebSocket
         handlers.put(GameMessage.Type.LEAVE, (conn, msg) -> handleLeave(conn));
         handlers.put(GameMessage.Type.RECONNECT, this::handleReconnect);
         handlers.put(GameMessage.Type.SURRENDER, (conn, msg) -> handleSurrender(conn));
-        handlers.put(GameMessage.Type.PING, (conn, msg) -> {}); // 心跳无操作
+        handlers.put(GameMessage.Type.PING, (conn, msg) -> {});
     }
+
+    // ============ 入站处理：支持 JSON 和 Binary 两种协议 ============
+
+    @Override
+    protected void channelRead0(ChannelHandlerContext ctx, Object msg) {
+        if (msg instanceof TextWebSocketFrame) {
+            // JSON 协议路径
+            handleJsonFrame(ctx, (TextWebSocketFrame) msg);
+        } else if (msg instanceof GameMessage) {
+            // 二进制协议路径（由 WebSocketFrameRouter 解码后传入）
+            handleMessage(ctx.channel(), (GameMessage) msg);
+        }
+    }
+
+    private void handleJsonFrame(ChannelHandlerContext ctx, TextWebSocketFrame frame) {
+        String message = frame.text();
+        try {
+            GameMessage msg = gson.fromJson(message, GameMessage.class);
+            if (msg.getType() == null) {
+                sendError(ctx.channel(), "消息类型不能为空");
+                return;
+            }
+            handleMessage(ctx.channel(), msg);
+        } catch (JsonSyntaxException e) {
+            logger.warn("无效消息格式：{}", message);
+            sendError(ctx.channel(), "消息格式错误");
+        } catch (Exception e) {
+            logger.warn("消息处理异常", e);
+            sendError(ctx.channel(), "服务器内部错误");
+        }
+    }
+
+    // ============ 生命周期 ============
 
     @Override
     public void handlerAdded(ChannelHandlerContext ctx) {
@@ -71,25 +112,6 @@ public class GameServerHandler extends SimpleChannelInboundHandler<TextWebSocket
             roomManager.handleDisconnect(ctx.channel());
         } catch (Exception e) {
             logger.warn("断开连接处理异常", e);
-        }
-    }
-
-    @Override
-    protected void channelRead0(ChannelHandlerContext ctx, TextWebSocketFrame frame) {
-        String message = frame.text();
-        try {
-            GameMessage msg = gson.fromJson(message, GameMessage.class);
-            if (msg.getType() == null) {
-                sendError(ctx.channel(), "消息类型不能为空");
-                return;
-            }
-            handleMessage(ctx.channel(), msg);
-        } catch (JsonSyntaxException e) {
-            logger.warn("无效消息格式：{}", message);
-            sendError(ctx.channel(), "消息格式错误");
-        } catch (Exception e) {
-            logger.warn("消息处理异常", e);
-            sendError(ctx.channel(), "服务器内部错误");
         }
     }
 
@@ -118,9 +140,8 @@ public class GameServerHandler extends SimpleChannelInboundHandler<TextWebSocket
         }
     }
 
-    /**
-     * Handler Registry 分发：替代 switch-case
-     */
+    // ============ 消息分发 ============
+
     private void handleMessage(Channel conn, GameMessage msg) {
         BiConsumer<Channel, GameMessage> handler = handlers.get(msg.getType());
         if (handler != null) {
@@ -135,9 +156,7 @@ public class GameServerHandler extends SimpleChannelInboundHandler<TextWebSocket
     private void handleGetRooms(Channel conn) {
         GameMessage res = new GameMessage(GameMessage.Type.ROOM_LIST);
         res.setData(roomManager.getRoomsListJson());
-        if (conn != null && conn.isActive()) {
-            conn.writeAndFlush(new TextWebSocketFrame(gson.toJson(res)));
-        }
+        Player.sendMessageTo(conn, gson.toJson(res));
     }
 
     private void handleJoin(Channel conn, GameMessage msg) {
@@ -250,12 +269,12 @@ public class GameServerHandler extends SimpleChannelInboundHandler<TextWebSocket
         }
     }
 
+    // ============ 发送辅助 ============
+
     private void sendError(Channel conn, String errorMsg) {
         GameMessage error = new GameMessage(GameMessage.Type.ERROR);
         error.setMessage(errorMsg);
-        if (conn != null && conn.isActive()) {
-            conn.writeAndFlush(new TextWebSocketFrame(gson.toJson(error)));
-        }
+        Player.sendMessageTo(conn, gson.toJson(error));
     }
 
     private String getIp(Channel channel) {
