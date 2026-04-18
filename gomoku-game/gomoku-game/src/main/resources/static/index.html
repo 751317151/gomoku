@@ -467,6 +467,40 @@
 
   .btn-restart:hover { background: var(--accent); color: var(--bg); }
 
+  /* === CONFIRM DIALOG === */
+  .confirm-overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.7);
+    z-index: 3000;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(3px);
+  }
+  .confirm-overlay.show { display: flex; }
+  .confirm-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 32px;
+    max-width: 340px;
+    text-align: center;
+  }
+  .confirm-box p { margin-bottom: 24px; font-size: 1rem; }
+  .confirm-btns { display: flex; gap: 12px; justify-content: center; }
+  .confirm-btns button {
+    padding: 8px 24px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+    font-family: 'Noto Serif SC', serif;
+    font-size: 0.9rem;
+    transition: all 0.2s;
+  }
+  .confirm-btns .btn-ok { border-color: var(--red); color: var(--red); }
+  .confirm-btns .btn-ok:hover { background: var(--red); color: #fff; }
+  .confirm-btns .btn-cancel:hover { background: var(--border); }
+
   /* === CHAT === */
   .chat-messages {
     height: 260px;
@@ -583,6 +617,17 @@
 
 <!-- RECONNECT BAR -->
 <div class="reconnect-bar" id="reconnect-bar">连接断开，尝试重连中...</div>
+
+<!-- CONFIRM DIALOG -->
+<div class="confirm-overlay" id="confirm-dialog">
+  <div class="confirm-box">
+    <p id="confirm-msg">确定要认输吗？</p>
+    <div class="confirm-btns">
+      <button class="btn-ok" id="confirm-ok">确定</button>
+      <button class="btn-cancel" id="confirm-cancel">取消</button>
+    </div>
+  </div>
+</div>
 
 <!-- LOGIN SCREEN -->
 <div id="login-screen">
@@ -1021,6 +1066,7 @@ function showGame() {
   document.getElementById('lobby-screen').style.display = 'none';
   document.getElementById('game-screen').style.display = 'grid';
   document.getElementById('chat-messages').innerHTML = '<div class="chat-msg system">欢迎来到五子棋对战！</div>';
+  drawBoard();
 }
 
 function refreshRooms() {
@@ -1044,7 +1090,18 @@ function spectateRoom(id) {
 
 function leaveRoom() {
   send({ type: 'LEAVE' });
+  // 重置前端状态
+  board = Array.from({length: BOARD_SIZE}, () => new Array(BOARD_SIZE).fill(0));
+  players = {};
+  moveCount = 0;
+  lastMove = null;
+  myStone = 0;
+  currentTurn = 1;
+  gameState = 'LOBBY';
+  document.getElementById('gameover-overlay').classList.remove('show');
+  document.getElementById('move-count').textContent = '落子数: 0';
   showLobby();
+  drawBoard();
 }
 
 function addAI() {
@@ -1071,9 +1128,27 @@ function sendChat() {
 
 function surrender() {
   if (gameState !== 'PLAYING' || myId === 'SPECTATOR') return;
-  if (confirm('确定要认输吗？')) {
-    send({ type: 'SURRENDER' });
+  showConfirm('确定要认输吗？', function() { send({ type: 'SURRENDER' }); });
+}
+
+function showConfirm(message, onOk) {
+  var dlg = document.getElementById('confirm-dialog');
+  document.getElementById('confirm-msg').textContent = message;
+  var cancelBtn = document.getElementById('confirm-cancel');
+  // 如果没有 onOk，说明是纯提示，只显示确定按钮
+  cancelBtn.style.display = onOk ? 'inline-block' : 'none';
+  dlg.classList.add('show');
+  var okBtn = document.getElementById('confirm-ok');
+  okBtn.textContent = onOk ? '确定' : '知道了';
+  function cleanup() {
+    dlg.classList.remove('show');
+    okBtn.removeEventListener('click', onOkHandler);
+    cancelBtn.removeEventListener('click', onCancel);
   }
+  function onOkHandler() { cleanup(); if (onOk) onOk(); }
+  function onCancel() { cleanup(); }
+  okBtn.addEventListener('click', onOkHandler);
+  cancelBtn.addEventListener('click', onCancel);
 }
 
 function requestRestart() {
@@ -1111,6 +1186,13 @@ function handleMessage(msg) {
         mySessionId = msg.sessionId;
         localStorage.setItem('gomoku_session', mySessionId);
       }
+      // 重置棋盘画面和游戏状态，但保留 players（由 ROOM_INFO 更新）
+      board = Array.from({length: BOARD_SIZE}, () => new Array(BOARD_SIZE).fill(0));
+      moveCount = 0;
+      lastMove = null;
+      document.getElementById('gameover-overlay').classList.remove('show');
+      document.getElementById('move-count').textContent = '落子数: 0';
+      showSurrenderBtn();
       let wMsg = msg.message;
       if (!wMsg) {
         wMsg = (myId === 'SPECTATOR') ? '等待玩家加入...' : '等待对手加入...';
@@ -1118,6 +1200,7 @@ function handleMessage(msg) {
       setStatusMsg(wMsg, 'waiting');
       addChat(wMsg, 'system');
       updatePlayerPanel();
+      drawBoard();
       break;
 
     case 'GAME_START':
@@ -1140,6 +1223,12 @@ function handleMessage(msg) {
       handleGameChat(msg);
       break;
 
+    case 'RESTART_REQUEST':
+      showConfirm(msg.message || '对手请求再来一局', function() {
+        send({ type: 'RESTART' });
+      });
+      break;
+
     case 'ERROR':
       // Silently handle reconnect failure — clear stale session
       if (msg.message && msg.message.includes('重连')) {
@@ -1147,7 +1236,7 @@ function handleMessage(msg) {
         localStorage.removeItem('gomoku_session');
         break;
       }
-      alert('错误：' + msg.message);
+      showConfirm(msg.message || '未知错误', null);
       if (msg.message === '房间内玩家已全部离开，房间解散' || msg.message.includes('失败') || msg.message.includes('不存在') || msg.message.includes('已满')) {
         showLobby();
       }
@@ -1258,8 +1347,19 @@ function handleRoomList(msg) {
 
 function handleGameSync(msg) {
   roomId = msg.roomId;
-  gameState = 'SPECTATING';
-  myId = 'SPECTATOR';
+
+  // 区分观战和断线重连
+  if (msg.playerId && msg.stone) {
+    myId = msg.playerId;
+    myStone = msg.stone;
+    if (msg.sessionId) {
+      mySessionId = msg.sessionId;
+      localStorage.setItem('gomoku_session', mySessionId);
+    }
+  } else {
+    gameState = 'SPECTATING';
+    myId = 'SPECTATOR';
+  }
   
   try {
     const data = JSON.parse(msg.data);
@@ -1306,6 +1406,7 @@ function handleGameStart(msg) {
   // 解析房间数据
   try {
     const data = JSON.parse(msg.data);
+    players = {};
     data.players.forEach(p => { players[p.id] = p; });
     currentTurn = data.currentTurn;
     document.getElementById('spectator-count').textContent = '观众数: ' + (data.spectatorCount || 0);
@@ -1389,7 +1490,7 @@ function handleGameOver(msg) {
     data.scores.forEach(p => {
       scoresHtml += `<div class="score-item">
         <div class="score-num">${p.wins}</div>
-        <div class="score-label">${p.name.substring(0,6)} 胜</div>
+        <div class="score-label">${escHtml(p.name.substring(0,6))} 胜</div>
       </div>`;
     });
     scores.innerHTML = scoresHtml;
@@ -1418,7 +1519,7 @@ function updatePlayerPanel() {
   if (!blackP && unassigned.length > 0) blackP = unassigned.shift();
   if (!whiteP && unassigned.length > 0) whiteP = unassigned.shift();
 
-  if (!blackP && myId && myId !== 'SPECTATOR' && gameState === 'WAITING') {
+  if (!blackP && myId && myId !== 'SPECTATOR' && gameState === 'WAITING' && Object.keys(players).length === 0) {
     blackP = { id: myId, name: myName || '你', stone: 0, wins: myWins || 0 };
   }
 

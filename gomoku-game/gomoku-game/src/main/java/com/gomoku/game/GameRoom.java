@@ -63,6 +63,8 @@ public class GameRoom {
      */
     public synchronized boolean addPlayer(Player player) {
         if (players.size() >= 2) return false;
+        // 清除上一局的 stone 残留，避免 ROOM_INFO 带旧值
+        player.setStone(0);
         players.add(player);
         logger.info("玩家 {} 加入房间 {}", player.getName(), roomId);
 
