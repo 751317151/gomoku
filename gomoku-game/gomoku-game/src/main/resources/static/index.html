@@ -537,9 +537,52 @@
   .board-wrapper {
     position: relative;
   }
+
+  /* === RECONNECT BAR === */
+  .reconnect-bar {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    background: var(--red);
+    color: #fff;
+    text-align: center;
+    padding: 8px;
+    font-size: 0.85rem;
+    z-index: 2000;
+    animation: pulse-bar 2s infinite;
+  }
+  .reconnect-bar.show { display: block; }
+
+  @keyframes pulse-bar {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+  }
+
+  /* === RESPONSIVE === */
+  @media (max-width: 900px) {
+    main, #game-screen {
+      grid-template-columns: 1fr !important;
+      max-width: 600px;
+    }
+    #board-canvas {
+      max-width: 100%;
+      height: auto !important;
+    }
+    header { padding: 12px 16px; }
+    .login-box { width: 90vw; padding: 32px; }
+  }
+
+  @media (max-width: 480px) {
+    .room-list { grid-template-columns: 1fr; }
+    .panel-title { font-size: 0.65rem; }
+    .lobby-title { font-size: 1.1rem; }
+  }
 </style>
 </head>
 <body>
+
+<!-- RECONNECT BAR -->
+<div class="reconnect-bar" id="reconnect-bar">连接断开，尝试重连中...</div>
 
 <!-- LOGIN SCREEN -->
 <div id="login-screen">
@@ -600,6 +643,7 @@
       <div class="panel-title">
         <span style="flex:1">房间信息</span>
         <button class="leave-btn" onclick="leaveRoom()">离开</button>
+        
       </div>
       <div class="room-info">
         <div class="room-id" id="room-id">ROOM: —</div>
@@ -607,6 +651,7 @@
         <div class="move-count" id="spectator-count" style="margin-top:4px;color:var(--accent2)">观众数: 0</div>
       </div>
       <div class="status-area waiting" id="status-msg">等待连接...</div>
+      <div style="padding:4px 16px 8px;display:none" id="surrender-row"><button class="leave-btn" id="surrender-btn" onclick="surrender()" style="width:100%;border-color:var(--accent);color:var(--accent)">认输</button></div>
     </div>
   </div>
 
@@ -642,6 +687,30 @@
 
 <script>
 // ============================================================
+// 音效引擎
+// ============================================================
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+let audioCtx = null;
+function playSound(freq, duration, type) {
+ try {
+  if (!audioCtx) audioCtx = new AudioCtx();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type || 'sine';
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + duration);
+ } catch(e) {}
+}
+function playStoneSound() { playSound(800, 0.08, 'sine'); playSound(1200, 0.05, 'sine'); }
+function playWinSound() { playSound(523, 0.15, 'triangle'); setTimeout(()=>playSound(659, 0.15, 'triangle'), 150); setTimeout(()=>playSound(784, 0.3, 'triangle'), 300); }
+function playLoseSound() { playSound(400, 0.2, 'sawtooth'); setTimeout(()=>playSound(300, 0.3, 'sawtooth'), 200); }
+
+// ============================================================
 // 游戏常量
 // ============================================================
 const BOARD_SIZE = 15;
@@ -664,6 +733,11 @@ let board = Array.from({length: BOARD_SIZE}, () => new Array(BOARD_SIZE).fill(0)
 let lastMove = null;
 let players = {};
 let myWins = 0, myLosses = 0;
+let mySessionId = localStorage.getItem('gomoku_session') || null;
+let heartbeatTimer = null;
+let reconnectAttempts = 0;
+const MAX_RECONNECT = 5;
+const HEARTBEAT_INTERVAL = 30000;
 
 // ============================================================
 // 棋盘绘制
@@ -823,6 +897,25 @@ canvas.addEventListener('mousemove', function(e) {
 
 canvas.addEventListener('mouseleave', drawBoard);
 
+// Touch support for mobile
+canvas.addEventListener('touchstart', function(e) {
+ e.preventDefault();
+ if (gameState !== 'PLAYING' || currentTurn !== myStone) return;
+ const touch = e.touches[0];
+ const rect = canvas.getBoundingClientRect();
+ const scaleX = canvas.width / rect.width;
+ const scaleY = canvas.height / rect.height;
+ const mx = (touch.clientX - rect.left) * scaleX;
+ const my = (touch.clientY - rect.top) * scaleY;
+ const col = Math.round((mx - PADDING) / CELL);
+ const row = Math.round((my - PADDING) / CELL);
+
+ if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) return;
+ if (board[row][col] !== 0) return;
+
+ sendMove(row, col);
+}, { passive: false });
+
 canvas.addEventListener('click', function(e) {
   if (gameState !== 'PLAYING' || currentTurn !== myStone) return;
   const rect = canvas.getBoundingClientRect();
@@ -859,6 +952,20 @@ function connect(url) {
 
   ws.onopen = () => {
     setStatus(true, '已连接');
+    reconnectAttempts = 0;
+    document.getElementById('reconnect-bar').classList.remove('show');
+
+    // Start heartbeat
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    heartbeatTimer = setInterval(() => {
+      send({ type: 'PING' });
+    }, HEARTBEAT_INTERVAL);
+
+    if (mySessionId) {
+      // Try reconnect first — but don't show error if it fails (first connection)
+      send({ type: 'RECONNECT', sessionId: mySessionId });
+    }
+
     document.getElementById('login-screen').style.display = 'none';
     showLobby();
     refreshRooms();
@@ -875,8 +982,20 @@ function connect(url) {
 
   ws.onclose = () => {
     setStatus(false, '已断开');
-    gameState = 'LOBBY';
-    showLogin();
+    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+
+    // Auto-reconnect if we had a session
+    if (mySessionId && reconnectAttempts < MAX_RECONNECT) {
+      reconnectAttempts++;
+      document.getElementById('reconnect-bar').classList.add('show');
+      setTimeout(() => {
+        const url = document.getElementById('ws-url').value.trim() || 'ws://localhost:8887';
+        connect(url);
+      }, 2000 * reconnectAttempts);
+    } else {
+      gameState = 'LOBBY';
+      showLogin();
+    }
   };
 
   ws.onerror = () => {
@@ -950,6 +1069,13 @@ function sendChat() {
   input.value = '';
 }
 
+function surrender() {
+  if (gameState !== 'PLAYING' || myId === 'SPECTATOR') return;
+  if (confirm('确定要认输吗？')) {
+    send({ type: 'SURRENDER' });
+  }
+}
+
 function requestRestart() {
   document.getElementById('gameover-overlay').classList.remove('show');
   if (myId === 'SPECTATOR') return;
@@ -981,6 +1107,10 @@ function handleMessage(msg) {
     case 'WAITING':
       gameState = 'WAITING';
       if (msg.playerId) myId = msg.playerId;
+      if (msg.sessionId) {
+        mySessionId = msg.sessionId;
+        localStorage.setItem('gomoku_session', mySessionId);
+      }
       let wMsg = msg.message;
       if (!wMsg) {
         wMsg = (myId === 'SPECTATOR') ? '等待玩家加入...' : '等待对手加入...';
@@ -1011,6 +1141,12 @@ function handleMessage(msg) {
       break;
 
     case 'ERROR':
+      // Silently handle reconnect failure — clear stale session
+      if (msg.message && msg.message.includes('重连')) {
+        mySessionId = null;
+        localStorage.removeItem('gomoku_session');
+        break;
+      }
       alert('错误：' + msg.message);
       if (msg.message === '房间内玩家已全部离开，房间解散' || msg.message.includes('失败') || msg.message.includes('不存在') || msg.message.includes('已满')) {
         showLobby();
@@ -1043,38 +1179,78 @@ function handleRoomList(msg) {
   const container = document.getElementById('room-list-container');
   try {
     const list = JSON.parse(msg.data);
+    container.innerHTML = '';
     if (list.length === 0) {
-      container.innerHTML = '<div style="color:var(--text-dim);grid-column:1/-1;text-align:center;padding:40px;">暂无游戏房间，你可以点击"快速开始"创建房间</div>';
+      const empty = document.createElement('div');
+      empty.style.cssText = 'color:var(--text-dim);grid-column:1/-1;text-align:center;padding:40px;';
+      empty.textContent = '暂无游戏房间，你可以点击"快速开始"创建房间';
+      container.appendChild(empty);
       return;
     }
-    
-    let html = '';
+
     list.forEach(r => {
       const isPlaying = r.state === 'PLAYING';
       const isFull = r.playerCount >= 2;
       const stateClass = isPlaying ? 'state-playing' : 'state-waiting';
       const stateText = isPlaying ? '对战中' : '等待中';
-      
-      let playersHtml = r.players.length > 0 ? r.players.join(' vs ') : '空房间';
-      
-      html += `
-        <div class="room-card">
-          <div class="room-card-header">
-            <span class="room-card-id">${r.roomId}</span>
-            <span class="room-card-state ${stateClass}">${stateText}</span>
-          </div>
-          <div class="room-card-info">
-            <div>玩家: ${playersHtml}</div>
-            <div style="font-size:0.75rem;margin-top:4px;">人数: ${r.playerCount}/2 | 观众: ${r.spectatorCount}</div>
-          </div>
-          <div class="room-card-actions">
-            ${!isFull && !isPlaying ? `<button class="btn-outline" onclick="joinSpecificRoom('${r.roomId}')">加入</button>` : ''}
-            <button class="btn-outline" style="border-color:#555;color:#ccc;" onclick="spectateRoom('${r.roomId}')">观战</button>
-          </div>
-        </div>
-      `;
+
+      const card = document.createElement('div');
+      card.className = 'room-card';
+
+      const header = document.createElement('div');
+      header.className = 'room-card-header';
+
+      const idSpan = document.createElement('span');
+      idSpan.className = 'room-card-id';
+      idSpan.textContent = r.roomId;
+
+      const stateSpan = document.createElement('span');
+      stateSpan.className = 'room-card-state ' + stateClass;
+      stateSpan.textContent = stateText;
+
+      header.appendChild(idSpan);
+      header.appendChild(stateSpan);
+
+      const info = document.createElement('div');
+      info.className = 'room-card-info';
+
+      const playersText = r.players.length > 0 ? r.players.map(escHtml).join(' vs ') : '空房间';
+      const countDiv = document.createElement('div');
+      countDiv.style.cssText = 'font-size:0.75rem;margin-top:4px;';
+      countDiv.textContent = '人数: ' + r.playerCount + '/2 | 观众: ' + r.spectatorCount;
+
+      const playerDiv = document.createElement('div');
+      playerDiv.textContent = '玩家: ';
+      playerDiv.innerHTML = '玩家: ' + playersText;
+
+      info.appendChild(playerDiv);
+      info.appendChild(countDiv);
+
+      const actions = document.createElement('div');
+      actions.className = 'room-card-actions';
+
+      if (!isFull && !isPlaying) {
+        const joinBtn = document.createElement('button');
+        joinBtn.className = 'btn-outline';
+        joinBtn.textContent = '加入';
+        const rid = r.roomId;
+        joinBtn.onclick = function() { joinSpecificRoom(rid); };
+        actions.appendChild(joinBtn);
+      }
+
+      const specBtn = document.createElement('button');
+      specBtn.className = 'btn-outline';
+      specBtn.style.cssText = 'border-color:#555;color:#ccc;';
+      specBtn.textContent = '观战';
+      const rid2 = r.roomId;
+      specBtn.onclick = function() { spectateRoom(rid2); };
+      actions.appendChild(specBtn);
+
+      card.appendChild(header);
+      card.appendChild(info);
+      card.appendChild(actions);
+      container.appendChild(card);
     });
-    container.innerHTML = html;
   } catch(e) {
     console.error(e);
   }
@@ -1106,12 +1282,12 @@ function handleGameSync(msg) {
     }
   } catch(e) {}
 
-  document.getElementById('room-id').textContent = 'ROOM: ' + roomId + ' (观战中)';
+  document.getElementById('room-id').textContent = 'ROOM: ' + roomId + (myId === 'SPECTATOR' ? ' (观战中)' : '');
   document.getElementById('move-count').textContent = '落子数: ' + moveCount;
   document.getElementById('gameover-overlay').classList.remove('show');
 
   updatePlayerPanel();
-  setStatusMsg('观战中', 'waiting');
+  setStatusMsg(myId === 'SPECTATOR' ? '观战中' : '重连成功', 'waiting');
   drawBoard();
 
   addChat(`系统：${msg.message}`, 'system');
@@ -1140,9 +1316,17 @@ function handleGameStart(msg) {
 
   updatePlayerPanel();
   updateTurnStatus();
+  showSurrenderBtn();
   drawBoard();
 
   addChat(`游戏开始！你执${myStone===1?'黑':'白'}棋，对手：${msg.message}`, 'system');
+}
+
+function showSurrenderBtn() {
+  var surrenderRow = document.getElementById('surrender-row');
+  if (surrenderRow) {
+    surrenderRow.style.display = (gameState === 'PLAYING' && myId && myId !== 'SPECTATOR') ? 'block' : 'none';
+  }
 }
 
 function handleGameMove(msg) {
@@ -1159,6 +1343,7 @@ function handleGameMove(msg) {
 
 function handleGameOver(msg) {
   gameState = 'OVER';
+  showSurrenderBtn();
   const overlay = document.getElementById('gameover-overlay');
   const result = document.getElementById('gameover-result');
   const sub = document.getElementById('gameover-sub');
@@ -1246,7 +1431,7 @@ function updatePlayerPanel() {
     blackEl.innerHTML = `<div class="player-card">
       <div class="player-card-top">
         <div class="stone-icon black"></div>
-        <div class="player-name ${isMe ? 'you' : ''}">${blackP.name}${isMe ? ' (你)' : ''}</div>
+        <div class="player-name ${isMe ? 'you' : ''}">${escHtml(blackP.name)}${isMe ? ' (你)' : ''}</div>
       </div>
       <div class="player-stats">
         <span>胜 ${blackP.wins}</span>
@@ -1265,7 +1450,7 @@ function updatePlayerPanel() {
     whiteEl.innerHTML = `<div class="player-card">
       <div class="player-card-top">
         <div class="stone-icon white"></div>
-        <div class="player-name ${isMe ? 'you' : ''}">${whiteP.name}${isMe ? ' (你)' : ''}</div>
+        <div class="player-name ${isMe ? 'you' : ''}">${escHtml(whiteP.name)}${isMe ? ' (你)' : ''}</div>
       </div>
       <div class="player-stats">
         <span>胜 ${whiteP.wins}</span>
@@ -1284,6 +1469,11 @@ function updatePlayerPanel() {
 }
 
 function updateTurnStatus() {
+  // 显示/隐藏认输按钮
+  var surrenderRow = document.getElementById('surrender-row');
+  if (surrenderRow) {
+    surrenderRow.style.display = (gameState === 'PLAYING' && myId && myId !== 'SPECTATOR') ? 'block' : 'none';
+  }
   // 隐藏所有 turn badge
   ['black','white'].forEach(c => {
     const el = document.getElementById('turn-' + c);

@@ -1,0 +1,6 @@
+server:
+  port: 8090
+
+netty:
+  port: 8887
+  idle-timeout: 120

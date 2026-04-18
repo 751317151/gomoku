@@ -1,5 +1,9 @@
 package com.gomoku.game;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
 /**
  * 五子棋棋盘逻辑
  */
@@ -13,6 +17,7 @@ public class GomokuBoard {
     private final int[][] board;
     private int currentTurn; // 当前轮到谁
     private int moveCount;
+    private final List<int[]> moveHistory = new ArrayList<>();
 
     public GomokuBoard() {
         this.board = new int[SIZE][SIZE];
@@ -30,6 +35,7 @@ public class GomokuBoard {
 
         board[row][col] = stone;
         moveCount++;
+        moveHistory.add(new int[]{row, col, stone});
         currentTurn = (currentTurn == BLACK) ? WHITE : BLACK;
         return true;
     }
@@ -44,14 +50,14 @@ public class GomokuBoard {
     }
 
     /**
-     * 检查指定石子是否获胜
+     * 检查指定位置是否获胜
      */
     public boolean checkWin(int row, int col) {
         int stone = board[row][col];
         if (stone == EMPTY) return false;
 
         // 四个方向：横、竖、左斜、右斜
-        int[][] directions = {{0,1},{1,0},{1,1},{1,-1}};
+        int[][] directions = {{0, 1}, {1, 0}, {1, 1}, {1, -1}};
 
         for (int[] dir : directions) {
             int count = 1;
@@ -99,24 +105,31 @@ public class GomokuBoard {
         }
         currentTurn = BLACK;
         moveCount = 0;
+        moveHistory.clear();
     }
 
     /**
-     * 将棋盘序列化为字符串（用于传输）
+     * 获取棋局记录（不可变）
      */
-    public String serialize() {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < SIZE; i++) {
-            for (int j = 0; j < SIZE; j++) {
-                sb.append(board[i][j]);
-                if (j < SIZE - 1) sb.append(',');
-            }
-            if (i < SIZE - 1) sb.append(';');
-        }
-        return sb.toString();
+    public List<int[]> getMoveHistory() {
+        return Collections.unmodifiableList(moveHistory);
     }
 
-    public int[][] getBoard() { return board; }
+    /**
+     * 将棋盘序列化为二维数组（用于同步）
+     */
+    public int[][] getBoardSnapshot() {
+        int[][] snapshot = new int[SIZE][SIZE];
+        for (int i = 0; i < SIZE; i++) {
+            System.arraycopy(board[i], 0, snapshot[i], 0, SIZE);
+        }
+        return snapshot;
+    }
+
+    /**
+  * 直接访问内部数组（仅限同包内的 AI 引擎使用，外部应使用 getBoardSnapshot()）
+  */
+ int[][] getBoard() { return board; }
     public int getCurrentTurn() { return currentTurn; }
     public int getMoveCount() { return moveCount; }
     public int getCell(int row, int col) { return board[row][col]; }

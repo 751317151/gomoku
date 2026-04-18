@@ -9,21 +9,31 @@ import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
 import io.netty.handler.stream.ChunkedWriteHandler;
+import io.netty.handler.timeout.IdleStateHandler;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
 
 import javax.annotation.PreDestroy;
-import java.util.logging.Logger;
+import java.util.concurrent.TimeUnit;
 
 @Component
 public class NettyWebSocketServer implements CommandLineRunner {
 
-    private static final Logger logger = Logger.getLogger(NettyWebSocketServer.class.getName());
+    private static final Logger logger = LoggerFactory.getLogger(NettyWebSocketServer.class);
+    private static final int MAX_FRAME_PAYLOAD_LENGTH = 65536; // 64KB
 
     @Value("${netty.port:8887}")
     private int port;
+
+    @Value("${server.port:8080}")
+    private int httpPort;
+
+    @Value("${netty.idle-timeout:120}")
+    private int idleTimeout;
 
     private final GameServerHandler gameServerHandler;
 
@@ -44,30 +54,35 @@ public class NettyWebSocketServer implements CommandLineRunner {
         try {
             ServerBootstrap b = new ServerBootstrap();
             b.group(bossGroup, workerGroup)
-             .channel(NioServerSocketChannel.class)
-             .option(ChannelOption.SO_BACKLOG, 128)
-             .childOption(ChannelOption.SO_KEEPALIVE, true)
-             .childHandler(new ChannelInitializer<SocketChannel>() {
-                 @Override
-                 protected void initChannel(SocketChannel ch) {
-                     ch.pipeline().addLast(new HttpServerCodec());
-                     ch.pipeline().addLast(new ChunkedWriteHandler());
-                     ch.pipeline().addLast(new HttpObjectAggregator(8192));
-                     ch.pipeline().addLast(new WebSocketServerProtocolHandler("/"));
-                     ch.pipeline().addLast(gameServerHandler);
-                 }
-             });
+                    .channel(NioServerSocketChannel.class)
+                    .option(ChannelOption.SO_BACKLOG, 128)
+                    .childOption(ChannelOption.SO_KEEPALIVE, true)
+                    .childHandler(new ChannelInitializer<SocketChannel>() {
+                        @Override
+                        protected void initChannel(SocketChannel ch) {
+                            ch.pipeline().addLast(new HttpServerCodec());
+                            ch.pipeline().addLast(new ChunkedWriteHandler());
+                            ch.pipeline().addLast(new HttpObjectAggregator(MAX_FRAME_PAYLOAD_LENGTH));
+                            // 心跳检测：读空闲超时
+                            ch.pipeline().addLast(new IdleStateHandler(
+                                    idleTimeout, 0, 0, TimeUnit.SECONDS));
+                            ch.pipeline().addLast(new WebSocketServerProtocolHandler(
+                                    "/", null, true, MAX_FRAME_PAYLOAD_LENGTH));
+                            ch.pipeline().addLast(gameServerHandler);
+                        }
+                    });
 
             ChannelFuture f = b.bind(port).sync();
             channel = f.channel();
 
             logger.info("========================================");
-            logger.info("  五子棋 Netty WebSocket 已启动 (端口: " + port + ")");
-            logger.info("  Spring Boot Web 已启动 (端口: 8080)");
-            logger.info("  前端页面: http://localhost:8080");
+            logger.info(" 五子棋 Netty WebSocket 已启动 (端口: {})", port);
+            logger.info(" Spring Boot Web 已启动 (端口: {})", httpPort);
+            logger.info(" 前端页面: http://localhost:{}", httpPort);
+            logger.info(" 心跳超时: {}s", idleTimeout);
             logger.info("========================================");
         } catch (Exception e) {
-            logger.severe("Netty启动失败: " + e.getMessage());
+            logger.error("Netty启动失败: {}", e.getMessage());
             destroy();
         }
     }
