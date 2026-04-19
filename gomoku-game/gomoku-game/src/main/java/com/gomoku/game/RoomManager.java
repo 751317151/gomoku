@@ -71,9 +71,9 @@ public class RoomManager {
     }
 
     /**
-     * IP 连接释放
+     * IP 连接释放（从 handlerRemoved 直接调用）
      */
-    private void releaseIp(String ip) {
+    public void releaseIp(String ip) {
         if (ip != null) {
             ipConnectionCount.computeIfPresent(ip, (k, v) -> v <= 1 ? null : v - 1);
         }
@@ -229,12 +229,7 @@ public class RoomManager {
         playerById.remove(player.getId());
         sessionToPlayer.remove(player.getSessionId());
         leaveRoom(player);
-
-        // 释放 IP 连接计数
-        if (conn.remoteAddress() instanceof java.net.InetSocketAddress) {
-            String ip = ((java.net.InetSocketAddress) conn.remoteAddress()).getAddress().getHostAddress();
-            releaseIp(ip);
-        }
+        // IP 释放由 GameServerHandler.handlerRemoved 统一处理
     }
 
     public synchronized void leaveRoom(Channel conn) {

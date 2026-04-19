@@ -449,8 +449,20 @@ canvas.addEventListener('click', function(e) {
 // ============================================================
 // WebSocket 通信
 // ============================================================
+// 自动检测 WebSocket 地址：
+//   生产环境(nginx): wss://domain/ws 或 ws://domain/ws
+//   本地开发:        ws://localhost:9001
+function getWsUrl() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  // 如果通过 nginx 代理（非 9001 端口），走 /ws 路径
+  if (location.port !== '9001') {
+    return proto + '//' + location.host + '/ws';
+  }
+  return proto + '//' + location.hostname + ':9001';
+}
+
 function joinGame() {
-  const url = document.getElementById('ws-url').value.trim() || 'ws://localhost:8887';
+  const url = document.getElementById('ws-url').value.trim() || getWsUrl();
   myName = document.getElementById('player-name').value.trim() || '匿名玩家';
 
   connect(url);
@@ -467,9 +479,7 @@ function connect(url) {
   ws.binaryType = 'arraybuffer'; // 支持接收二进制帧
 
   ws.onopen = () => {
-    setStatus(true, '已连接');
-    reconnectAttempts = 0;
-    document.getElementById('reconnect-bar').classList.remove('show');
+    setStatus(true, '连接中...');
 
     // Start heartbeat
     if (heartbeatTimer) clearInterval(heartbeatTimer);
@@ -478,13 +488,11 @@ function connect(url) {
     }, HEARTBEAT_INTERVAL);
 
     if (mySessionId) {
-      // Try reconnect first — but don't show error if it fails (first connection)
       send({ type: 'RECONNECT', sessionId: mySessionId });
     }
 
-    document.getElementById('login-screen').style.display = 'none';
-    showLobby();
-    refreshRooms();
+    // 先发探测消息，等服务端确认后再进入（防止 IP 限流等场景）
+    send({ type: 'GET_ROOMS' });
   };
 
   ws.onmessage = (e) => {
@@ -532,7 +540,7 @@ function connect(url) {
         `连接断开，${(delay/1000).toFixed(1)}秒后重连 (${reconnectAttempts}/${MAX_RECONNECT})...`;
       console.log(`[重连] 指数退避: attempt=${reconnectAttempts}, delay=${delay}ms`);
       setTimeout(() => {
-        const url = document.getElementById('ws-url').value.trim() || 'ws://localhost:8887';
+        const url = document.getElementById('ws-url').value.trim() || getWsUrl();
         connect(url);
       }, delay);
     } else {
@@ -696,6 +704,14 @@ function requestRestart() {
 function handleMessage(msg) {
   switch (msg.type) {
     case 'ROOM_LIST':
+      // 首次收到 ROOM_LIST 说明连接合法，正式进入大厅
+      if (document.getElementById('login-screen').style.display !== 'none') {
+        reconnectAttempts = 0;
+        document.getElementById('reconnect-bar').classList.remove('show');
+        document.getElementById('login-screen').style.display = 'none';
+        showLobby();
+        setStatus(true, '已连接');
+      }
       handleRoomList(msg);
       break;
 
@@ -758,6 +774,13 @@ function handleMessage(msg) {
       if (msg.message && msg.message.includes('重连')) {
         mySessionId = null;
         localStorage.removeItem('gomoku_session');
+        break;
+      }
+      // IP 限流：停止重连，留在登录页
+      if (msg.message && msg.message.includes('连接数超限')) {
+        reconnectAttempts = MAX_RECONNECT; // 阻止指数退避重连
+        showConfirm(msg.message, null);
+        showLogin();
         break;
       }
       showConfirm(msg.message || '未知错误', null);
@@ -909,6 +932,14 @@ function handleGameSync(msg) {
   document.getElementById('room-id').textContent = 'ROOM: ' + roomId + (myId === 'SPECTATOR' ? ' (观战中)' : '');
   document.getElementById('move-count').textContent = '落子数: ' + moveCount;
   document.getElementById('gameover-overlay').classList.remove('show');
+  document.getElementById('restart-bar').style.display = 'none';
+
+  // 重连成功：隐藏登录页
+  reconnectAttempts = 0;
+  document.getElementById('reconnect-bar').classList.remove('show');
+  document.getElementById('login-screen').style.display = 'none';
+  showGame();
+  setStatus(true, '已连接');
 
   updatePlayerPanel();
   setStatusMsg(myId === 'SPECTATOR' ? '观战中' : '重连成功', 'waiting');
@@ -1173,9 +1204,6 @@ function escHtml(str) {
 // 初始化
 // ============================================================
 drawBoard();
-
-// 自动填充 WebSocket 地址
-document.getElementById('ws-url').value = 'ws://' + window.location.hostname + ':8887';
 
 // 回车加入
 document.getElementById('player-name').addEventListener('keydown', e => {

@@ -26,7 +26,7 @@ public class NettyWebSocketServer implements CommandLineRunner {
     private static final Logger logger = LoggerFactory.getLogger(NettyWebSocketServer.class);
     private static final int MAX_FRAME_PAYLOAD_LENGTH = 65536; // 64KB
 
-    @Value("${netty.port:8887}")
+    @Value("${netty.port:9001}")
     private int port;
 
     @Value("${server.port:8080}")

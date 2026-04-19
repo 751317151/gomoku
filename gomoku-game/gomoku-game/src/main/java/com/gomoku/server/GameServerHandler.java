@@ -63,8 +63,33 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
 
     // ============ 入站处理：支持 JSON 和 Binary 两种协议 ============
 
+    private static final io.netty.util.AttributeKey<Boolean> IP_CHECKED =
+            io.netty.util.AttributeKey.valueOf("ipChecked");
+    private static final io.netty.util.AttributeKey<String> CLIENT_IP =
+            io.netty.util.AttributeKey.valueOf("clientIp");
+    private static final io.netty.util.AttributeKey<Boolean> IP_RELEASED =
+            io.netty.util.AttributeKey.valueOf("ipReleased");
+
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, Object msg) {
+        // IP 限流：仅在首次消息时检查一次
+        Boolean checked = ctx.channel().attr(IP_CHECKED).get();
+        if (checked == null) {
+            ctx.channel().attr(IP_CHECKED).set(true);
+            String ip = getIp(ctx.channel());
+            if (ip != null) {
+                ctx.channel().attr(CLIENT_IP).set(ip);
+                if (!roomManager.checkIpLimit(ip)) {
+                    logger.warn("IP 连接数超限，拒绝: {}", ip);
+                    // checkIpLimit 内部已回退计数，标记已释放防止 handlerRemoved 再减
+                    ctx.channel().attr(IP_RELEASED).set(true);
+                    sendError(ctx.channel(), "连接数超限，同一网络最多允许5个连接");
+                    ctx.close();
+                    return;
+                }
+            }
+        }
+
         if (msg instanceof TextWebSocketFrame) {
             // JSON 协议路径
             handleJsonFrame(ctx, (TextWebSocketFrame) msg);
@@ -96,13 +121,7 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
 
     @Override
     public void handlerAdded(ChannelHandlerContext ctx) {
-        String ip = getIp(ctx.channel());
-        if (ip != null && !roomManager.checkIpLimit(ip)) {
-            logger.warn("IP 连接数超限，拒绝: {}", ip);
-            ctx.close();
-            return;
-        }
-        logger.info("新连接：{} (IP: {})", ctx.channel().remoteAddress(), ip);
+        logger.info("新连接：{} (IP: {})", ctx.channel().remoteAddress(), getIp(ctx.channel()));
     }
 
     @Override
@@ -113,6 +132,8 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
         } catch (Exception e) {
             logger.warn("断开连接处理异常", e);
         }
+        // 始终释放 IP 计数（幂等：只释放一次）
+        releaseIpOnce(ctx.channel());
     }
 
     @Override
@@ -123,6 +144,7 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
         } catch (Exception e) {
             logger.warn("异常断开处理失败", e);
         }
+        releaseIpOnce(ctx.channel());
         ctx.close();
     }
 
@@ -133,10 +155,23 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
             if (event.state() == io.netty.handler.timeout.IdleState.READER_IDLE) {
                 logger.info("心跳超时，断开连接：{}", ctx.channel().remoteAddress());
                 roomManager.handleDisconnect(ctx.channel());
+                releaseIpOnce(ctx.channel());
                 ctx.close();
             }
         } else {
             super.userEventTriggered(ctx, evt);
+        }
+    }
+
+    /**
+     * 幂等释放 IP 连接计数，同一 Channel 只释放一次
+     */
+    private void releaseIpOnce(Channel ch) {
+        if (ch.attr(IP_RELEASED).compareAndSet(null, true)) {
+            String ip = ch.attr(CLIENT_IP).getAndSet(null);
+            if (ip != null) {
+                roomManager.releaseIp(ip);
+            }
         }
     }
 

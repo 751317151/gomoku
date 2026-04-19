@@ -38,7 +38,7 @@ cd gomoku-game
 # 2. 编译打包
 mvn clean package -q
 
-# 3. 启动服务器（默认端口 8887）
+# 3. 启动服务器（默认端口 9001）
 java -jar target/gomoku-server-jar-with-dependencies.jar
 
 # 或指定端口
@@ -55,7 +55,7 @@ java -jar target/gomoku-server-jar-with-dependencies.jar 9000
 
 1. 启动服务器后，用浏览器打开 `frontend/index.html`
 2. **同时打开两个浏览器窗口/标签页**（模拟两个玩家）
-3. 两个窗口都输入服务器地址（默认 `ws://localhost:8887`）和昵称
+3. 两个窗口都输入服务器地址（默认 `ws://localhost:9001`）和昵称
 4. 点击「进入对战」，系统自动匹配对手
 5. 黑棋先手，轮流点击棋盘落子
 6. 五子连珠获胜！
