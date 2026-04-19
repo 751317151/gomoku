@@ -411,24 +411,38 @@ canvas.addEventListener('mousemove', function(e) {
 
 canvas.addEventListener('mouseleave', drawBoard);
 
-// Touch support for mobile
+// Touch support for mobile — 区分点击和滑动
+let touchStartX = 0, touchStartY = 0, touchMoved = false;
+
 canvas.addEventListener('touchstart', function(e) {
- e.preventDefault();
- if (gameState !== 'PLAYING' || currentTurn !== myStone) return;
- const touch = e.touches[0];
- const rect = canvas.getBoundingClientRect();
- const scaleX = canvas.width / rect.width;
- const scaleY = canvas.height / rect.height;
- const mx = (touch.clientX - rect.left) * scaleX;
- const my = (touch.clientY - rect.top) * scaleY;
- const col = Math.round((mx - PADDING) / CELL);
- const row = Math.round((my - PADDING) / CELL);
+  if (gameState !== 'PLAYING' || currentTurn !== myStone) return;
+  const touch = e.touches[0];
+  touchStartX = touch.clientX;
+  touchStartY = touch.clientY;
+  touchMoved = false;
+}, { passive: true });
 
- if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) return;
- if (board[row][col] !== 0) return;
+canvas.addEventListener('touchmove', function(e) {
+  touchMoved = true;
+}, { passive: true });
 
- sendMove(row, col);
-}, { passive: false });
+canvas.addEventListener('touchend', function(e) {
+  if (gameState !== 'PLAYING' || currentTurn !== myStone) return;
+  if (touchMoved) return; // 滑动不落子
+  const touch = e.changedTouches[0];
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const mx = (touch.clientX - rect.left) * scaleX;
+  const my = (touch.clientY - rect.top) * scaleY;
+  const col = Math.round((mx - PADDING) / CELL);
+  const row = Math.round((my - PADDING) / CELL);
+
+  if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) return;
+  if (board[row][col] !== 0) return;
+
+  sendMove(row, col);
+});
 
 canvas.addEventListener('click', function(e) {
   if (gameState !== 'PLAYING' || currentTurn !== myStone) return;
@@ -451,14 +465,20 @@ canvas.addEventListener('click', function(e) {
 // ============================================================
 // 自动检测 WebSocket 地址：
 //   生产环境(nginx): wss://domain/ws 或 ws://domain/ws
-//   本地开发:        ws://localhost:9001
+//   本地开发:        ws://localhost:9001（直接连 Netty）
 function getWsUrl() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  // 如果通过 nginx 代理（非 9001 端口），走 /ws 路径
-  if (location.port !== '9001') {
-    return proto + '//' + location.host + '/ws';
+  const wsPort = document.getElementById('ws-url').dataset.port || '9001';
+  // 页面端口 === WS 端口 → 直接连 Netty（本地或同端口部署）
+  // 否则 → 通过 /ws 路径走 nginx 代理
+  if (location.port === wsPort) {
+    return proto + '//' + location.host;
   }
-  return proto + '//' + location.hostname + ':9001';
+  // 本地开发：页面和 WS 端口不同，拼出完整 WS 地址
+  if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+    return proto + '//' + location.hostname + ':' + wsPort;
+  }
+  return proto + '//' + location.host + '/ws';
 }
 
 function joinGame() {
