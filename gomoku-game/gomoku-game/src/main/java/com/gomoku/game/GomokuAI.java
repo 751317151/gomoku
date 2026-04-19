@@ -42,6 +42,13 @@ public class GomokuAI {
     private static final int[][] DIRECTIONS = {{0, 1}, {1, 0}, {1, 1}, {1, -1}};
 
     public static int[] getBestMove(GomokuBoard boardObj, int aiStone) {
+        return getBestMove(boardObj, aiStone, -1);
+    }
+
+    /**
+     * @param maxDepth 指定最大搜索深度（-1 = 自动动态调整）
+     */
+    public static int[] getBestMove(GomokuBoard boardObj, int aiStone, int maxDepth) {
         // 使用快照避免竞态条件
         int[][] board = boardObj.getBoardSnapshot();
         int humanStone = (aiStone == GomokuBoard.BLACK) ? GomokuBoard.WHITE : GomokuBoard.BLACK;
@@ -72,8 +79,13 @@ public class GomokuAI {
         // 着法排序：按启发式评分降序，提升 Alpha-Beta 剪枝效率
         candidates = sortCandidates(board, candidates, aiStone, humanStone);
 
-        // 动态搜索深度：候选多时浅搜，候选少时深搜
-        int searchDepth = calculateSearchDepth(candidates.size());
+        // 搜索深度：指定 or 动态调整
+        int searchDepth;
+        if (maxDepth > 0) {
+            searchDepth = Math.min(maxDepth, SEARCH_DEPTH_MAX);
+        } else {
+            searchDepth = calculateSearchDepth(candidates.size());
+        }
         logger.info("AI搜索: candidates={}, depth={}", candidates.size(), searchDepth);
 
         // Minimax 搜索

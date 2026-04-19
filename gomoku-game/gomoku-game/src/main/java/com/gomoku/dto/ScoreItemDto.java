@@ -8,14 +8,17 @@ public class ScoreItemDto {
     private String name;
     private int wins;
     private int losses;
+    private int elo;
+    private int eloChange; // 本局 ELO 变化
 
     public ScoreItemDto() {}
 
-    public ScoreItemDto(String id, String name, int wins, int losses) {
+    public ScoreItemDto(String id, String name, int wins, int losses, int elo) {
         this.id = id;
         this.name = name;
         this.wins = wins;
         this.losses = losses;
+        this.elo = elo;
     }
 
     // Getters and Setters
@@ -30,4 +33,10 @@ public class ScoreItemDto {
 
     public int getLosses() { return losses; }
     public void setLosses(int losses) { this.losses = losses; }
+
+    public int getElo() { return elo; }
+    public void setElo(int elo) { this.elo = elo; }
+
+    public int getEloChange() { return eloChange; }
+    public void setEloChange(int eloChange) { this.eloChange = eloChange; }
 }

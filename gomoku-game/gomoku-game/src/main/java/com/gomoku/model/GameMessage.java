@@ -29,6 +29,7 @@ public class GameMessage {
         GAME_CHAT,      // 聊天广播
         WAITING,        // 等待对手
         RESTART_REQUEST,// 对手请求重玩
+        TIMER_SYNC,     // 计时同步（服务端→客户端，每秒推送）
         ERROR           // 错误信息
     }
 
@@ -44,6 +45,8 @@ public class GameMessage {
     private String data;     // JSON 附加数据
     private String sessionId; // 用于断线重连
     private int moveSeq;     // 落子序列号（防重复）
+    private int timeLeft;    // 当前步时剩余秒数
+    private int totalTimeLeft; // 己方总时间剩余秒数
 
     public GameMessage() {}
 
@@ -87,4 +90,10 @@ public class GameMessage {
 
     public int getMoveSeq() { return moveSeq; }
     public void setMoveSeq(int moveSeq) { this.moveSeq = moveSeq; }
+
+    public int getTimeLeft() { return timeLeft; }
+    public void setTimeLeft(int timeLeft) { this.timeLeft = timeLeft; }
+
+    public int getTotalTimeLeft() { return totalTimeLeft; }
+    public void setTotalTimeLeft(int totalTimeLeft) { this.totalTimeLeft = totalTimeLeft; }
 }

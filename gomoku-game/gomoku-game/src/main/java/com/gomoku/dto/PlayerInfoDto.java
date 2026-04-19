@@ -8,14 +8,16 @@ public class PlayerInfoDto {
     private String name;
     private int stone;
     private int wins;
+    private int elo;
 
     public PlayerInfoDto() {}
 
-    public PlayerInfoDto(String id, String name, int stone, int wins) {
+    public PlayerInfoDto(String id, String name, int stone, int wins, int elo) {
         this.id = id;
         this.name = name;
         this.stone = stone;
         this.wins = wins;
+        this.elo = elo;
     }
 
     // Getters and Setters
@@ -30,4 +32,7 @@ public class PlayerInfoDto {
 
     public int getWins() { return wins; }
     public void setWins(int wins) { this.wins = wins; }
+
+    public int getElo() { return elo; }
+    public void setElo(int elo) { this.elo = elo; }
 }

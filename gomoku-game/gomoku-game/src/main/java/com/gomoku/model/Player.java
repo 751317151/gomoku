@@ -16,6 +16,7 @@ public class Player {
     private int stone; // 1=黑棋, 2=白棋
     private int wins;
     private int losses;
+    private int elo = 1200; // ELO 积分
 
     private static final long CHAT_INTERVAL_MS = 1000;
     private static final long ACTION_INTERVAL_MS = 300;
@@ -88,6 +89,8 @@ public class Player {
     public int getLosses() { return losses; }
     public void addLoss() { this.losses++; }
     public void setLosses(int losses) { this.losses = losses; }
+    public int getElo() { return elo; }
+    public void setElo(int elo) { this.elo = elo; }
 
     @Override
     public String toString() {

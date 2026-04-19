@@ -20,10 +20,17 @@ public class GameApiController {
 
     /**
      * 获取房间列表（HTTP GET）
-     * 前端首次加载或手动刷新时调用，无需 WebSocket 连接
      */
     @GetMapping("/api/rooms")
     public String getRooms() {
         return roomManager.getRoomsListJson();
+    }
+
+    /**
+     * 获取 ELO 排行榜（HTTP GET）
+     */
+    @GetMapping("/api/leaderboard")
+    public String getLeaderboard() {
+        return roomManager.getLeaderboardJson();
     }
 }

@@ -45,7 +45,10 @@ public class RoomManager {
         return t;
     });
 
-    public RoomManager(MeterRegistry meterRegistry) {
+    private final EloService eloService;
+
+    public RoomManager(MeterRegistry meterRegistry, EloService eloService) {
+        this.eloService = eloService;
         // 每 60 秒扫描一次僵尸房间
         cleanupExecutor.scheduleAtFixedRate(this::cleanupIdleRooms, 60, 60, TimeUnit.SECONDS);
 
@@ -113,6 +116,10 @@ public class RoomManager {
         return gson.toJson(list);
     }
 
+    public String getLeaderboardJson() {
+        return eloService.getLeaderboardJson();
+    }
+
     public synchronized GameRoom joinGame(Channel conn, String playerName, String targetRoomId) {
         Player player = getOrCreatePlayer(conn, playerName);
 
@@ -131,6 +138,7 @@ public class RoomManager {
         if (room == null) {
             String roomId = "ROOM-" + UUID.randomUUID().toString().substring(0, 6).toUpperCase();
             room = new GameRoom(roomId);
+            room.setEloService(eloService);
             rooms.put(roomId, room);
         }
 
@@ -153,17 +161,21 @@ public class RoomManager {
         return room;
     }
 
-    public synchronized GameRoom addAI(Channel conn) {
+    public synchronized GameRoom addAI(Channel conn, int difficulty) {
         Player player = playerByConn.get(conn);
         if (player == null) return null;
 
         GameRoom room = getRoomByPlayer(player);
         if (room != null && !room.isFull()) {
-            room.addAI();
+            room.addAI(difficulty);
             broadcastRoomsList();
             return room;
         }
         return null;
+    }
+
+    public synchronized GameRoom addAI(Channel conn) {
+        return addAI(conn, 4);
     }
 
     public synchronized GameRoom reconnect(Channel conn, String sessionId) {

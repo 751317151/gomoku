@@ -54,8 +54,14 @@
       <button class="btn-outline" style="background:var(--accent);color:var(--bg)" onclick="createRoom()">快速开始</button>
     </div>
   </div>
-  <div class="room-list" id="room-list-container">
-    <!-- 房间卡片动态生成 -->
+  <div style="display:flex;gap:16px;align-items:flex-start;">
+    <div style="flex:1;">
+      <div class="room-list" id="room-list-container"></div>
+    </div>
+    <div class="panel leaderboard-panel" style="min-width:200px;">
+      <div class="panel-title">排行榜</div>
+      <div id="leaderboard-list" style="padding:8px;font-size:0.85rem;color:var(--text-dim)">加载中...</div>
+    </div>
   </div>
 </div>
 
@@ -77,7 +83,6 @@
       <div class="panel-title">
         <span style="flex:1">房间信息</span>
         <button class="leave-btn" onclick="leaveRoom()">离开</button>
-        
       </div>
       <div class="room-info">
         <div class="room-id" id="room-id">ROOM: —</div>
@@ -99,8 +104,25 @@
         <div class="gameover-scores" id="gameover-scores"></div>
         <div class="gameover-btns">
           <button class="btn-review" onclick="dismissOverlay()">查看棋盘</button>
+          <button class="btn-review" onclick="enterReplay()">复盘</button>
           <button class="btn-restart" onclick="requestRestart()">再来一局</button>
         </div>
+      </div>
+    </div>
+    <!-- 回放控制栏 -->
+    <div id="replay-bar" style="display:none;padding:8px 0;">
+      <div style="display:flex;align-items:center;gap:8px;justify-content:center;">
+        <button class="btn-outline" style="padding:4px 10px;font-size:0.8rem;" onclick="replayStep(-1)">|&lt;</button>
+        <button class="btn-outline" style="padding:4px 10px;font-size:0.8rem;" id="replay-play-btn" onclick="toggleReplayPlay()">▶</button>
+        <button class="btn-outline" style="padding:4px 10px;font-size:0.8rem;" onclick="replayStep(1)">>|</button>
+        <input type="range" id="replay-slider" min="0" max="0" value="0" style="flex:1;" oninput="replaySeek(this.value)">
+        <span id="replay-step-text" style="font-size:0.8rem;min-width:60px;text-align:center;">0/0</span>
+        <select id="replay-speed" style="font-size:0.75rem;padding:2px;" onchange="changeReplaySpeed()">
+          <option value="1000">1x</option>
+          <option value="500">2x</option>
+          <option value="250">4x</option>
+        </select>
+        <button class="btn-outline" style="padding:4px 10px;font-size:0.8rem;" onclick="exitReplay()">退出复盘</button>
       </div>
     </div>
     <div id="restart-bar" style="display:none;justify-content:center;padding:8px 0;gap:12px;">

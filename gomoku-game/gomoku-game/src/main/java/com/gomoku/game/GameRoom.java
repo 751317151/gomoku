@@ -13,10 +13,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReadWriteLock;
@@ -31,6 +35,10 @@ public class GameRoom {
     private static final Gson gson = new Gson();
     private static final int AI_POOL_SIZE = Math.max(2, Runtime.getRuntime().availableProcessors());
     private static final ScheduledExecutorService aiExecutor = createAIExecutor();
+
+    // ============ 计时器常量 ============
+    private static final int STEP_TIME_SECONDS = 30;   // 每步限时 30 秒
+    private static final int TOTAL_TIME_SECONDS = 300;  // 总时间 5 分钟
 
     private static ScheduledExecutorService createAIExecutor() {
         ScheduledThreadPoolExecutor pool = new ScheduledThreadPoolExecutor(
@@ -56,16 +64,24 @@ public class GameRoom {
     private final CopyOnWriteArrayList<Player> spectators;
     private final GomokuBoard board;
     private final ChannelGroup channelGroup;
-    // ReadWriteLock：读操作（查状态、广播）并发执行，写操作（落子、状态变更）互斥
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
 
     private volatile State state;
     private volatile Player currentPlayer;
     private volatile Player winner;
     private Player aiPlayer;
+    private int aiDifficulty = 4; // AI 搜索深度（简单2/中等4/困难6）
     private int roundCount;
     private volatile long lastActivityTime;
     private volatile String restartRequestedBy;
+
+    // ============ 计时器状态 ============
+    private volatile int[] totalTimeLeft = new int[2]; // [0]=黑方剩余秒, [1]=白方剩余秒
+    private volatile int stepTimeLeft;                  // 当前步时剩余秒
+    private ScheduledFuture<?> timerFuture;
+
+    // ELO 服务引用（由 RoomManager 注入）
+    private EloService eloService;
 
     public GameRoom(String roomId) {
         this.roomId = roomId;
@@ -78,6 +94,10 @@ public class GameRoom {
         this.lastActivityTime = System.currentTimeMillis();
     }
 
+    public void setEloService(EloService eloService) {
+        this.eloService = eloService;
+    }
+
     private void touchActivity() {
         this.lastActivityTime = System.currentTimeMillis();
     }
@@ -86,23 +106,12 @@ public class GameRoom {
         return lastActivityTime;
     }
 
-    // ============ 状态语义方法（替代分散的 if/else） ============
+    // ============ 状态语义方法 ============
 
-    public boolean canJoin() {
-        return players.size() < 2;
-    }
-
-    public boolean canMove() {
-        return state == State.PLAYING;
-    }
-
-    public boolean canRestart() {
-        return state == State.FINISHED;
-    }
-
-    public boolean canSurrender() {
-        return state == State.PLAYING;
-    }
+    public boolean canJoin() { return players.size() < 2; }
+    public boolean canMove() { return state == State.PLAYING; }
+    public boolean canRestart() { return state == State.FINISHED; }
+    public boolean canSurrender() { return state == State.PLAYING; }
 
     // ============ 玩家管理 ============
 
@@ -111,6 +120,10 @@ public class GameRoom {
         try {
             if (players.size() >= 2) return false;
             player.setStone(0);
+            // 初始化 ELO
+            if (eloService != null) {
+                player.setElo(eloService.getRating(player.getName()));
+            }
             players.add(player);
             if (player.isConnected()) {
                 channelGroup.add(player.getConnection());
@@ -134,16 +147,21 @@ public class GameRoom {
         }
     }
 
-    public void addAI() {
+    public void addAI(int difficulty) {
         lock.writeLock().lock();
         try {
             if (players.size() >= 2) return;
+            this.aiDifficulty = Math.max(2, Math.min(6, difficulty));
             String aiId = "AI-" + UUID.randomUUID().toString().substring(0, 4);
             aiPlayer = new Player(aiId, "电脑", null);
             addPlayer(aiPlayer);
         } finally {
             lock.writeLock().unlock();
         }
+    }
+
+    public void addAI() {
+        addAI(4); // 默认中等
     }
 
     public void addSpectator(Player player) {
@@ -165,7 +183,6 @@ public class GameRoom {
     // ============ 游戏流程 ============
 
     private void startGame() {
-        // 调用方已持有 writeLock
         state = State.PLAYING;
         roundCount++;
         board.reset();
@@ -180,6 +197,10 @@ public class GameRoom {
             players.get(1).setStone(GomokuBoard.BLACK);
         }
         currentPlayer = getBlackPlayer();
+
+        // 初始化计时器
+        totalTimeLeft = new int[]{TOTAL_TIME_SECONDS, TOTAL_TIME_SECONDS};
+        stepTimeLeft = STEP_TIME_SECONDS;
 
         for (Player p : players) {
             GameMessage msg = new GameMessage(GameMessage.Type.GAME_START);
@@ -200,6 +221,9 @@ public class GameRoom {
         broadcastRoomInfo();
         logger.info("[AUDIT] game_start roomId={} round={}", roomId, roundCount);
 
+        // 启动计时器（AI 回合也启动但不超时判负）
+        startTurnTimer();
+
         if (currentPlayer == aiPlayer) {
             triggerAIMove();
         }
@@ -212,7 +236,6 @@ public class GameRoom {
             if (!player.getId().equals(currentPlayer.getId())) return false;
             if (player.getStone() != currentPlayer.getStone()) return false;
 
-            // moveSeq 幂等校验（-1 表示跳过，AI 走棋用）
             if (expectedSeq >= 0 && expectedSeq != board.getMoveSeq() + 1) {
                 logger.warn("[AUDIT] move_seq_mismatch roomId={} playerId={} expected={} actual={}",
                         roomId, player.getId(), expectedSeq, board.getMoveSeq() + 1);
@@ -222,6 +245,12 @@ public class GameRoom {
             if (!board.placeStone(row, col, player.getStone())) return false;
             touchActivity();
 
+            // 更新计时器：扣减己方总时间
+            int stoneIdx = player.getStone() - 1; // 0=黑, 1=白
+            int elapsed = STEP_TIME_SECONDS - stepTimeLeft;
+            totalTimeLeft[stoneIdx] = Math.max(0, totalTimeLeft[stoneIdx] - elapsed);
+
+            // 广播落子
             GameMessage moveMsg = new GameMessage(GameMessage.Type.GAME_MOVE);
             moveMsg.setRoomId(roomId);
             moveMsg.setPlayerId(player.getId());
@@ -242,6 +271,9 @@ public class GameRoom {
                 endGame(null, "平局！棋盘已满", null);
             } else {
                 currentPlayer = findPlayerById(getOpponent(player).getId());
+                // 重置步时，启动新回合计时
+                stepTimeLeft = STEP_TIME_SECONDS;
+                startTurnTimer();
                 if (currentPlayer == aiPlayer) {
                     triggerAIMove();
                 }
@@ -260,23 +292,104 @@ public class GameRoom {
         if (state != State.PLAYING || aiPlayer == null || currentPlayer != aiPlayer) return;
         aiExecutor.schedule(() -> {
             if (state != State.PLAYING) return;
-            int[] move = GomokuAI.getBestMove(board, aiPlayer.getStone());
+            int[] move = GomokuAI.getBestMove(board, aiPlayer.getStone(), aiDifficulty);
             if (move != null) {
                 handleMove(aiPlayer, move[0], move[1]);
             }
         }, AI_DELAY_MS, TimeUnit.MILLISECONDS);
     }
 
+    // ============ 计时器 ============
+
+    private void startTurnTimer() {
+        cancelTurnTimer();
+        timerFuture = aiExecutor.scheduleAtFixedRate(() -> {
+            lock.writeLock().lock();
+            try {
+                if (state != State.PLAYING) {
+                    cancelTurnTimer();
+                    return;
+                }
+                stepTimeLeft--;
+                // 扣减当前玩家总时间
+                if (currentPlayer != null) {
+                    int idx = currentPlayer.getStone() - 1;
+                    if (idx >= 0 && idx < 2) {
+                        totalTimeLeft[idx] = Math.max(0, totalTimeLeft[idx] - 1);
+                    }
+                }
+
+                // 广播计时同步
+                broadcastTimerSync();
+
+                // 超时判负（AI 不判负）
+                if (stepTimeLeft <= 0 || (currentPlayer != null && currentPlayer.getStone() > 0
+                        && totalTimeLeft[currentPlayer.getStone() - 1] <= 0)) {
+                    if (currentPlayer != aiPlayer) {
+                        Player timeoutPlayer = currentPlayer;
+                        String reason = totalTimeLeft[timeoutPlayer.getStone() - 1] <= 0
+                                ? timeoutPlayer.getName() + " 总时间耗尽" : timeoutPlayer.getName() + " 步时超时";
+                        endGame(getOpponent(timeoutPlayer), reason, null);
+                    }
+                    cancelTurnTimer();
+                }
+            } finally {
+                lock.writeLock().unlock();
+            }
+        }, 1, 1, TimeUnit.SECONDS);
+    }
+
+    private void cancelTurnTimer() {
+        if (timerFuture != null) {
+            timerFuture.cancel(false);
+            timerFuture = null;
+        }
+    }
+
+    private void broadcastTimerSync() {
+        int blackTime = totalTimeLeft[0];
+        int whiteTime = totalTimeLeft[1];
+        GameMessage msg = new GameMessage(GameMessage.Type.TIMER_SYNC);
+        msg.setRoomId(roomId);
+        msg.setTimeLeft(stepTimeLeft);
+        msg.setTotalTimeLeft(blackTime); // 兼容：用 totalTimeLeft 传黑方时间
+        // 用 data 传递双端时间
+        java.util.Map<String, Integer> timerData = new java.util.LinkedHashMap<>();
+        timerData.put("stepTime", stepTimeLeft);
+        timerData.put("blackTotal", blackTime);
+        timerData.put("whiteTotal", whiteTime);
+        msg.setData(gson.toJson(timerData));
+        broadcastMessage(gson.toJson(msg));
+    }
+
+    // ============ 结束游戏 ============
+
     private void endGame(Player winnerPlayer, String reason, int[][] winLine) {
-        // 调用方已持有 writeLock
+        cancelTurnTimer();
         state = State.FINISHED;
         this.winner = winnerPlayer;
         touchActivity();
 
+        // 更新胜负
         if (winnerPlayer != null) {
             winnerPlayer.addWin();
             Player opponent = getOpponent(winnerPlayer);
             if (opponent != null) opponent.addLoss();
+        }
+
+        // ELO 更新（跳过 AI）
+        int eloChange = 0;
+        if (eloService != null && winnerPlayer != null && winnerPlayer != aiPlayer) {
+            Player loser = getOpponent(winnerPlayer);
+            if (loser != null && loser != aiPlayer) {
+                int[] result = eloService.updateRating(winnerPlayer, loser);
+                eloChange = result[2];
+            }
+        } else if (eloService != null && winnerPlayer == null) {
+            // 平局
+            if (players.size() == 2 && players.get(0) != aiPlayer && players.get(1) != aiPlayer) {
+                eloService.updateDraw(players.get(0), players.get(1));
+            }
         }
 
         GameMessage msg = new GameMessage(GameMessage.Type.GAME_OVER);
@@ -284,21 +397,23 @@ public class GameRoom {
         msg.setWinner(winnerPlayer != null ? winnerPlayer.getId() : "draw");
         msg.setMessage(reason);
 
-        // 构建附加数据：分数 + 获胜连线
-        java.util.Map<String, Object> dataMap = new java.util.LinkedHashMap<>();
-        dataMap.put("scores", buildScoreData().getScores());
+        // 构建附加数据：分数 + ELO + 获胜连线 + 对局记录
+        Map<String, Object> dataMap = new LinkedHashMap<>();
+        ScoreDataDto scoreData = buildScoreData();
+        dataMap.put("scores", scoreData.getScores());
+        dataMap.put("eloChange", eloChange);
         if (winLine != null) {
-            // 将 int[][] 转为 [[row,col], ...] 格式
-            List<int[]> lineList = java.util.Arrays.asList(winLine);
-            dataMap.put("winLine", lineList);
+            dataMap.put("winLine", Arrays.asList(winLine));
         }
+        // 对局记录（用于回放）
+        dataMap.put("moveHistory", board.getMoveHistory());
         msg.setData(gson.toJson(dataMap));
 
         broadcastMessage(gson.toJson(msg));
         broadcastRoomInfo();
 
-        logger.info("[AUDIT] game_over roomId={} winner={} reason=\"{}\"", roomId,
-                winnerPlayer != null ? winnerPlayer.getId() : "draw", reason);
+        logger.info("[AUDIT] game_over roomId={} winner={} reason=\"{}\" eloChange={}", roomId,
+                winnerPlayer != null ? winnerPlayer.getId() : "draw", reason, eloChange);
     }
 
     public void surrender(Player player) {
@@ -379,6 +494,7 @@ public class GameRoom {
 
             state = State.WAITING;
             board.reset();
+            cancelTurnTimer();
             restartRequestedBy = null;
             touchActivity();
 
@@ -438,7 +554,7 @@ public class GameRoom {
         RoomDataDto data = new RoomDataDto();
         List<PlayerInfoDto> playerDtos = new ArrayList<>();
         for (Player p : players) {
-            playerDtos.add(new PlayerInfoDto(p.getId(), p.getName(), p.getStone(), p.getWins()));
+            playerDtos.add(new PlayerInfoDto(p.getId(), p.getName(), p.getStone(), p.getWins(), p.getElo()));
         }
         data.setPlayers(playerDtos);
         data.setSpectatorCount(spectators.size());
@@ -458,7 +574,8 @@ public class GameRoom {
         ScoreDataDto data = new ScoreDataDto();
         List<ScoreItemDto> items = new ArrayList<>();
         for (Player p : players) {
-            items.add(new ScoreItemDto(p.getId(), p.getName(), p.getWins(), p.getLosses()));
+            ScoreItemDto item = new ScoreItemDto(p.getId(), p.getName(), p.getWins(), p.getLosses(), p.getElo());
+            items.add(item);
         }
         data.setScores(items);
         return data;
@@ -472,7 +589,6 @@ public class GameRoom {
     }
 
     public GameSyncDto buildSyncDataForReconnect(Player player) {
-        // 读操作：用读锁
         lock.readLock().lock();
         try {
             GameSyncDto data = new GameSyncDto();
@@ -503,10 +619,8 @@ public class GameRoom {
         }
     }
 
-    /**
-     * 优雅停机：向房间内所有人发送 SHUTDOWN 通知
-     */
     public void notifyShutdown() {
+        cancelTurnTimer();
         GameMessage msg = new GameMessage(GameMessage.Type.ERROR);
         msg.setMessage("服务器正在关闭，请稍后重连");
         broadcastMessage(gson.toJson(msg));
@@ -533,4 +647,5 @@ public class GameRoom {
     public int getSpectatorCount() { return spectators.size(); }
     public boolean isFull() { return players.size() >= 2; }
     public GomokuBoard getBoard() { return board; }
+    public int getAiDifficulty() { return aiDifficulty; }
 }

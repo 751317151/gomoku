@@ -51,7 +51,7 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
         handlers.put(GameMessage.Type.GET_ROOMS, (conn, msg) -> handleGetRooms(conn));
         handlers.put(GameMessage.Type.JOIN, this::handleJoin);
         handlers.put(GameMessage.Type.SPECTATE, this::handleSpectate);
-        handlers.put(GameMessage.Type.ADD_AI, (conn, msg) -> handleAddAI(conn));
+        handlers.put(GameMessage.Type.ADD_AI, this::handleAddAI);
         handlers.put(GameMessage.Type.MOVE, this::handleMove);
         handlers.put(GameMessage.Type.CHAT, this::handleChat);
         handlers.put(GameMessage.Type.RESTART, (conn, msg) -> handleRestart(conn));
@@ -237,10 +237,14 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
         handleGetRooms(conn);
     }
 
-    private void handleAddAI(Channel conn) {
+    private void handleAddAI(Channel conn, GameMessage msg) {
         Player player = roomManager.getPlayer(conn);
         if (player != null && !player.canPerformAction()) return;
-        GameRoom room = roomManager.addAI(conn);
+        int difficulty = 4; // 默认中等
+        if (msg.getData() != null) {
+            try { difficulty = Integer.parseInt(msg.getData()); } catch (NumberFormatException ignored) {}
+        }
+        GameRoom room = roomManager.addAI(conn, difficulty);
         if (room == null) sendError(conn, "添加电脑失败");
     }
 

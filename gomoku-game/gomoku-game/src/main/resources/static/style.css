@@ -624,3 +624,50 @@
     .panel-title { font-size: 0.65rem; }
     .lobby-title { font-size: 1.1rem; }
   }
+
+  /* ============ 计时器 ============ */
+  .timer-display {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-left: 8px;
+    font-weight: 600;
+  }
+  .timer-display.normal { color: #4caf50; }
+  .timer-display.warning { color: #ff9800; }
+  .timer-display.danger {
+    color: #f44336;
+    animation: timer-pulse 0.5s ease-in-out infinite alternate;
+  }
+  @keyframes timer-pulse {
+    from { opacity: 1; }
+    to { opacity: 0.4; }
+  }
+
+  /* ============ 排行榜 ============ */
+  .leaderboard-panel { max-height: 400px; overflow-y: auto; }
+  .lb-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 4px 0; border-bottom: 1px solid var(--border);
+  }
+  .lb-rank { width: 24px; color: var(--accent); font-weight: 700; }
+  .lb-name { flex: 1; }
+  .lb-elo { font-family: 'JetBrains Mono', monospace; font-weight: 600; }
+
+  /* ============ AI 难度选择 ============ */
+  .ai-difficulty-row {
+    margin-top: 8px;
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  }
+  .ai-difficulty-row label { font-size: 0.75rem; color: var(--text-dim); }
+  .ai-difficulty-row select {
+    font-size: 0.75rem; padding: 3px 6px;
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+  }
+
+  /* ============ 回放控制 ============ */
+  #replay-slider {
+    height: 4px; accent-color: var(--accent);
+  }

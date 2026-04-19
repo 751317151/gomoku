@@ -52,6 +52,18 @@ let heartbeatTimer = null;
 let reconnectAttempts = 0;
 const MAX_RECONNECT = 8;
 const HEARTBEAT_INTERVAL = 30000;
+
+// 计时器状态
+let timerData = { stepTime: 30, blackTotal: 300, whiteTotal: 300 };
+
+// 回放状态
+let replayMode = false;
+let replayMoves = [];
+let replayIndex = 0;
+let replayPlaying = false;
+let replayTimer = null;
+let replaySpeed = 1000;
+let savedBoard = null; // 回放前的棋盘快照
 const RECONNECT_BASE_DELAY = 500;  // 指数退避基础延迟 500ms
 const RECONNECT_MAX_DELAY = 30000; // 最大延迟 30s
 
@@ -68,7 +80,7 @@ const BIN_TYPE = {
   CHAT: 6, RESTART: 7, LEAVE: 8, RECONNECT: 9, SURRENDER: 10, PING: 11,
   ROOM_LIST: 50, ROOM_INFO: 51, GAME_START: 52, GAME_SYNC: 53,
   GAME_MOVE: 54, GAME_OVER: 55, GAME_CHAT: 56, WAITING: 57,
-  RESTART_REQUEST: 58, ERROR: 59
+  RESTART_REQUEST: 58, TIMER_SYNC: 59, ERROR: 60
 };
 const BIN_TYPE_NAME = {};
 Object.keys(BIN_TYPE).forEach(k => BIN_TYPE_NAME[BIN_TYPE[k]] = k);
@@ -592,6 +604,7 @@ function showGame() {
   document.getElementById('lobby-screen').style.display = 'none';
   document.getElementById('game-screen').style.display = 'grid';
   document.getElementById('chat-messages').innerHTML = '<div class="chat-msg system">欢迎来到五子棋对战！</div>';
+  timerData = { stepTime: 30, blackTotal: 300, whiteTotal: 300 };
   drawBoard();
 }
 
@@ -624,6 +637,7 @@ function spectateRoom(id) {
 }
 
 function leaveRoom() {
+  if (replayMode) exitReplay();
   send({ type: 'LEAVE' });
   // 重置前端状态
   board = Array.from({length: BOARD_SIZE}, () => new Array(BOARD_SIZE).fill(0));
@@ -640,7 +654,9 @@ function leaveRoom() {
 }
 
 function addAI() {
-  send({ type: 'ADD_AI' });
+  const sel = document.getElementById('ai-difficulty');
+  const difficulty = sel ? sel.value : '4';
+  send({ type: 'ADD_AI', data: difficulty });
 }
 
 function send(obj) {
@@ -787,6 +803,10 @@ function handleMessage(msg) {
       showConfirm(msg.message || '对手请求再来一局', function() {
         send({ type: 'RESTART' });
       });
+      break;
+
+    case 'TIMER_SYNC':
+      handleTimerSync(msg);
       break;
 
     case 'ERROR':
@@ -992,6 +1012,9 @@ function handleGameStart(msg) {
   document.getElementById('room-id').textContent = 'ROOM: ' + roomId;
   document.getElementById('gameover-overlay').classList.remove('show');
   document.getElementById('restart-bar').style.display = 'none';
+  document.getElementById('replay-bar').style.display = 'none';
+  timerData = { stepTime: 30, blackTotal: 300, whiteTotal: 300 };
+  replayMode = false;
 
   updatePlayerPanel();
   updateTurnStatus();
@@ -1036,17 +1059,24 @@ function handleGameOver(msg) {
   const isDraw = msg.winner === 'draw';
   const isWin = msg.winner === myId;
 
-  // 解析附加数据（分数 + 获胜连线）
+  // 解析附加数据（分数 + 获胜连线 + ELO + 对局记录）
   let winLineData = null;
+  let eloChange = 0;
   try {
     const data = JSON.parse(msg.data);
     winLineData = data.winLine || null;
-    // 分数
+    eloChange = data.eloChange || 0;
+    // 保存对局记录（用于回放）
+    if (data.moveHistory && data.moveHistory.length > 0) {
+      replayMoves = data.moveHistory;
+    }
+    // 分数（含 ELO）
     let scoresHtml = '';
     data.scores.forEach(p => {
+      const changeStr = p.eloChange ? (p.eloChange > 0 ? `+${p.eloChange}` : `${p.eloChange}`) : '';
       scoresHtml += `<div class="score-item">
         <div class="score-num">${p.wins}</div>
-        <div class="score-label">${escHtml(p.name.substring(0,6))} 胜</div>
+        <div class="score-label">${escHtml(p.name.substring(0,6))} 胜${changeStr ? ' <span style="color:' + (p.eloChange>0?'#4caf50':'#f44336') + '">' + changeStr + '</span>' : ''}</div>
       </div>`;
     });
     scores.innerHTML = scoresHtml;
@@ -1118,21 +1148,33 @@ function updatePlayerPanel() {
   }
 
   const isSinglePlayer = Object.keys(players).length === 1 && myId !== 'SPECTATOR';
-  const aiBtnHtml = isSinglePlayer ? `<div style="margin-top:16px;"><button class="btn-outline" style="padding:6px 12px;font-size:0.8rem;" onclick="addAI()">添加电脑</button></div>` : '';
+  const aiBtnHtml = isSinglePlayer ? `<div class="ai-difficulty-row">
+    <label>难度:</label>
+    <select id="ai-difficulty">
+      <option value="2">简单</option>
+      <option value="4" selected>中等</option>
+      <option value="6">困难</option>
+    </select>
+    <button class="btn-outline" style="padding:4px 10px;font-size:0.75rem;" onclick="addAI()">添加电脑</button>
+  </div>` : '';
 
   const blackEl = document.getElementById('player-black');
   if (blackP) {
     const isMe = blackP.id === myId;
+    const timerCls = getTimerClass(timerData.blackTotal);
     blackEl.innerHTML = `<div class="player-card">
       <div class="player-card-top">
         <div class="stone-icon black"></div>
         <div class="player-name ${isMe ? 'you' : ''}">${escHtml(blackP.name)}${isMe ? ' (你)' : ''}</div>
+        <span class="timer-display ${timerCls}" id="timer-black">${formatTime(timerData.blackTotal)}</span>
       </div>
       <div class="player-stats">
         <span>胜 ${blackP.wins}</span>
+        <span style="margin-left:8px;color:var(--accent)">ELO ${blackP.elo || 1200}</span>
       </div>
       <div id="turn-black" style="display:none">
         <span class="turn-badge">● 落子中</span>
+        <span class="timer-display" id="step-timer-black" style="margin-left:4px">${timerData.stepTime}s</span>
       </div>
     </div>`;
   } else {
@@ -1142,16 +1184,20 @@ function updatePlayerPanel() {
   const whiteEl = document.getElementById('player-white');
   if (whiteP) {
     const isMe = whiteP.id === myId;
+    const timerCls = getTimerClass(timerData.whiteTotal);
     whiteEl.innerHTML = `<div class="player-card">
       <div class="player-card-top">
         <div class="stone-icon white"></div>
         <div class="player-name ${isMe ? 'you' : ''}">${escHtml(whiteP.name)}${isMe ? ' (你)' : ''}</div>
+        <span class="timer-display ${timerCls}" id="timer-white">${formatTime(timerData.whiteTotal)}</span>
       </div>
       <div class="player-stats">
         <span>胜 ${whiteP.wins}</span>
+        <span style="margin-left:8px;color:var(--accent)">ELO ${whiteP.elo || 1200}</span>
       </div>
       <div id="turn-white" style="display:none">
         <span class="turn-badge">● 落子中</span>
+        <span class="timer-display" id="step-timer-white" style="margin-left:4px">${timerData.stepTime}s</span>
       </div>
     </div>`;
   } else {
@@ -1221,6 +1267,191 @@ function escHtml(str) {
 }
 
 // ============================================================
+// 计时器
+// ============================================================
+function formatTime(seconds) {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return m + ':' + (s < 10 ? '0' : '') + s;
+}
+
+function getTimerClass(seconds) {
+  if (seconds <= 10) return 'danger';
+  if (seconds <= 30) return 'warning';
+  return 'normal';
+}
+
+function handleTimerSync(msg) {
+  try {
+    const data = JSON.parse(msg.data);
+    timerData.stepTime = data.stepTime;
+    timerData.blackTotal = data.blackTotal;
+    timerData.whiteTotal = data.whiteTotal;
+    // 仅更新计时 DOM，不重建整个面板
+    updateTimerDisplay();
+  } catch(e) {}
+}
+
+function updateTimerDisplay() {
+  const bTimer = document.getElementById('timer-black');
+  const wTimer = document.getElementById('timer-white');
+  if (bTimer) {
+    bTimer.textContent = formatTime(timerData.blackTotal);
+    bTimer.className = 'timer-display ' + getTimerClass(timerData.blackTotal);
+  }
+  if (wTimer) {
+    wTimer.textContent = formatTime(timerData.whiteTotal);
+    wTimer.className = 'timer-display ' + getTimerClass(timerData.whiteTotal);
+  }
+  // 步时
+  const turnColor = currentTurn === 1 ? 'black' : 'white';
+  ['black','white'].forEach(c => {
+    const el = document.getElementById('step-timer-' + c);
+    if (el) {
+      el.textContent = timerData.stepTime + 's';
+      el.className = 'timer-display ' + (c === turnColor ? getTimerClass(timerData.stepTime) : '');
+    }
+  });
+}
+
+// ============================================================
+// 回放
+// ============================================================
+function enterReplay() {
+  if (replayMoves.length === 0) return;
+  document.getElementById('gameover-overlay').classList.remove('show');
+  document.getElementById('restart-bar').style.display = 'none';
+
+  replayMode = true;
+  replayIndex = 0;
+  replayPlaying = false;
+  savedBoard = board.map(r => [...r]); // 快照当前棋盘
+
+  // 清空棋盘用于回放
+  board = Array.from({length: BOARD_SIZE}, () => new Array(BOARD_SIZE).fill(0));
+  lastMove = null;
+  winLine = null;
+  drawBoard();
+
+  const slider = document.getElementById('replay-slider');
+  slider.max = replayMoves.length;
+  slider.value = 0;
+  document.getElementById('replay-step-text').textContent = '0/' + replayMoves.length;
+  document.getElementById('replay-play-btn').textContent = '▶';
+  document.getElementById('replay-bar').style.display = 'block';
+}
+
+function exitReplay() {
+  replayMode = false;
+  replayPlaying = false;
+  if (replayTimer) { clearInterval(replayTimer); replayTimer = null; }
+  document.getElementById('replay-bar').style.display = 'none';
+
+  // 恢复棋盘
+  if (savedBoard) {
+    board = savedBoard;
+    savedBoard = null;
+  }
+  drawBoard();
+
+  // 游戏已结束时显示再来一局按钮
+  if (gameState === 'OVER' && myId !== 'SPECTATOR') {
+    document.getElementById('restart-bar').style.display = 'flex';
+  }
+}
+
+function replayStep(dir) {
+  if (!replayMode) return;
+  const newIndex = Math.max(0, Math.min(replayMoves.length, replayIndex + dir));
+  replayIndex = newIndex;
+  replayDraw();
+}
+
+function replaySeek(val) {
+  if (!replayMode) return;
+  replayIndex = parseInt(val);
+  replayDraw();
+}
+
+function replayDraw() {
+  board = Array.from({length: BOARD_SIZE}, () => new Array(BOARD_SIZE).fill(0));
+  for (let i = 0; i < replayIndex; i++) {
+    const m = replayMoves[i];
+    board[m[0]][m[1]] = m[2];
+  }
+  lastMove = replayIndex > 0 ? [replayMoves[replayIndex-1][0], replayMoves[replayIndex-1][1]] : null;
+  winLine = null;
+
+  document.getElementById('replay-slider').value = replayIndex;
+  document.getElementById('replay-step-text').textContent = replayIndex + '/' + replayMoves.length;
+  drawBoard();
+}
+
+function toggleReplayPlay() {
+  if (replayPlaying) {
+    replayPlaying = false;
+    if (replayTimer) { clearInterval(replayTimer); replayTimer = null; }
+    document.getElementById('replay-play-btn').textContent = '▶';
+  } else {
+    if (replayIndex >= replayMoves.length) {
+      replayIndex = 0;
+      replayDraw();
+    }
+    replayPlaying = true;
+    document.getElementById('replay-play-btn').textContent = '⏸';
+    replayTimer = setInterval(() => {
+      if (replayIndex >= replayMoves.length) {
+        toggleReplayPlay();
+        return;
+      }
+      replayIndex++;
+      replayDraw();
+      playStoneSound();
+    }, replaySpeed);
+  }
+}
+
+function changeReplaySpeed() {
+  replaySpeed = parseInt(document.getElementById('replay-speed').value);
+  if (replayPlaying) {
+    clearInterval(replayTimer);
+    replayTimer = setInterval(() => {
+      if (replayIndex >= replayMoves.length) { toggleReplayPlay(); return; }
+      replayIndex++;
+      replayDraw();
+      playStoneSound();
+    }, replaySpeed);
+  }
+}
+
+// ============================================================
+// 排行榜
+// ============================================================
+function loadLeaderboard() {
+  fetch('/api/leaderboard')
+    .then(r => r.text())
+    .then(jsonStr => {
+      try {
+        const list = JSON.parse(jsonStr);
+        const el = document.getElementById('leaderboard-list');
+        if (!el) return;
+        if (list.length === 0) {
+          el.textContent = '暂无数据';
+          return;
+        }
+        el.innerHTML = list.map((item, i) =>
+          `<div class="lb-row">
+            <span class="lb-rank">${i + 1}</span>
+            <span class="lb-name">${escHtml(item.name)}</span>
+            <span class="lb-elo">${item.elo}</span>
+          </div>`
+        ).join('');
+      } catch(e) {}
+    })
+    .catch(() => {});
+}
+
+// ============================================================
 // 初始化
 // ============================================================
 drawBoard();
@@ -1229,3 +1460,7 @@ drawBoard();
 document.getElementById('player-name').addEventListener('keydown', e => {
   if (e.key === 'Enter') joinGame();
 });
+
+// 加载排行榜
+loadLeaderboard();
+setInterval(loadLeaderboard, 30000); // 30 秒刷新
