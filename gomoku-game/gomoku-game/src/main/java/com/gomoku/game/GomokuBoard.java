@@ -5,20 +5,30 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * 五子棋棋盘逻辑
+ * 五子棋棋盘逻辑（GameEngine 实现）
  */
-public class GomokuBoard {
+public class GomokuBoard implements BoardGameEngine {
 
     public static final int SIZE = 15;
     public static final int EMPTY = 0;
     public static final int BLACK = 1;
     public static final int WHITE = 2;
 
+    private static final int STEP_TIME_SECONDS = 30;
+    private static final int TOTAL_TIME_SECONDS = 300;
+
     private final int[][] board;
     private int currentTurn; // 当前轮到谁
     private int moveCount;
     private int moveSeq; // 全局递增序列号（用于消息幂等）
     private final List<int[]> moveHistory = new ArrayList<>();
+    private final List<int[]> emptyEffects = new ArrayList<>();
+
+    private boolean gameOver;
+    private Integer winner;
+    private int lastRow = -1;
+    private int lastCol = -1;
+    private int[][] lastWinLine;
 
     public GomokuBoard() {
         this.board = new int[SIZE][SIZE];
@@ -27,19 +37,42 @@ public class GomokuBoard {
         this.moveSeq = 0;
     }
 
+    @Override
+    public GameType type() { return GameType.GOMOKU; }
+
+    @Override
+    public int getRows() { return SIZE; }
+
+    @Override
+    public int getCols() { return SIZE; }
+
     /**
      * 尝试落子
      * @return true 如果落子成功
      */
+    @Override
     public boolean placeStone(int row, int col, int stone) {
         if (!isValidMove(row, col)) return false;
         if (stone != currentTurn) return false;
+        if (gameOver) return false;
 
         board[row][col] = stone;
         moveCount++;
         moveSeq++;
         moveHistory.add(new int[]{row, col, stone});
+        lastRow = row;
+        lastCol = col;
         currentTurn = (currentTurn == BLACK) ? WHITE : BLACK;
+
+        // 终局判定
+        lastWinLine = getWinLine(row, col);
+        if (lastWinLine != null) {
+            gameOver = true;
+            winner = stone;
+        } else if (isDraw()) {
+            gameOver = true;
+            winner = null;
+        }
         return true;
     }
 
@@ -60,7 +93,7 @@ public class GomokuBoard {
     }
 
     /**
-     * 获取获胜连线坐标（五连的 5 个点），未获胜返回 null
+     * 获取指定落子点的获胜连线坐标（五连的点），未获胜返回 null
      */
     public int[][] getWinLine(int row, int col) {
         int stone = board[row][col];
@@ -95,6 +128,11 @@ public class GomokuBoard {
         return null;
     }
 
+    @Override
+    public int[][] getWinLine() {
+        return lastWinLine;
+    }
+
     /**
      * 计算某方向连续同色棋子数
      */
@@ -121,6 +159,7 @@ public class GomokuBoard {
     /**
      * 重置棋盘
      */
+    @Override
     public void reset() {
         for (int i = 0; i < SIZE; i++) {
             for (int j = 0; j < SIZE; j++) {
@@ -131,18 +170,30 @@ public class GomokuBoard {
         moveCount = 0;
         moveSeq = 0;
         moveHistory.clear();
+        gameOver = false;
+        winner = null;
+        lastRow = -1;
+        lastCol = -1;
+        lastWinLine = null;
     }
 
     /**
      * 获取棋局记录（不可变）
      */
+    @Override
     public List<int[]> getMoveHistory() {
         return Collections.unmodifiableList(moveHistory);
+    }
+
+    @Override
+    public List<int[]> getLastMoveEffects() {
+        return emptyEffects;
     }
 
     /**
      * 将棋盘序列化为二维数组（用于同步）
      */
+    @Override
     public int[][] getBoardSnapshot() {
         int[][] snapshot = new int[SIZE][SIZE];
         for (int i = 0; i < SIZE; i++) {
@@ -151,12 +202,27 @@ public class GomokuBoard {
         return snapshot;
     }
 
+    @Override
+    public boolean isOver() { return gameOver; }
+
+    @Override
+    public Integer getWinner() { return winner; }
+
     /**
-  * 直接访问内部数组（仅限同包内的 AI 引擎使用，外部应使用 getBoardSnapshot()）
-  */
- int[][] getBoard() { return board; }
+     * 直接访问内部数组（仅限同包内的 AI 引擎使用，外部应使用 getBoardSnapshot()）
+     */
+    int[][] getBoard() { return board; }
+    @Override
     public int getCurrentTurn() { return currentTurn; }
+    @Override
     public int getMoveCount() { return moveCount; }
+    @Override
     public int getMoveSeq() { return moveSeq; }
     public int getCell(int row, int col) { return board[row][col]; }
+
+    @Override
+    public int getStepTimeSeconds() { return STEP_TIME_SECONDS; }
+
+    @Override
+    public int getTotalTimeSeconds() { return TOTAL_TIME_SECONDS; }
 }

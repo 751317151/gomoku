@@ -58,15 +58,41 @@ public class BinaryMessageDecoder extends ByteToMessageDecoder {
                 case GameProtocol.TYPE_PING:
                 case GameProtocol.TYPE_GET_ROOMS:
                 case GameProtocol.TYPE_LEAVE:
-                case GameProtocol.TYPE_ADD_AI:
+                case GameProtocol.TYPE_PASS:
+                case GameProtocol.TYPE_END_TURN:
                 case GameProtocol.TYPE_RESTART:
                 case GameProtocol.TYPE_SURRENDER:
                     // 无 payload
                     break;
 
+                case GameProtocol.TYPE_ADD_AI:
+                    // 可选 payload：难度（兼容旧版无 payload 帧）
+                    if (in.readableBytes() > 0) {
+                        msg.setData(readNullableString(in));
+                    }
+                    // 可选：AI 套牌
+                    if (in.readableBytes() > 0) {
+                        msg.setDeck(readNullableString(in));
+                    }
+                    break;
+
                 case GameProtocol.TYPE_JOIN:
                     msg.setPlayerName(readString(in));
                     msg.setRoomId(readNullableString(in));
+                    // 可选：游戏类型（兼容旧版帧）
+                    if (in.readableBytes() > 0) {
+                        msg.setGameType(readNullableString(in));
+                    }
+                    // 可选：套牌选择（再往后一个字段，兼容旧版帧）
+                    if (in.readableBytes() > 0) {
+                        msg.setDeck(readNullableString(in));
+                    }
+                    // 可选：自定义套牌配比 JSON
+                    if (in.readableBytes() > 0) {
+                        msg.setDeckCards(readNullableString(in));
+                    }
+                    if (in.readableBytes() > 0) msg.setCreateRoom(in.readBoolean());
+                    if (in.readableBytes() > 0) msg.setPlayerCount(in.readUnsignedByte());
                     break;
 
                 case GameProtocol.TYPE_SPECTATE:
@@ -79,6 +105,11 @@ public class BinaryMessageDecoder extends ByteToMessageDecoder {
                     msg.setRow(in.readUnsignedByte());
                     msg.setCol(in.readUnsignedByte());
                     msg.setMoveSeq(in.readInt());
+                    // 可选：起点坐标（象棋，0xFF = 无）
+                    if (in.readableBytes() >= 2) {
+                        msg.setFromRow(in.readByte());
+                        msg.setFromCol(in.readByte());
+                    }
                     break;
 
                 case GameProtocol.TYPE_CHAT:
@@ -129,6 +160,8 @@ public class BinaryMessageDecoder extends ByteToMessageDecoder {
             case GameProtocol.TYPE_SPECTATE:    return GameMessage.Type.SPECTATE;
             case GameProtocol.TYPE_ADD_AI:      return GameMessage.Type.ADD_AI;
             case GameProtocol.TYPE_MOVE:        return GameMessage.Type.MOVE;
+            case GameProtocol.TYPE_PASS:        return GameMessage.Type.PASS;
+            case GameProtocol.TYPE_END_TURN:    return GameMessage.Type.END_TURN;
             case GameProtocol.TYPE_CHAT:        return GameMessage.Type.CHAT;
             case GameProtocol.TYPE_RESTART:     return GameMessage.Type.RESTART;
             case GameProtocol.TYPE_LEAVE:       return GameMessage.Type.LEAVE;
@@ -144,7 +177,9 @@ public class BinaryMessageDecoder extends ByteToMessageDecoder {
             case GameProtocol.TYPE_GAME_CHAT:   return GameMessage.Type.GAME_CHAT;
             case GameProtocol.TYPE_WAITING:     return GameMessage.Type.WAITING;
             case GameProtocol.TYPE_RESTART_REQ: return GameMessage.Type.RESTART_REQUEST;
+            case GameProtocol.TYPE_TIMER_SYNC:  return GameMessage.Type.TIMER_SYNC;
             case GameProtocol.TYPE_ERROR:       return GameMessage.Type.ERROR;
+            case GameProtocol.TYPE_PLAYER_STATUS: return GameMessage.Type.PLAYER_STATUS;
             default: return null;
         }
     }

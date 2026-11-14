@@ -10,6 +10,10 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public class Player {
     private final String id;
+    private String identityId;
+    public String getIdentityId() { return identityId; }
+    public void setIdentityId(String identityId) { this.identityId = identityId; }
+    public String getRatingKey() { return identityId == null ? name : identityId; }
     private String name;
     private final Channel connection;
     private final String sessionId;
@@ -17,6 +21,14 @@ public class Player {
     private int wins;
     private int losses;
     private int elo = 1200; // ELO 积分
+    /** 卡牌套牌预组名（BALANCED/AGGRO/CONTROL），非卡牌玩法忽略 */
+    private String deck = "BALANCED";
+    /** 自定义套牌配比（JSON），仅 deck=CUSTOM 时使用 */
+    private String deckCards;
+    /** 上一局的 ELO 变化量（用于终局面板显示 +/- 分，非零即为本局已结算） */
+    private volatile int lastEloChange;
+    /** 是否为 AI 玩家（AI 不计 ELO、不进排行榜、不进真人战绩） */
+    private boolean ai;
 
     private static final long CHAT_INTERVAL_MS = 1000;
     private static final long ACTION_INTERVAL_MS = 300;
@@ -49,7 +61,10 @@ public class Player {
      */
     public static void sendMessageTo(Channel conn, String json) {
         if (conn != null && conn.isActive()) {
-            conn.writeAndFlush(new TextWebSocketFrame(json));
+            // 所有房间线程统一排队，避免当前 EventLoop 的内联写越过其他席位已排队的视图。
+            conn.eventLoop().execute(() -> {
+                if (conn.isActive()) conn.writeAndFlush(new TextWebSocketFrame(json));
+            });
         }
     }
 
@@ -91,6 +106,16 @@ public class Player {
     public void setLosses(int losses) { this.losses = losses; }
     public int getElo() { return elo; }
     public void setElo(int elo) { this.elo = elo; }
+
+    public String getDeck() { return deck; }
+    public void setDeck(String deck) { this.deck = deck; }
+
+    public String getDeckCards() { return deckCards; }
+    public void setDeckCards(String deckCards) { this.deckCards = deckCards; }
+    public int getLastEloChange() { return lastEloChange; }
+    public void setLastEloChange(int lastEloChange) { this.lastEloChange = lastEloChange; }
+    public boolean isAi() { return ai; }
+    public void setAi(boolean ai) { this.ai = ai; }
 
     @Override
     public String toString() {

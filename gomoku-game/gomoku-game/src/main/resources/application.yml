@@ -4,12 +4,25 @@ server:
 netty:
   port: 9001
   idle-timeout: 120
+  # 反向代理（Caddy/Nginx）使用 /ws；本地仍可直接连 ws://localhost:9001/
+  ws-path: /ws
+  # 仅当 9001 端口只对受信反向代理开放时开启；开启后会读取 X-Forwarded-For。
+  trust-forwarded-for: false
 
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics,prometheus
+        # 只暴露聚合健康、构建信息与 Prometheus 文本；metrics 端点会列出全部指标名，默认关闭
+        include: health,info,prometheus
   endpoint:
     health:
-      show-details: always
+      # 默认不暴露数据库/磁盘等细节；排障时可临时设为 always
+      show-details: never
+
+# 可选导师：由部署者配置，密钥只留在服务端。
+coach:
+  enabled: ${COACH_ENABLED:false}
+  endpoint: ${COACH_ENDPOINT:https://api.openai.com/v1/chat/completions}
+  api-key: ${COACH_API_KEY:}
+  model: ${COACH_MODEL:}

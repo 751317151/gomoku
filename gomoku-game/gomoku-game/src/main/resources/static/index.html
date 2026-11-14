@@ -2,9 +2,9 @@
 <html lang="zh">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>五子棋对战 · Gomoku Online</title>
-<link rel="stylesheet" href="style.css">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>棋战大厅 · 棋类与卡牌对战</title>
+<link rel="stylesheet" href="style.css?v=38">
 </head>
 <body>
 
@@ -22,23 +22,87 @@
   </div>
 </div>
 
+<!-- 人机对战难度选择（替代浏览器原生 prompt） -->
+<div class="difficulty-overlay" id="difficulty-dialog">
+  <div class="difficulty-box">
+    <div class="difficulty-title">人机对战</div>
+    <div class="difficulty-game" id="difficulty-game">五子棋</div>
+    <div class="difficulty-sub">选择电脑难度</div>
+    <div class="difficulty-options">
+      <button class="difficulty-opt" data-diff="2">
+        <span class="d-name">简单</span>
+        <span class="d-desc">适合熟悉规则</span>
+      </button>
+      <button class="difficulty-opt selected" data-diff="4">
+        <span class="d-name">中等</span>
+        <span class="d-desc">有来有回</span>
+      </button>
+      <button class="difficulty-opt" data-diff="6">
+        <span class="d-name">困难</span>
+        <span class="d-desc">全力应战</span>
+      </button>
+    </div>
+    <!-- 套牌选择：仅卡牌玩法显示 -->
+    <div id="deck-section" style="display:none">
+      <div class="difficulty-sub" style="margin:18px 0 10px">选择套牌</div>
+      <div class="deck-options">
+        <button class="deck-opt selected" data-deck="BALANCED">
+          <span class="d-name">均衡</span>
+          <span class="d-desc">攻守兼备，适合上手</span>
+        </button>
+        <button class="deck-opt" data-deck="AGGRO">
+          <span class="d-name">快攻</span>
+          <span class="d-desc">低费铺场 + 直伤，抢节奏</span>
+        </button>
+        <button class="deck-opt" data-deck="CONTROL">
+          <span class="d-name">控制</span>
+          <span class="d-desc">清场、治疗与大随从，拖后期</span>
+        </button>
+        <button class="deck-opt" data-deck="CUSTOM">
+          <span class="d-name">自定义</span>
+          <span class="d-desc">自己挑选 30 张</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- 自定义套牌编辑器：从 deck-opt 选「自定义」后展开 -->
+    <div id="deck-editor" style="display:none">
+      <div class="de-head">
+        <span>点击卡牌增减（单卡最多 6 张）</span>
+        <span class="de-count" id="de-count">0 / 30</span>
+      </div>
+      <div class="de-cards" id="de-cards"></div>
+      <div class="de-actions">
+        <button class="btn-cancel" id="de-reset">清空</button>
+        <button class="btn-start" id="de-start" disabled>开始对战</button>
+      </div>
+    </div>
+
+    <div class="difficulty-btns">
+      <button class="btn-cancel" id="difficulty-cancel">取消</button>
+    </div>
+  </div>
+</div>
+
 <!-- LOGIN SCREEN -->
 <div id="login-screen">
   <div class="login-box">
-    <div class="login-title">五子棋</div>
-    <div class="login-sub">GOMOKU ONLINE · 在线对战</div>
+    <div class="login-title">棋战大厅</div>
+    <div class="login-sub">五子棋 · 黑白棋 · 围棋 · 象棋 · 四子棋 · 回合制 · 卡牌 · 取石子 · 答题 · 多人比大小</div>
 
     <input type="hidden" id="ws-url" value="" data-port="9001">
     <div class="field-label">你的昵称</div>
     <input class="field-input" type="text" id="player-name" placeholder="输入昵称..." maxlength="16">
 
-    <button class="btn-join" onclick="joinGame()">进入对战</button>
+    <p id="login-sub-status" role="status"></p>
+    <button class="btn-join" onclick="joinGame()">进入大厅</button>
   </div>
 </div>
 
 <!-- HEADER -->
 <header>
-  <div class="logo">五子棋 <span>ONLINE</span></div>
+  <button class="sound-toggle btn-outline" id="sound-toggle" onclick="toggleSound()" aria-pressed="true" aria-label="切换音效">音效 开</button>
+  <div class="logo">棋战大厅 <span>ONLINE</span></div>
   <div class="server-status">
     <div class="status-dot" id="status-dot"></div>
     <span id="status-text">未连接</span>
@@ -49,18 +113,89 @@
 <div id="lobby-screen">
   <div class="lobby-header">
     <div class="lobby-title">游戏大厅</div>
-    <div>
+    <div class="lobby-actions">
+      <label class="player-count-label">人数 <select id="room-player-count" aria-label="房间人数"><option value="2">2 人</option></select></label>
+      <input class="join-code-input" id="join-code" maxlength="12" placeholder="输入房号"
+             autocomplete="off" onkeydown="if (event.key === 'Enter') joinByCode()">
+      <button class="btn-outline" onclick="joinByCode()">加入房间</button>
+      <button class="btn-outline" onclick="createRoom()">创建房间</button>
       <button class="btn-outline" onclick="refreshRooms()">刷新列表</button>
-      <button class="btn-outline" style="background:var(--accent);color:var(--bg)" onclick="createRoom()">快速开始</button>
+      <button class="btn-solo-top" onclick="startSoloQuick()">▶ 人机对战</button>
     </div>
   </div>
-  <div style="display:flex;gap:16px;align-items:flex-start;">
+
+  <!-- 游戏类型选择 -->
+  <div class="game-selector" id="game-selector"></div>
+
+  <div class="lobby-columns">
     <div style="flex:1;">
       <div class="room-list" id="room-list-container"></div>
     </div>
-    <div class="panel leaderboard-panel" style="min-width:200px;">
-      <div class="panel-title">排行榜</div>
-      <div id="leaderboard-list" style="padding:8px;font-size:0.85rem;color:var(--text-dim)">加载中...</div>
+    <div style="min-width:260px;display:flex;flex-direction:column;gap:16px;">
+      <div class="panel leaderboard-panel">
+        <div class="panel-title">排行榜</div>
+        <div class="lb-tabs" id="lb-tabs"></div>
+        <div id="leaderboard-list" style="padding:8px;font-size:0.85rem;color:var(--text-dim)">加载中...</div>
+      </div>
+
+      <!-- 我的战绩 -->
+      <div class="panel">
+        <div class="panel-title">
+          <span style="flex:1">我的战绩</span>
+          <span class="record-elo" id="my-elo">—</span>
+        </div>
+        <div class="record-stats" id="my-stats">
+          <div class="record-stat"><div class="record-stat-num" id="my-win">0</div><div class="record-stat-label">胜</div></div>
+          <div class="record-stat"><div class="record-stat-num lose" id="my-lose">0</div><div class="record-stat-label">负</div></div>
+          <div class="record-stat"><div class="record-stat-num" id="my-draw">0</div><div class="record-stat-label">平</div></div>
+          <div class="record-stat"><div class="record-stat-num rate" id="my-rate">—</div><div class="record-stat-label">胜率</div></div>
+        </div>
+      </div>
+
+      <!-- 最近对局（可点进去复盘） -->
+      <div class="panel record-panel">
+        <div class="panel-title">
+          <span style="flex:1">最近对局</span>
+          <button class="leave-btn" style="padding:2px 8px;" onclick="loadRecentGames()">刷新</button>
+        </div>
+        <!-- 套牌筛选只在卡牌页签显示；其他玩法没有套牌字段 -->
+        <div class="record-deck-filter" id="recent-deck-filter" style="display:none;">
+          <label for="recent-deck-select">套牌</label>
+          <select id="recent-deck-select" onchange="onRecentDeckChange(this.value)">
+            <option value="">全部套牌</option>
+            <option value="BALANCED">均衡</option>
+            <option value="AGGRO">快攻</option>
+            <option value="CONTROL">控制</option>
+            <option value="CUSTOM">自定义</option>
+          </select>
+        </div>
+        <div id="recent-games-list" class="record-list">加载中...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 棋谱复盘弹窗 -->
+<div class="replay-modal" id="replay-modal">
+  <div class="replay-modal-box">
+    <div class="replay-modal-head">
+      <div>
+        <div class="replay-modal-title" id="rm-title">对局复盘</div>
+        <div class="replay-modal-sub" id="rm-sub"></div>
+      </div>
+      <button class="leave-btn" onclick="closeRecordReplay()">关闭</button>
+    </div>
+    <div class="replay-modal-body">
+      <canvas id="rm-canvas"></canvas>
+      <!-- 非棋盘玩法（回合制对战）的复盘：没有盘面，用文字战报回放 -->
+      <div class="rm-rpg-log" id="rm-rpg-log" style="display:none"></div>
+    </div>
+    <div class="replay-modal-ctrl">
+      <button class="btn-outline" onclick="rmStep(-1)">|&lt;</button>
+      <button class="btn-outline" id="rm-play-btn" onclick="rmTogglePlay()">▶</button>
+      <button class="btn-outline" onclick="rmStep(1)">&gt;|</button>
+      <input type="range" id="rm-slider" min="0" max="0" value="0" oninput="rmSeek(this.value)">
+      <span id="rm-step-text" class="replay-modal-step">0/0</span>
     </div>
   </div>
 </div>
@@ -71,11 +206,13 @@
   <div>
     <div class="panel" style="margin-bottom:16px">
       <div class="panel-title">对战玩家</div>
+      <div id="player-seats">
       <div id="player-black">
         <div class="waiting-slot">等待玩家...</div>
       </div>
       <div id="player-white">
         <div class="waiting-slot">等待玩家...</div>
+      </div>
       </div>
     </div>
 
@@ -86,11 +223,21 @@
       </div>
       <div class="room-info">
         <div class="room-id" id="room-id">ROOM: —</div>
-        <div class="move-count" id="move-count">落子数: 0</div>
+        <button class="btn-outline invite-btn" id="invite-btn" onclick="copyInvite()" style="display:none">复制邀请</button>
+        <div class="move-count" id="move-count">手数: 0</div>
         <div class="move-count" id="spectator-count" style="margin-top:4px;color:var(--accent2)">观众数: 0</div>
       </div>
+      <details class="coach-panel">
+        <summary>AI 导师</summary>
+        <p id="coach-status">读取配置中…</p>
+        <button class="btn-outline" id="coach-button" onclick="requestCoach()" disabled>讲解当前局势</button>
+        <p id="coach-answer" role="status"></p>
+      </details>
       <div class="status-area waiting" id="status-msg">等待连接...</div>
-      <div style="padding:4px 16px 8px;display:none" id="surrender-row"><button class="leave-btn" id="surrender-btn" onclick="surrender()" style="width:100%;border-color:var(--accent);color:var(--accent)">认输</button></div>
+      <div style="padding:4px 16px 8px;display:none" id="surrender-row">
+        <button class="leave-btn" id="pass-btn" onclick="sendPass()" style="display:none;width:100%;margin-bottom:6px;border-color:var(--accent2);color:var(--accent2)">停一手</button>
+        <button class="leave-btn" id="surrender-btn" onclick="surrender()" style="width:100%;border-color:var(--accent);color:var(--accent)">认输</button>
+      </div>
     </div>
   </div>
 
@@ -98,13 +245,72 @@
   <div class="board-container">
     <div class="board-wrapper">
       <canvas id="board-canvas"></canvas>
+      <!-- 非棋盘玩法（回合制对战）的渲染面板：与画布互斥显示 -->
+      <div id="rpg-panel" class="rpg-panel" style="display:none">
+        <div class="rpg-arena">
+          <div class="rpg-fighter" id="rpg-fighter-1"></div>
+          <div class="rpg-vs">VS</div>
+          <div class="rpg-fighter" id="rpg-fighter-2"></div>
+        </div>
+        <div class="rpg-round" id="rpg-round">第 1 回合</div>
+        <div class="rpg-actions" id="rpg-actions"></div>
+        <div class="rpg-log" id="rpg-log"></div>
+      </div>
+
+      <!-- 卡牌对战面板：同样与画布互斥显示 -->
+      <div id="card-panel" class="card-panel" style="display:none">
+        <div class="card-heroes">
+          <div class="card-hero" id="card-hero-1"></div>
+          <div class="card-vs">VS</div>
+          <div class="card-hero" id="card-hero-2"></div>
+        </div>
+        <div class="card-turn" id="card-turn">等待开始…</div>
+        <div class="card-arena-label">场上随从</div>
+        <div class="card-boards">
+          <div class="card-board" id="card-board-2"></div>
+          <div class="card-board" id="card-board-1"></div>
+        </div>
+        <div class="card-hand-label">我的手牌 <span id="card-hand-hint"></span></div>
+        <div class="card-hand" id="card-hand"></div>
+        <div class="card-actions-row">
+          <button class="btn-endturn" id="card-endturn" onclick="sendEndTurn()">结束回合 →</button>
+          <span class="card-attack-hint" id="card-attack-hint"></span>
+        </div>
+        <div class="card-log" id="card-log"></div>
+      </div>
+
+      <div id="high-card-panel" class="high-card-panel" style="display:none" aria-live="polite"></div>
+      <!-- 取石子博弈面板 -->
+      <div id="nim-panel" class="nim-panel" style="display:none">
+        <div class="nim-title" id="nim-title">取石子</div>
+        <div class="nim-sub">拿走最后一颗石子的人获胜</div>
+        <div class="nim-piles" id="nim-piles"></div>
+        <div class="nim-turn" id="nim-turn">等待开始…</div>
+        <div class="nim-take-row">
+          <span>拿走数量：</span>
+          <div class="nim-take-btns" id="nim-take-btns"></div>
+        </div>
+        <div class="nim-log" id="nim-log"></div>
+      </div>
+
+      <!-- 答题对战面板 -->
+      <div id="quiz-panel" class="quiz-panel" style="display:none">
+        <div class="quiz-head">
+          <span class="quiz-progress" id="quiz-progress">第 1 / 8 题</span>
+          <span class="quiz-score" id="quiz-score">红 0 : 0 蓝</span>
+        </div>
+        <div class="quiz-question" id="quiz-question">等待出题…</div>
+        <div class="quiz-options" id="quiz-options"></div>
+        <div class="quiz-status" id="quiz-status"></div>
+        <div class="quiz-log" id="quiz-log"></div>
+      </div>
       <div id="gameover-overlay">
         <div class="gameover-result" id="gameover-result">胜利！</div>
         <div class="gameover-sub" id="gameover-sub"></div>
         <div class="gameover-scores" id="gameover-scores"></div>
         <div class="gameover-btns">
           <button class="btn-review" onclick="dismissOverlay()">查看棋盘</button>
-          <button class="btn-review" onclick="enterReplay()">复盘</button>
+          <button class="btn-review" id="btn-enter-replay" onclick="enterReplay()">复盘</button>
           <button class="btn-restart" onclick="requestRestart()">再来一局</button>
         </div>
       </div>
@@ -135,7 +341,7 @@
   <div class="panel">
     <div class="panel-title">对战聊天</div>
     <div class="chat-messages" id="chat-messages">
-      <div class="chat-msg system">欢迎来到五子棋对战！</div>
+      <div class="chat-msg system">欢迎来到棋战大厅！</div>
     </div>
     <div class="chat-input-row">
       <input class="chat-input" type="text" id="chat-input"
@@ -147,6 +353,7 @@
 
 </main>
 
-<script src="app.js"></script>
+<script src="js/games.js?v=38"></script>
+<script src="app.js?v=38"></script>
 </body>
 </html>

@@ -1,0 +1,29 @@
+services:
+  app:
+    # HTTPS 入口由 Caddy 统一暴露，容器端口只在 Compose 网络内可见
+    ports: !reset []
+    environment:
+      # app:9001 只在 Compose 内网可见，因此可以安全信任 Caddy 写入的客户端地址。
+      NETTY_TRUST_FORWARDED_FOR: "true"
+
+  caddy:
+    image: caddy:2.9-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      DOMAIN: "${DOMAIN:-localhost}"
+      ACME_EMAIL: "${ACME_EMAIL:-admin@example.com}"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  caddy-data:
+  caddy-config:

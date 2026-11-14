@@ -40,15 +40,24 @@ public class BinaryMessageEncoder extends MessageToMessageEncoder<GameMessage> {
             case GameProtocol.TYPE_PING:
             case GameProtocol.TYPE_GET_ROOMS:
             case GameProtocol.TYPE_LEAVE:
-            case GameProtocol.TYPE_ADD_AI:
+            case GameProtocol.TYPE_PASS:
+            case GameProtocol.TYPE_END_TURN:
             case GameProtocol.TYPE_RESTART:
             case GameProtocol.TYPE_SURRENDER:
                 // 无 payload
                 break;
 
+            case GameProtocol.TYPE_ADD_AI:
+                writeNullableString(buf, msg.getData()); // 难度
+                writeNullableString(buf, msg.getDeck()); // 套牌
+                break;
+
             case GameProtocol.TYPE_JOIN:
                 writeString(buf, msg.getPlayerName());
                 writeNullableString(buf, msg.getRoomId());
+                writeNullableString(buf, msg.getGameType());
+                writeNullableString(buf, msg.getDeck());
+                writeNullableString(buf, msg.getDeckCards());
                 break;
 
             case GameProtocol.TYPE_SPECTATE:
@@ -60,6 +69,8 @@ public class BinaryMessageEncoder extends MessageToMessageEncoder<GameMessage> {
                 buf.writeByte(msg.getRow());
                 buf.writeByte(msg.getCol());
                 buf.writeInt(msg.getMoveSeq());
+                buf.writeByte(msg.getFromRow()); // -1 → 0xFF（无起点）
+                buf.writeByte(msg.getFromCol());
                 break;
 
             case GameProtocol.TYPE_CHAT:
@@ -82,8 +93,10 @@ public class BinaryMessageEncoder extends MessageToMessageEncoder<GameMessage> {
                 writeNullableString(buf, msg.getRoomId());
                 writeNullableString(buf, msg.getPlayerId());
                 buf.writeByte(msg.getStone());
+                writeNullableString(buf, msg.getGameType());
                 writeNullableString(buf, msg.getMessage());
                 writeNullableString(buf, msg.getData());
+                writeNullableString(buf, msg.getSessionId());
                 break;
 
             case GameProtocol.TYPE_GAME_MOVE:
@@ -116,8 +129,20 @@ public class BinaryMessageEncoder extends MessageToMessageEncoder<GameMessage> {
                 writeNullableString(buf, msg.getPlayerId());
                 writeNullableString(buf, msg.getSessionId());
                 buf.writeByte(msg.getStone());
+                writeNullableString(buf, msg.getGameType());
                 writeNullableString(buf, msg.getMessage());
                 writeNullableString(buf, msg.getData());
+                break;
+
+            case GameProtocol.TYPE_TIMER_SYNC:
+                writeNullableString(buf, msg.getRoomId());
+                writeNullableString(buf, msg.getData());
+                break;
+
+            case GameProtocol.TYPE_PLAYER_STATUS:
+                writeNullableString(buf, msg.getRoomId());
+                writeNullableString(buf, msg.getPlayerId());
+                writeNullableString(buf, msg.getMessage());
                 break;
 
             case GameProtocol.TYPE_ROOM_INFO:
@@ -130,10 +155,13 @@ public class BinaryMessageEncoder extends MessageToMessageEncoder<GameMessage> {
                 writeNullableString(buf, msg.getRoomId());
                 writeNullableString(buf, msg.getPlayerName());
                 writeNullableString(buf, msg.getMessage());
+                writeNullableString(buf, msg.getPlayerId());
                 break;
 
             case GameProtocol.TYPE_ERROR:
                 writeNullableString(buf, msg.getMessage());
+                // 可选附加数据（落子被拒时回传服务端手数，供客户端校准 moveSeq）
+                writeNullableString(buf, msg.getData());
                 break;
 
             default:
@@ -173,6 +201,8 @@ public class BinaryMessageEncoder extends MessageToMessageEncoder<GameMessage> {
             case SPECTATE:        return GameProtocol.TYPE_SPECTATE;
             case ADD_AI:          return GameProtocol.TYPE_ADD_AI;
             case MOVE:            return GameProtocol.TYPE_MOVE;
+            case PASS:            return GameProtocol.TYPE_PASS;
+            case END_TURN:        return GameProtocol.TYPE_END_TURN;
             case CHAT:            return GameProtocol.TYPE_CHAT;
             case RESTART:         return GameProtocol.TYPE_RESTART;
             case LEAVE:           return GameProtocol.TYPE_LEAVE;
@@ -188,6 +218,8 @@ public class BinaryMessageEncoder extends MessageToMessageEncoder<GameMessage> {
             case GAME_CHAT:       return GameProtocol.TYPE_GAME_CHAT;
             case WAITING:         return GameProtocol.TYPE_WAITING;
             case RESTART_REQUEST: return GameProtocol.TYPE_RESTART_REQ;
+            case TIMER_SYNC:      return GameProtocol.TYPE_TIMER_SYNC;
+            case PLAYER_STATUS:   return GameProtocol.TYPE_PLAYER_STATUS;
             case ERROR:           return GameProtocol.TYPE_ERROR;
             default:              return 0;
         }

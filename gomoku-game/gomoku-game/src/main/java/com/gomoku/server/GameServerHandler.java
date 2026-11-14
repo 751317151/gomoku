@@ -1,6 +1,9 @@
 package com.gomoku.server;
 
+import com.gomoku.game.CardBattleEngine;
 import com.gomoku.game.GameRoom;
+import com.gomoku.game.GameType;
+import com.gomoku.game.MoveCommand;
 import com.gomoku.game.RoomManager;
 import com.gomoku.model.GameMessage;
 import com.gomoku.model.Player;
@@ -37,7 +40,10 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
 
     private static final Logger logger = LoggerFactory.getLogger(GameServerHandler.class);
     private static final Gson gson = new Gson();
+    /** 卡牌攻击指令的 action 标记（负数，与手牌下标区分） */
+    private static final int ATTACK_MARKER = -2;
     private final RoomManager roomManager;
+    @Autowired private com.gomoku.game.GuestIdentityService guests;
 
     private final EnumMap<GameMessage.Type, BiConsumer<Channel, GameMessage>> handlers = new EnumMap<>(GameMessage.Type.class);
 
@@ -53,6 +59,8 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
         handlers.put(GameMessage.Type.SPECTATE, this::handleSpectate);
         handlers.put(GameMessage.Type.ADD_AI, this::handleAddAI);
         handlers.put(GameMessage.Type.MOVE, this::handleMove);
+        handlers.put(GameMessage.Type.PASS, this::handlePass);
+        handlers.put(GameMessage.Type.END_TURN, this::handleEndTurn);
         handlers.put(GameMessage.Type.CHAT, this::handleChat);
         handlers.put(GameMessage.Type.RESTART, (conn, msg) -> handleRestart(conn));
         handlers.put(GameMessage.Type.LEAVE, (conn, msg) -> handleLeave(conn));
@@ -65,8 +73,6 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
 
     private static final io.netty.util.AttributeKey<Boolean> IP_CHECKED =
             io.netty.util.AttributeKey.valueOf("ipChecked");
-    private static final io.netty.util.AttributeKey<String> CLIENT_IP =
-            io.netty.util.AttributeKey.valueOf("clientIp");
     private static final io.netty.util.AttributeKey<Boolean> IP_RELEASED =
             io.netty.util.AttributeKey.valueOf("ipReleased");
 
@@ -76,14 +82,14 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
         Boolean checked = ctx.channel().attr(IP_CHECKED).get();
         if (checked == null) {
             ctx.channel().attr(IP_CHECKED).set(true);
-            String ip = getIp(ctx.channel());
+            String ip = clientIp(ctx.channel());
             if (ip != null) {
-                ctx.channel().attr(CLIENT_IP).set(ip);
+                ctx.channel().attr(ClientAddressHandler.CLIENT_IP).set(ip);
                 if (!roomManager.checkIpLimit(ip)) {
                     logger.warn("IP 连接数超限，拒绝: {}", ip);
                     // checkIpLimit 内部已回退计数，标记已释放防止 handlerRemoved 再减
                     ctx.channel().attr(IP_RELEASED).set(true);
-                    sendError(ctx.channel(), "连接数超限，同一网络最多允许5个连接");
+                    sendError(ctx.channel(), "连接数超限，同一网络最多允许16个连接");
                     ctx.close();
                     return;
                 }
@@ -109,7 +115,7 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
             }
             handleMessage(ctx.channel(), msg);
         } catch (JsonSyntaxException e) {
-            logger.warn("无效消息格式：{}", message);
+            logger.warn("无效 JSON 消息（{} 字符）", message.length());
             sendError(ctx.channel(), "消息格式错误");
         } catch (Exception e) {
             logger.warn("消息处理异常", e);
@@ -121,7 +127,7 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
 
     @Override
     public void handlerAdded(ChannelHandlerContext ctx) {
-        logger.info("新连接：{} (IP: {})", ctx.channel().remoteAddress(), getIp(ctx.channel()));
+        logger.info("新连接：{} (IP: {})", ctx.channel().remoteAddress(), clientIp(ctx.channel()));
     }
 
     @Override
@@ -168,7 +174,7 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
      */
     private void releaseIpOnce(Channel ch) {
         if (ch.attr(IP_RELEASED).compareAndSet(null, true)) {
-            String ip = ch.attr(CLIENT_IP).getAndSet(null);
+            String ip = ch.attr(ClientAddressHandler.CLIENT_IP).getAndSet(null);
             if (ip != null) {
                 roomManager.releaseIp(ip);
             }
@@ -199,9 +205,20 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
         if (existing != null && !existing.canPerformAction()) return;
 
         String playerName = NameSanitizer.sanitize(msg.getPlayerName());
-        GameRoom room = roomManager.joinGame(conn, playerName, msg.getRoomId());
+        if (msg.getGuestToken() != null && !roomManager.bindIdentity(conn, playerName, guests.resolve(msg.getGuestToken()))) {
+            sendError(conn, "游客凭证无效，请重新进入大厅"); return;
+        }
+        GameType gameType = GameType.fromString(msg.getGameType());
+        // 套牌必须在「创建玩家」之后、「加入房间」之前设定：
+        // 首次 JOIN 时 getPlayer(conn) 还是 null，之前那样写套牌永远记不上（实测只剩 BALANCED）。
+        // 而且第二个玩家加入会立刻触发 startGame，所以必须在 addPlayer 之前传进去。
+        GameRoom room = roomManager.joinGame(conn, playerName, msg.getRoomId(), gameType,
+                msg.getDeck(), msg.getDeckCards(), msg.isCreateRoom(), msg.getPlayerCount());
         if (room == null) {
-            sendError(conn, "加入房间失败（房间可能已满或不存在）");
+            boolean byCode = msg.getRoomId() != null && !msg.getRoomId().trim().isEmpty();
+            sendError(conn, byCode
+                    ? "加入房间失败（房间号不存在、已开局或已满）"
+                    : "加入房间失败（房间可能已满或不存在）");
             return;
         }
         if (room.getState() == GameRoom.State.WAITING) {
@@ -211,6 +228,7 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
                 sessionMsg.setRoomId(room.getRoomId());
                 sessionMsg.setPlayerId(player.getId());
                 sessionMsg.setSessionId(player.getSessionId());
+                sessionMsg.setGameType(room.getGameType().name());
                 sessionMsg.setMessage("已加入房间");
                 player.sendMessage(gson.toJson(sessionMsg));
             }
@@ -238,26 +256,91 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
     }
 
     private void handleAddAI(Channel conn, GameMessage msg) {
-        Player player = roomManager.getPlayer(conn);
-        if (player != null && !player.canPerformAction()) return;
+        // 多人一键开局会连续填充座位；300ms 静默限流会丢请求并永久卡在 7/8。
+        // 房间的等待状态与固定容量已限制成功添加次数。
         int difficulty = 4; // 默认中等
         if (msg.getData() != null) {
             try { difficulty = Integer.parseInt(msg.getData()); } catch (NumberFormatException ignored) {}
         }
-        GameRoom room = roomManager.addAI(conn, difficulty);
+        GameRoom room = roomManager.addAI(conn, difficulty, msg.getDeck());
         if (room == null) sendError(conn, "添加电脑失败");
     }
 
     private void handleMove(Channel conn, GameMessage msg) {
         Player player = roomManager.getPlayer(conn);
         if (player == null) { sendError(conn, "请先加入游戏"); return; }
-        if (!player.canPerformAction()) return;
+        // 注意：落子不做 300ms 限流。静默丢弃一个合法落子会让客户端与服务端
+        // 手数永久错位（客户端已自增 moveSeq，服务端未落子），后续每步都被拒绝。
+        // 合法性已由轮次校验 + moveSeq 幂等校验 + 引擎规则三重把关，无需再限流。
 
         GameRoom room = roomManager.getRoomByPlayer(player);
         if (room == null) { sendError(conn, "房间不存在"); return; }
 
-        boolean success = room.handleMove(player, msg.getRow(), msg.getCol(), msg.getMoveSeq());
-        if (!success) sendError(conn, "无效落子");
+        // 卡牌攻击：用坐标字段表达「哪个随从打谁」
+        //   row = 己方随从下标，col = 目标下标（-1 = 打英雄）
+        // 单独走一条路径，因为它不消耗手牌、也不推进出牌阶段的语义
+        if (room.getEngine() instanceof CardBattleEngine && msg.getAction() == ATTACK_MARKER) {
+            if (!room.handleAttack(player, msg.getRow(), msg.getCol(), msg.getActionVersion())) {
+                if (msg.getActionVersion() != null) { sendActionSync(player, room); return; }
+                sendError(conn, "无法攻击");
+            }
+            return;
+        }
+
+        // 按玩法把消息翻译成行动指令：非棋盘玩法用 action（技能/道具下标），
+        // 棋类用坐标。房间层只认 MoveCommand，不关心具体是哪一种。
+        MoveCommand command;
+        if (msg.getAction() >= 0) {
+            // 卡牌里「火球术/鼓舞」需要玩家指定目标，其余行动无目标
+            command = msg.getTargetSide() > 0
+                    ? MoveCommand.withTarget(msg.getAction(), msg.getTargetSide(), msg.getTargetIndex())
+                    : MoveCommand.action(msg.getAction());
+        } else {
+            command = MoveCommand.of(msg.getFromRow(), msg.getFromCol(), msg.getRow(), msg.getCol());
+        }
+
+        boolean success = room.handleCommand(player, command, msg.getMoveSeq(), msg.getActionVersion());
+        if (!success) {
+            if (msg.getActionVersion() != null) { sendActionSync(player, room); return; }
+            // 回带服务端真实手数，客户端据此校准 moveSeq，避免序号错位后永久失败
+            sendError(conn, "无效落子", String.valueOf(room.getEngine().getMoveSeq()));
+        }
+    }
+
+    private void handlePass(Channel conn, GameMessage msg) {
+        Player player = roomManager.getPlayer(conn);
+        if (player == null) return;
+        // 卡牌等一回合多行动的玩法：PASS 语义化为「结束回合并交出攻击」
+        GameRoom room = roomManager.getRoomByPlayer(player);
+        if (room == null) return;
+        if (!room.getEngine().autoEndsTurn()) {
+            if (!room.handleEndTurn(player, msg.getActionVersion())) {
+                if (msg.getActionVersion() != null) sendActionSync(player, room);
+                else sendError(conn, "当前不能结束回合");
+            }
+            return;
+        }
+        if (!room.handlePass(player, msg.getActionVersion())) {
+            if (msg.getActionVersion() != null) sendActionSync(player, room);
+            else sendError(conn, "当前不能停一手");
+        }
+    }
+
+    /**
+     * 结束回合（一回合多行动的玩法）。
+     *
+     * 注意不做 300ms 限流：玩家可能连点「结束回合」，静默丢弃会让客户端
+     * 以为自己还在本回合，而服务端已经换手，界面与真实轮次脱节。
+     */
+    private void handleEndTurn(Channel conn, GameMessage msg) {
+        Player player = roomManager.getPlayer(conn);
+        if (player == null) return;
+        GameRoom room = roomManager.getRoomByPlayer(player);
+        if (room == null) return;
+        if (!room.handleEndTurn(player, msg.getActionVersion())) {
+            if (msg.getActionVersion() != null) sendActionSync(player, room);
+            else sendError(conn, "当前不能结束回合");
+        }
     }
 
     private void handleChat(Channel conn, GameMessage msg) {
@@ -300,6 +383,7 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
                 syncMsg.setPlayerId(player.getId());
                 syncMsg.setSessionId(player.getSessionId());
                 syncMsg.setStone(player.getStone());
+                syncMsg.setGameType(room.getGameType().name());
                 syncMsg.setMessage("重连成功");
                 syncMsg.setData(gson.toJson(room.buildSyncDataForReconnect(player)));
                 player.sendMessage(gson.toJson(syncMsg));
@@ -310,10 +394,34 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
 
     // ============ 发送辅助 ============
 
+    private void sendActionSync(Player player, GameRoom room) {
+        GameMessage sync = new GameMessage(GameMessage.Type.GAME_SYNC);
+        sync.setRoomId(room.getRoomId());
+        sync.setPlayerId(player.getId());
+        sync.setStone(room.hasPlayer(player) ? player.getStone() : 0);
+        sync.setGameType(room.getGameType().name());
+        sync.setMessage("操作未生效，已同步最新局面");
+        sync.setData(gson.toJson(room.buildSyncDataForReconnect(player)));
+        player.sendMessage(gson.toJson(sync));
+    }
+
     private void sendError(Channel conn, String errorMsg) {
+        sendError(conn, errorMsg, null);
+    }
+
+    /**
+     * 发送错误消息；data 非空时携带附加信息（如服务端当前手数，供客户端校准 moveSeq）
+     */
+    private void sendError(Channel conn, String errorMsg, String data) {
         GameMessage error = new GameMessage(GameMessage.Type.ERROR);
         error.setMessage(errorMsg);
+        if (data != null) error.setData(data);
         Player.sendMessageTo(conn, gson.toJson(error));
+    }
+
+    private String clientIp(Channel channel) {
+        String ip = channel.attr(ClientAddressHandler.CLIENT_IP).get();
+        return ip != null ? ip : getIp(channel);
     }
 
     private String getIp(Channel channel) {

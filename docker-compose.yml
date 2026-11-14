@@ -1,0 +1,34 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gomoku-game:local
+    restart: unless-stopped
+    environment:
+      SERVER_PORT: "9000"
+      NETTY_PORT: "9001"
+      COACH_ENABLED: "${COACH_ENABLED:-false}"
+      COACH_ENDPOINT: "${COACH_ENDPOINT:-https://api.openai.com/v1/chat/completions}"
+      COACH_API_KEY: "${COACH_API_KEY:-}"
+      COACH_MODEL: "${COACH_MODEL:-}"
+      JAVA_OPTS: "${JAVA_OPTS:--Xms128m -Xmx512m}"
+    ports:
+      - "${HTTP_PORT:-9000}:9000"
+      - "${WS_PORT:-9001}:9001"
+    volumes:
+      - gomoku-data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/actuator/health | grep -q 'UP'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+volumes:
+  gomoku-data:

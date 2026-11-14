@@ -50,7 +50,7 @@
 | 27 | **AI 搜索深度** | ✅ | 深度提升到 4 + 着法排序（`sortCandidates`）+ 候选数限制（`MAX_CANDIDATES=20`） |
 | 28 | 观战体验 | ✅ | `SPECTATE` + `GAME_SYNC` |
 | 29 | 前端响应式 | ✅ | 媒体查询已实现 |
-| 30 | 游戏记录 | 🔶 | `moveHistory` 已有，未持久化 |
+| 30 | 游戏记录 | 🔶 | `moveHistory` 已有，未持久化（多游戏大厅扩展后含 moveEffects，待落盘） |
 | 31 | 心跳/超时 | ✅ | `IdleStateHandler` + 客户端心跳 |
 | 32 | 聊天限流 | ✅ | `Player.canSendChat()` 令牌桶 |
 | 33 | Spring Boot 配置 | ✅ | `application.yml` |

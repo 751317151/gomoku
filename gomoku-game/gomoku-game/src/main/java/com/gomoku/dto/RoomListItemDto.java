@@ -11,16 +11,30 @@ public class RoomListItemDto {
     private int playerCount;
     private int spectatorCount;
     private List<String> players;
+    private String gameType;
+    private int minPlayers;
+    private int maxPlayers;
+    private int targetPlayers;
+    public int getMinPlayers() { return minPlayers; }
+    public void setMinPlayers(int value) { minPlayers = value; }
+    public int getMaxPlayers() { return maxPlayers; }
+    public void setMaxPlayers(int value) { maxPlayers = value; }
+    public int getTargetPlayers() { return targetPlayers; }
+    public void setTargetPlayers(int value) { targetPlayers = value; }
 
     public RoomListItemDto() {}
 
-    public RoomListItemDto(String roomId, String state, int playerCount, int spectatorCount, List<String> players) {
+    public RoomListItemDto(String roomId, String state, int playerCount, int spectatorCount, List<String> players, String gameType) {
         this.roomId = roomId;
         this.state = state;
         this.playerCount = playerCount;
         this.spectatorCount = spectatorCount;
         this.players = players;
+        this.gameType = gameType;
     }
+
+    public String getGameType() { return gameType; }
+    public void setGameType(String gameType) { this.gameType = gameType; }
 
     // Getters and Setters
     public String getRoomId() { return roomId; }

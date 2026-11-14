@@ -29,11 +29,19 @@ public class NettyWebSocketServer implements CommandLineRunner {
     @Value("${netty.port:9001}")
     private int port;
 
-    @Value("${server.port:8080}")
+    @Value("${server.port:9000}")
     private int httpPort;
 
     @Value("${netty.idle-timeout:120}")
     private int idleTimeout;
+
+    /** 反向代理暴露的 WebSocket 路径；本地直连根路径仍然可用。 */
+    @Value("${netty.ws-path:/ws}")
+    private String webSocketPath;
+
+    /** 仅在应用端口只对受信反向代理开放时开启，否则 X-Forwarded-For 可被伪造。 */
+    @Value("${netty.trust-forwarded-for:false}")
+    private boolean trustForwardedFor;
 
     private final GameServerHandler gameServerHandler;
     private final BinaryMessageEncoder binaryEncoder;
@@ -65,9 +73,14 @@ public class NettyWebSocketServer implements CommandLineRunner {
                             ch.pipeline().addLast(new HttpServerCodec());
                             ch.pipeline().addLast(new ChunkedWriteHandler());
                             ch.pipeline().addLast(new HttpObjectAggregator(MAX_FRAME_PAYLOAD_LENGTH));
+                            // 在协议升级前缓存真实客户端 IP，供首条业务消息的 IP 限流使用。
+                            ch.pipeline().addLast(new ClientAddressHandler(trustForwardedFor));
                             // 心跳检测：读空闲超时
                             ch.pipeline().addLast(new IdleStateHandler(
                                     idleTimeout, 0, 0, TimeUnit.SECONDS));
+                            // 反向代理可把 /ws 转发到同一端口；先归一化路径再交给
+                            // WebSocketServerProtocolHandler。根路径 / 继续兼容本地直连。
+                            ch.pipeline().addLast(new WebSocketPathNormalizer(webSocketPath));
                             // WebSocket 协议升级（路径 "/" 支持 JSON 和 Binary）
                             ch.pipeline().addLast(new WebSocketServerProtocolHandler(
                                     "/", null, true, MAX_FRAME_PAYLOAD_LENGTH));
@@ -88,13 +101,19 @@ public class NettyWebSocketServer implements CommandLineRunner {
             logger.info(" Spring Boot Web 已启动 (端口: {})", httpPort);
             logger.info(" 前端页面: http://localhost:{}", httpPort);
             logger.info(" 心跳超时: {}s", idleTimeout);
+            logger.info(" WebSocket 路径: / 和 {}", webSocketPath);
+            logger.info(" 客户端 IP 识别: {}", trustForwardedFor
+                    ? "X-Forwarded-For（仅限受信代理）" : "remoteAddress");
             logger.info(" 协议: JSON(Text) + Binary(ByteBuf)");
             logger.info("========================================");
         } catch (Exception e) {
             logger.error("Netty启动失败: {}", e.getMessage());
             destroy();
+            throw e;
         }
     }
+
+    public boolean isListening() { return channel != null && channel.isActive(); }
 
     @PreDestroy
     public void destroy() {

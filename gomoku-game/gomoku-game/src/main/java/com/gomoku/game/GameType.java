@@ -1,0 +1,79 @@
+package com.gomoku.game;
+
+/**
+ * 游戏类型 — 大厅中的可玩游戏
+ *
+ * rows/cols 只对棋盘玩法有意义；非棋盘玩法（RPG）填 0，用 {@link #isBoard()} 判断，
+ * 不要在调用方拿 rows > 0 去猜玩法类型。
+ */
+public enum GameType {
+
+    GOMOKU("五子棋", 15, 15, true),
+    REVERSI("黑白棋", 8, 8, true),
+    GO9("围棋 9路", 9, 9, true),
+    XIANGQI("中国象棋", 10, 9, true),
+    CONNECT4("四子棋", 6, 7, true),
+    /** 回合制 RPG 对战：HP/MP + 技能，第一个非棋牌玩法 */
+    RPG("回合制对战", 0, 0, false),
+    /** 卡牌对战：手牌/法力/随从，第一个带隐藏信息的玩法 */
+    CARD("卡牌对战", 0, 0, false),
+    /** 取石子博弈：组合博弈，AI 有基于异或和的完美解 */
+    NIM("取石子", 0, 0, false),
+    /** 答题对战：同一题双方各自作答，提交前互相看不到选择 */
+    QUIZ("答题对战", 0, 0, false),
+    HIGH_CARD("比大小", 0, 0, false, 2, 8, 4);
+
+    private final String displayName;
+    private final int rows;
+    private final int cols;
+    private final boolean board;
+    private final int minPlayers;
+    private final int maxPlayers;
+    private final int defaultPlayers;
+
+    GameType(String displayName, int rows, int cols, boolean board) {
+        this(displayName, rows, cols, board, 2, 2, 2);
+    }
+
+    GameType(String displayName, int rows, int cols, boolean board,
+             int minPlayers, int maxPlayers, int defaultPlayers) {
+        if (minPlayers < 2 || maxPlayers > 8 || minPlayers > defaultPlayers || defaultPlayers > maxPlayers) {
+            throw new IllegalArgumentException("游戏人数必须在 2–8 人内");
+        }
+        this.minPlayers = minPlayers;
+        this.maxPlayers = maxPlayers;
+        this.defaultPlayers = defaultPlayers;
+        this.displayName = displayName;
+        this.rows = rows;
+        this.cols = cols;
+        this.board = board;
+    }
+
+    public int getMinPlayers() { return minPlayers; }
+    public int getMaxPlayers() { return maxPlayers; }
+    public int getDefaultPlayers() { return defaultPlayers; }
+    public int resolvePlayerCount(int requested) {
+        int count = requested == 0 ? defaultPlayers : requested;
+        if (count < minPlayers || count > maxPlayers) throw new IllegalArgumentException("该玩法不支持此人数");
+        return count;
+    }
+
+    public String getDisplayName() { return displayName; }
+    public int getRows() { return rows; }
+    public int getCols() { return cols; }
+
+    /** 是否为棋盘玩法（决定前端渲染模块与是否需要盘面数据） */
+    public boolean isBoard() { return board; }
+
+    /**
+     * 从字符串解析游戏类型，空或未知时默认五子棋（兼容旧客户端）
+     */
+    public static GameType fromString(String s) {
+        if (s == null || s.isEmpty()) return GOMOKU;
+        try {
+            return valueOf(s.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            return GOMOKU;
+        }
+    }
+}

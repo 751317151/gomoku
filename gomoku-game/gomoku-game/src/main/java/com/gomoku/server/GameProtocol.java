@@ -35,6 +35,8 @@ public final class GameProtocol {
     public static final byte TYPE_SPECTATE       = 3;
     public static final byte TYPE_ADD_AI         = 4;
     public static final byte TYPE_MOVE           = 5;
+    public static final byte TYPE_PASS           = 12;  // 停一手（围棋）
+    public static final byte TYPE_END_TURN       = 13;  // 结束回合（卡牌等）
     public static final byte TYPE_CHAT           = 6;
     public static final byte TYPE_RESTART        = 7;
     public static final byte TYPE_LEAVE          = 8;
@@ -52,7 +54,9 @@ public final class GameProtocol {
     public static final byte TYPE_GAME_CHAT      = 56;
     public static final byte TYPE_WAITING        = 57;
     public static final byte TYPE_RESTART_REQ    = 58;
-    public static final byte TYPE_ERROR          = 59;
+    public static final byte TYPE_TIMER_SYNC     = 59;
+    public static final byte TYPE_ERROR          = 60;
+    public static final byte TYPE_PLAYER_STATUS  = 61;
 
     // 帧头部长度: magic(2) + version(1) + type(1) = 4 bytes
     public static final int HEADER_SIZE = 4;

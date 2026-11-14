@@ -1,0 +1,14 @@
+.git
+.gitignore
+.idea
+.vscode
+**/target
+data
+elo_ratings.json
+elo_ratings.properties
+flags
+*.log
+node_modules
+.env
+.env.*
+!.env.example
