@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>棋战大厅 · 棋类与卡牌对战</title>
-<link rel="stylesheet" href="style.css?v=39">
+<title>棋战大厅 · 多人游戏大厅</title>
+<link rel="stylesheet" href="style.css?v=41">
 </head>
 <body>
 
@@ -88,7 +88,7 @@
 <div id="login-screen">
   <div class="login-box">
     <div class="login-title">棋战大厅</div>
-    <div class="login-sub">五子棋 · 黑白棋 · 围棋 · 象棋 · 四子棋 · 回合制 · 卡牌 · 取石子 · 答题 · 多人比大小</div>
+    <div class="login-sub">五子棋 · 黑白棋 · 围棋 · 象棋 · 四子棋 · 回合制 · 卡牌 · 取石子 · 答题 · 骰子竞速 · 多人比大小</div>
 
     <input type="hidden" id="ws-url" value="" data-port="9001">
     <div class="field-label">你的昵称</div>
@@ -285,7 +285,7 @@
         <div id="uno-top" class="quiz-question">等待开始…</div>
         <div id="uno-players" class="high-card-score"></div>
         <div id="uno-hand" class="high-card-hand"></div>
-        <div class="card-actions-row"><button class="btn-endturn" id="uno-draw" onclick="sendAction(100)">摸一张</button><button class="btn-endturn" id="uno-call" onclick="sendAction(101)" disabled>喊 UNO</button><span id="uno-hint"></span></div>
+        <div class="card-actions-row"><button class="btn-endturn" id="uno-draw" onclick="sendAction(100)">摸一张</button><button class="btn-endturn" id="uno-draw-end" onclick="sendAction(102)" disabled>结束摸牌</button><button class="btn-endturn" id="uno-call" onclick="sendAction(101)" disabled>喊 UNO</button><button class="btn-endturn" id="uno-catch" onclick="sendUnoCatch()" disabled>抓 UNO</button><span id="uno-hint"></span></div>
         <div id="uno-log" class="quiz-log"></div>
       </div>
       <!-- 取石子博弈面板 -->
@@ -311,6 +311,20 @@
         <div class="quiz-options" id="quiz-options"></div>
         <div class="quiz-status" id="quiz-status"></div>
         <div class="quiz-log" id="quiz-log"></div>
+      </div>
+      <div id="dice-race-panel" class="dice-race-panel" style="display:none" aria-live="polite">
+        <div class="quiz-head"><span class="quiz-progress" id="dice-progress">第 1 / 6 轮</span><span class="quiz-score" id="dice-score"></span></div>
+        <div class="dice-race-sub" id="dice-status">等待所有玩家选择策略…</div>
+        <div class="dice-choices" id="dice-choices"></div>
+        <div class="high-card-score" id="dice-players"></div>
+        <div class="quiz-log" id="dice-log"></div>
+      </div>
+      <div id="gem-auction-panel" class="dice-race-panel" style="display:none" aria-live="polite">
+        <div class="quiz-head"><span class="quiz-progress" id="gem-progress">第 1 / 5 轮</span><span class="quiz-score" id="gem-score"></span></div>
+        <div class="dice-race-sub" id="gem-status">等待所有玩家暗投金币…</div>
+        <div class="gem-bids" id="gem-bids"></div>
+        <div class="high-card-score" id="gem-players"></div>
+        <div class="quiz-log" id="gem-log"></div>
       </div>
       <div id="gameover-overlay">
         <div class="gameover-result" id="gameover-result">胜利！</div>
@@ -361,10 +375,11 @@
 
 </main>
 
-<script src="js/games.js?v=39"></script>
-<script src="app.js?v=39"></script>
+<script src="js/games.js?v=41"></script>
+<script src="app.js?v=41"></script>
 </body>
 </html>
+
 
 
 

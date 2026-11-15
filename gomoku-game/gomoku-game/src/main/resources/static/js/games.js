@@ -924,23 +924,43 @@
     legalMoves() { return []; }
   };
 
+  const DICE_RACE = {
+    name: '骰子竞速', html: true, panel: 'dice-race-panel', render: 'renderDiceRacePanel',
+    minPlayers: 2, maxPlayers: 8, defaultPlayers: 4,
+    stepTime: 25, totalTime: 240, icon: '🎲',
+    footer: '2–8 人 · 稳健/冒险/追击 · 六轮累计得分',
+    actionLabels: ['稳健', '冒险', '追击'],
+    initialBoard() { return null; }, draw() {}, hitTest() { return null; },
+    drawGhost() {}, isLegal() { return false; }, applyEffects() {}, legalMoves() { return []; }
+  };
+
+  const GEM_AUCTION = {
+    name: '宝石拍卖', html: true, panel: 'gem-auction-panel', render: 'renderGemAuctionPanel',
+    minPlayers: 2, maxPlayers: 8, defaultPlayers: 4,
+    stepTime: 30, totalTime: 300, icon: '💎',
+    footer: '2–8 人 · 暗投金币 · 五轮争夺 3/5/7/9/12 分宝石',
+    actionLabels: ['出价 0', '出价 1', '出价 2', '出价 3', '出价 4', '出价 5', '出价 6', '出价 7', '出价 8', '出价 9', '出价 10'],
+    initialBoard() { return null; }, draw() {}, hitTest() { return null; },
+    drawGhost() {}, isLegal() { return false; }, applyEffects() {}, legalMoves() { return []; }
+  };
+
   const HIGH_CARD = {
     name: '比大小', html: true, panel: 'high-card-panel', render: 'renderHighCardPanel',
     minPlayers: 2, maxPlayers: 8, defaultPlayers: 4,
     stepTime: 30, totalTime: 300, icon: '♠',
-    footer: '2–8 人 · 五轮暗选 · 最大者得分，并列均得分',
+    footer: '2–8 人 · 五轮暗选 · 一次王牌翻倍 · 决胜轮双倍计分',
     initialBoard() { return null; }, draw() {}, hitTest() { return null; },
     drawGhost() {}, isLegal() { return false; }, applyEffects() {}, legalMoves() { return []; }
   };
 
   const UNO = {
     name: 'UNO 对战', html: true, panel: 'uno-panel', render: 'renderUnoPanel',
-    minPlayers: 2, maxPlayers: 4, defaultPlayers: 2, stepTime: 30, totalTime: 300, icon: '🃏',
-    footer: '2–4 人 · 按颜色或数字出牌 · 无牌可出时摸牌',
+    minPlayers: 2, maxPlayers: 8, defaultPlayers: 4, stepTime: 30, totalTime: 300, icon: '🃏',
+    footer: '2–8 人 · 按颜色或数字出牌 · 无牌可出时摸牌',
     actionLabels: ['摸一张'],
     initialBoard() { return null; }, draw() {}, hitTest() { return null; }, drawGhost() {}, isLegal() { return false; }, applyEffects() {}, legalMoves() { return []; }
   };
 
-  window.GameModules = { HIGH_CARD, GOMOKU, REVERSI, GO9, XIANGQI, CONNECT4, RPG, CARD, NIM, QUIZ, UNO };
+  window.GameModules = { HIGH_CARD, GOMOKU, REVERSI, GO9, XIANGQI, CONNECT4, RPG, CARD, NIM, QUIZ, DICE_RACE, GEM_AUCTION, UNO };
 })();
 

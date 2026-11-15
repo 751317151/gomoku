@@ -11,13 +11,17 @@ import java.util.Random;
 public class UnoBattleEngine implements GameEngine {
     public static final int DRAW_ACTION = 100;
     public static final int CALL_UNO_ACTION = 101;
+    public static final int END_DRAW_ACTION = 102;
+    public static final int CATCH_UNO_ACTION = 103;
     private static final int HAND_SIZE = 7, MAX_MOVES = 300, COLORS = 4;
-    private int count = 2, turn = 1, seq, direction = 1, activeColor, pendingDraw, unoPendingSide, unoPendingSteps;
+    private int count = 2, turn = 1, seq, direction = 1, activeColor, pendingDraw, unoPendingSide, unoPendingSteps, drawnPendingSide, drawnCardIndex;
     private boolean over;
     private Integer winner;
     private Card top;
     private final List<Card> deck = new ArrayList<>();
+    private final List<Card> discard = new ArrayList<>();
     private List<List<Card>> hands = new ArrayList<>();
+    private int[] roundScores = new int[3];
     private String[] names = new String[3];
     private final List<int[]> history = new ArrayList<>();
     private final List<String> log = new ArrayList<>();
@@ -45,8 +49,9 @@ public class UnoBattleEngine implements GameEngine {
     public void configurePlayers(int count) { this.count = type().resolvePlayerCount(count); }
 
     public void reset() {
-        turn = 1; seq = 0; direction = 1; activeColor = 0; pendingDraw = 0; unoPendingSide = 0; unoPendingSteps = 0; over = false; winner = null;
-        history.clear(); log.clear(); deck.clear(); hands = new ArrayList<>(); hands.add(Collections.emptyList());
+        turn = 1; seq = 0; direction = 1; activeColor = 0; pendingDraw = 0; unoPendingSide = 0; unoPendingSteps = 0; drawnPendingSide = 0; drawnCardIndex = -1; over = false; winner = null;
+        history.clear(); log.clear(); deck.clear(); discard.clear(); hands = new ArrayList<>(); hands.add(Collections.emptyList());
+        roundScores = new int[count + 1];
         names = new String[count + 1];
         for (int s = 1; s <= count; s++) { names[s] = "玩家 " + s; hands.add(new ArrayList<>()); }
         for (int color = 0; color < COLORS; color++) {
@@ -65,13 +70,44 @@ public class UnoBattleEngine implements GameEngine {
         log.add("首张牌：" + top.label());
     }
 
-    private Card draw() { return deck.isEmpty() ? null : deck.remove(deck.size() - 1); }
+    private Card draw() {
+        recycleDiscardIfNeeded();
+        return deck.isEmpty() ? null : deck.remove(deck.size() - 1);
+    }
+    private void recycleDiscardIfNeeded() {
+        if (!deck.isEmpty() || discard.isEmpty()) return;
+        deck.addAll(discard);
+        discard.clear();
+        Collections.shuffle(deck, random);
+        log.add("牌库耗尽，洗回弃牌堆继续游戏");
+    }
     public void setPlayerName(int side, String name) { if (side > 0 && side <= count && name != null && !name.isEmpty()) names[side] = name; }
 
     public boolean applyMove(MoveCommand command, int side) {
-        if (over || command == null || side != turn || side < 1 || side > count || !command.hasAction()) return false;
+        if (over || command == null || side < 1 || side > count || !command.hasAction()) return false;
         List<Card> hand = hands.get(side);
         int action = command.getAction();
+        boolean catchingUno = action == CATCH_UNO_ACTION;
+        if (!catchingUno && side != turn) return false;
+        if (catchingUno) {
+            if (unoPendingSide == 0 || side == unoPendingSide) return false;
+            int offender = unoPendingSide;
+            List<Card> offenderHand = hands.get(offender);
+            for (int i = 0; i < 2; i++) { Card c = draw(); if (c != null) offenderHand.add(c); }
+            history.add(new int[]{side, CATCH_UNO_ACTION, offender, 2}); seq++;
+            log.add(names[side] + " 抓到 " + names[offender] + " 未喊 UNO，罚摸 2 张");
+            int steps = unoPendingSteps <= 0 ? 1 : unoPendingSteps;
+            unoPendingSide = 0; unoPendingSteps = 0;
+            advance(steps);
+            return true;
+        }
+        boolean playingDrawnCard = false;
+        if (drawnPendingSide != 0) {
+            if (side != drawnPendingSide) return false;
+            if (action == END_DRAW_ACTION) { drawnPendingSide = 0; drawnCardIndex = -1; advance(1); return true; }
+            if (action != drawnCardIndex) return false;
+            playingDrawnCard = true;
+        }
         if (unoPendingSide != 0) {
             if (side != unoPendingSide || action != CALL_UNO_ACTION) return false;
             log.add(names[side] + " 喊了 UNO");
@@ -81,12 +117,17 @@ public class UnoBattleEngine implements GameEngine {
             advance(steps); return true;
         }
         if (action == DRAW_ACTION) {
-            if (hasPlayable(side)) return false;
             int drawn = pendingDraw > 0 ? pendingDraw : 1;
             for (int i = 0; i < drawn; i++) { Card c = draw(); if (c != null) hand.add(c); }
             history.add(new int[]{side, DRAW_ACTION, drawn}); seq++;
             log.add(names[side] + " 摸了 " + drawn + " 张牌");
-            pendingDraw = 0; advance(1); return true;
+            pendingDraw = 0;
+            if (drawn == 1 && !hand.isEmpty() && playable(hand.get(hand.size() - 1))) {
+                drawnPendingSide = side; drawnCardIndex = hand.size() - 1;
+                log.add(names[side] + " 摸到可出的牌，可立即打出或结束摸牌");
+                return true;
+            }
+            advance(1); return true;
         }
         if (action < 0 || action >= hand.size()) return false;
         Card c = hand.get(action);
@@ -97,10 +138,35 @@ public class UnoBattleEngine implements GameEngine {
             if (!command.hasTarget() || command.getTargetSide() != 1 || command.getTargetIndex() < 0 || command.getTargetIndex() >= COLORS) return false;
             chosenColor = command.getTargetIndex();
         }
-        hand.remove(action); top = c; activeColor = c.color >= 0 ? c.color : chosenColor;
+        int exchangeTarget = -1;
+        if (c.value == 7) {
+            if (!command.hasTarget() || command.getTargetSide() != 2) return false;
+            exchangeTarget = command.getTargetIndex();
+            if (exchangeTarget < 1 || exchangeTarget > count || exchangeTarget == side) return false;
+        }
+        if (playingDrawnCard) { drawnPendingSide = 0; drawnCardIndex = -1; }
+        hand.remove(action);
+        if (top != null) discard.add(top);
+        top = c; activeColor = c.color >= 0 ? c.color : chosenColor;
+        if (c.value == 7) {
+            List<Card> other = hands.get(exchangeTarget);
+            hands.set(side, other); hands.set(exchangeTarget, hand);
+            hand = hands.get(side);
+            log.add(names[side] + " 与 " + names[exchangeTarget] + " 交换了手牌");
+        } else if (c.value == 0) {
+            rotateHands();
+            hand = hands.get(side);
+            log.add("所有玩家按方向轮转手牌");
+        }
         history.add(new int[]{side, c.color, c.value, activeColor}); seq++;
         log.add(names[side] + " 打出 " + c.label());
-        if (hand.isEmpty()) { over = true; winner = side; log.add(names[side] + " 清空手牌，获胜"); return true; }
+        if (hand.isEmpty()) {
+            over = true; winner = side;
+            roundScores[side] = 0;
+            for (int other = 1; other <= count; other++) if (other != side) roundScores[side] += handScore(hands.get(other));
+            log.add(names[side] + " 清空手牌，获胜，获得 " + roundScores[side] + " 分");
+            return true;
+        }
         int steps = 1;
         if (c.value == 10) { log.add("跳过下一位"); steps = 2; }
         else if (c.value == 11) { direction = -direction; log.add("出牌方向反转"); if (count == 2) steps = 2; }
@@ -118,6 +184,18 @@ public class UnoBattleEngine implements GameEngine {
         if (pendingDraw > 0) return c.value == 12 || c.value == 14;
         return c.color < 0 || c.color == activeColor || c.value == top.value;
     }
+    private int handScore(List<Card> hand) {
+        int score = 0;
+        for (Card c : hand) score += c.value <= 9 ? c.value : c.value >= 13 ? 50 : 20;
+        return score;
+    }
+    private void rotateHands() {
+        List<List<Card>> snapshot = new ArrayList<>(hands);
+        for (int side = 1; side <= count; side++) {
+            int source = ((side - 1 - direction + count) % count) + 1;
+            hands.set(side, snapshot.get(source));
+        }
+    }
     private void advance(int steps) {
         if (seq >= MAX_MOVES) { over = true; winner = null; log.add("达到手数上限，判为平局"); return; }
         for (int i = 0; i < steps; i++) turn = ((turn - 1 + direction + count) % count) + 1;
@@ -132,10 +210,16 @@ public class UnoBattleEngine implements GameEngine {
     public int getDirection() { return direction; }
     public int getPendingDraw() { return pendingDraw; }
     public int getUnoPendingSide() { return unoPendingSide; }
+    public int getDrawnPendingSide() { return drawnPendingSide; }
+    public int getDrawnCardIndex() { return drawnCardIndex; }
     public Integer getWinner() { return winner; }
     public int getCurrentTurn() { return turn; }
     public boolean isOver() { return over; }
-    public String getScoreSummary() { return !over ? null : winner == null ? "平局（达到手数上限）" : names[winner] + " 清空手牌获胜"; }
+    public String getScoreSummary() {
+        if (!over) return null;
+        if (winner == null) return "平局（达到手数上限）";
+        return names[winner] + " 清空手牌获胜，结算 " + roundScores[winner] + " 分";
+    }
     public List<int[]> getMoveHistory() { return new ArrayList<>(history); }
     public List<int[]> getLastMoveEffects() { return Collections.emptyList(); }
     public int getMoveCount() { return history.size(); }
@@ -145,14 +229,15 @@ public class UnoBattleEngine implements GameEngine {
 
     void setTopForTest(int color, int value) { top = new Card(color, value); activeColor = color >= 0 ? color : activeColor; }
     void setHandForTest(int side, List<Card> cards) { hands.set(side, new ArrayList<>(cards)); }
+    void setDeckForTest(List<Card> cards, List<Card> discarded) { deck.clear(); deck.addAll(cards); discard.clear(); discard.addAll(discarded); }
     public Object getViewState(int viewerSide) {
         Map<String,Object> view = new LinkedHashMap<>();
         view.put("kind", "UNO"); view.put("turn", turn); view.put("over", over); view.put("winner", winner);
-        view.put("deckLeft", deck.size()); view.put("activeColor", activeColor); view.put("unoPendingSide", unoPendingSide); view.put("activeColorLabel", new String[]{"红","黄","绿","蓝"}[activeColor]); view.put("direction", direction); view.put("pendingDraw", pendingDraw);
+        view.put("deckLeft", deck.size()); view.put("discardLeft", discard.size()); view.put("activeColor", activeColor); view.put("drawnPendingSide", drawnPendingSide); view.put("drawnCardIndex", drawnCardIndex); view.put("unoPendingSide", unoPendingSide); view.put("unoCatchable", unoPendingSide != 0); view.put("activeColorLabel", new String[]{"红","黄","绿","蓝"}[activeColor]); view.put("direction", direction); view.put("pendingDraw", pendingDraw);
         Map<String,Object> t = new LinkedHashMap<>(); t.put("color", top.color); t.put("value", top.value); t.put("label", top.label()); view.put("top", t);
         List<Map<String,Object>> ps = new ArrayList<>();
         for (int s = 1; s <= count; s++) {
-            Map<String,Object> p = new LinkedHashMap<>(); p.put("side", s); p.put("name", names[s]); p.put("handCount", hands.get(s).size());
+            Map<String,Object> p = new LinkedHashMap<>(); p.put("side", s); p.put("name", names[s]); p.put("handCount", hands.get(s).size()); p.put("score", roundScores[s]);
             if (s == viewerSide) {
                 List<Map<String,Object>> h = new ArrayList<>();
                 for (int i = 0; i < hands.get(s).size(); i++) { Card c = hands.get(s).get(i); Map<String,Object> x = new LinkedHashMap<>(); x.put("index", i); x.put("color", c.color); x.put("value", c.value); x.put("label", c.label()); x.put("special", c.special()); x.put("playable", playable(c)); h.add(x); }
@@ -163,6 +248,10 @@ public class UnoBattleEngine implements GameEngine {
         view.put("players", ps); view.put("log", new ArrayList<>(log.subList(Math.max(0, log.size() - 12), log.size()))); return view;
     }
 }
+
+
+
+
 
 
 

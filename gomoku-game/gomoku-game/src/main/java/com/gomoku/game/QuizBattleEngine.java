@@ -66,6 +66,7 @@ public class QuizBattleEngine implements GameEngine {
     private Integer winner;
 
     private final int[] score = new int[3];      // 下标 1、2
+    private final int[] streak = new int[3];     // 连续答对次数
     private final int[] answers = new int[3];    // 本回合已提交的选项，-1 = 未提交
     /** 当前题号（0-based） */
     private int roundIndex = 0;
@@ -101,6 +102,8 @@ public class QuizBattleEngine implements GameEngine {
         winner = null;
         score[1] = 0;
         score[2] = 0;
+        streak[1] = 0;
+        streak[2] = 0;
         answers[1] = -1;
         answers[2] = -1;
         roundIndex = 0;
@@ -302,8 +305,11 @@ public class QuizBattleEngine implements GameEngine {
         StringBuilder sb = new StringBuilder("答案：" + q.options[q.correctIndex] + " — ");
         for (int side = 1; side <= 2; side++) {
             boolean right = answers[side] == q.correctIndex;
-            score[side] = Math.max(0, score[side] + (right ? SCORE_CORRECT : SCORE_WRONG));
+            int bonus = right && streak[side] > 0 ? 5 : 0;
+            if (right) streak[side]++; else streak[side] = 0;
+            score[side] = Math.max(0, score[side] + (right ? SCORE_CORRECT + bonus : SCORE_WRONG));
             sb.append(nameOf(side)).append(right ? " 答对" : " 答错");
+            if (right && bonus > 0) sb.append("（连击 +").append(bonus).append("）");
             if (side == 1) sb.append("，");
         }
         log.add(sb.toString());
@@ -464,6 +470,7 @@ public class QuizBattleEngine implements GameEngine {
             m.put("side", side);
             m.put("name", nameOf(side));
             m.put("score", score[side]);
+            m.put("streak", streak[side]);
             m.put("answered", answers[side] >= 0);
 
             // 揭晓前只让自己的选择可见；揭晓后双方选择都公开

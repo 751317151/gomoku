@@ -7,6 +7,22 @@ import java.util.concurrent.ThreadLocalRandom;
 public class HighCardAI implements GameAI {
     static final HighCardAI INSTANCE = new HighCardAI();
     @Override @SuppressWarnings("unchecked")
+    public MoveCommand decide(GameEngine engine, int side, int difficulty) {
+        Map<String, Object> view = (Map<String, Object>) engine.getViewState(side);
+        for (Map<String, Object> player : (List<Map<String, Object>>) view.get("players")) {
+            if (((Number) player.get("side")).intValue() != side || Boolean.TRUE.equals(player.get("answered"))
+                    || !Boolean.TRUE.equals(player.get("active"))) continue;
+            List<Integer> hand = (List<Integer>) player.get("hand");
+            if (hand == null || hand.isEmpty()) return null;
+            if (Boolean.TRUE.equals(player.get("aceAvailable")) && difficulty >= 6 && hand.size() <= 3) {
+                return MoveCommand.withTarget(HighCardEngine.ACE_ACTION, 1, Collections.max(hand));
+            }
+            int card = difficulty >= 6 ? Collections.max(hand) : hand.get(ThreadLocalRandom.current().nextInt(hand.size()));
+            return MoveCommand.action(card);
+        }
+        return null;
+    }
+    @Override @SuppressWarnings("unchecked")
     public int chooseAction(GameEngine engine, int side, int difficulty) {
         Map<String, Object> view = (Map<String, Object>) engine.getViewState(side);
         for (Map<String, Object> player : (List<Map<String, Object>>) view.get("players")) {

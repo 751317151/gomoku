@@ -21,8 +21,12 @@ public enum GameType {
     NIM("取石子", 0, 0, false),
     /** 答题对战：同一题双方各自作答，提交前互相看不到选择 */
     QUIZ("答题对战", 0, 0, false),
+    /** 骰子竞速：2–8 人同时选择策略并掷骰，六轮累计得分 */
+    DICE_RACE("骰子竞速", 0, 0, false, 2, 8, 4),
+    /** 宝石拍卖：2–8 人同时暗投金币，价高者获得宝石分数 */
+    GEM_AUCTION("宝石拍卖", 0, 0, false, 2, 8, 4),
     HIGH_CARD("比大小", 0, 0, false, 2, 8, 4),
-    UNO("UNO 对战", 0, 0, false, 2, 4, 2);
+    UNO("UNO 对战", 0, 0, false, 2, 8, 4);
 
     private final String displayName;
     private final int rows;

@@ -6,11 +6,15 @@ $taskRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $taskRoot
 try {
     $taskPom = 'gomoku-game/gomoku-game/pom.xml'
-    mvn -q -f $taskPom test
+    & mvn -q -f $taskPom test
+    if ($LASTEXITCODE -ne 0) { throw "Maven tests failed with exit code $LASTEXITCODE" }
 
     $taskJsFiles = @('gomoku-game/gomoku-game/src/main/resources/static/app.js') +
         @(Get-ChildItem 'gomoku-game/gomoku-game/docs/smoke' -Filter '*.mjs' -File | ForEach-Object { $_.FullName })
-    foreach ($taskFile in $taskJsFiles) { node --check $taskFile }
+    foreach ($taskFile in $taskJsFiles) {
+        & node --check $taskFile
+        if ($LASTEXITCODE -ne 0) { throw "JavaScript syntax check failed: $taskFile" }
+    }
 
     $taskIndex = Get-Content 'gomoku-game/gomoku-game/src/main/resources/static/index.html' -Raw
     $taskVersions = @([regex]::Matches($taskIndex, '\?v=([0-9]+)') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)

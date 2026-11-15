@@ -159,6 +159,8 @@ public class GameRoom {
             case CARD:     return new CardBattleEngine();
             case NIM:      return new NimBattleEngine();
             case QUIZ:     return new QuizBattleEngine();
+            case DICE_RACE:return new DiceRaceEngine();
+            case GEM_AUCTION:return new GemAuctionEngine();
             case GOMOKU:
             default:       return new GomokuBoard();
         }
@@ -176,6 +178,8 @@ public class GameRoom {
             case CARD:     return CardAI.INSTANCE;
             case NIM:      return NimAI.INSTANCE;
             case QUIZ:     return QuizAI.INSTANCE;
+            case DICE_RACE:return DiceRaceAI.INSTANCE;
+            case GEM_AUCTION:return GemAuctionAI.INSTANCE;
             case GOMOKU:
             default:       return GomokuAIAdapter.INSTANCE;
         }
@@ -453,9 +457,12 @@ public class GameRoom {
             int previousTurn = engine.getCurrentTurn();
             // 回合归属校验。
             // 同时行动中 currentPlayer 只是兼容字段，具体待提交状态由引擎校验。
+            boolean unoCatch = engine instanceof UnoBattleEngine
+                    && command.hasAction()
+                    && command.getAction() == UnoBattleEngine.CATCH_UNO_ACTION;
             if (engine.simultaneousTurn()) {
                 if (!players.contains(player)) return false;
-            } else {
+            } else if (!unoCatch) {
                 if (!player.getId().equals(currentPlayer.getId())) return false;
                 if (player.getStone() != currentPlayer.getStone()) return false;
             }

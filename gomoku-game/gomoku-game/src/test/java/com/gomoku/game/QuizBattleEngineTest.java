@@ -79,6 +79,19 @@ class QuizBattleEngineTest {
     }
 
     @Test
+    void consecutiveCorrectAnswersGainComboBonus() {
+        for (int round = 0; round < 2; round++) {
+            int correct = engine.correctIndexForAi();
+            assertTrue(engine.applyMove(MoveCommand.action(correct), 1));
+            assertTrue(engine.applyMove(MoveCommand.action((correct + 1) % 4), 2));
+        }
+        assertEquals(25, engine.getScore(1), "第二次连续答对应获得 10 + 5 连击奖励");
+        Map<String, Object> view = (Map<String, Object>) engine.getViewState(1);
+        List<Map<String, Object>> players = (List<Map<String, Object>>) view.get("players");
+        assertEquals(2, players.get(0).get("streak"));
+    }
+
+    @Test
     void wrongAnswerNeverGoesBelowZero() {
         int correct = engine.correctIndexForAi();
         int wrong = (correct + 1) % 4;

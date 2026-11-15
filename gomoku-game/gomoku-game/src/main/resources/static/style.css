@@ -2154,6 +2154,21 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
   .board-container, .board-wrapper, .rpg-panel, .card-panel, .nim-panel, .quiz-panel { max-width: 100%; min-width: 0; box-sizing: border-box; }
   .high-card-panel { padding: 18px; border-radius: 12px; min-height: 400px; }
 }
+
+.dice-race-panel { display:flex; flex-direction:column; gap:14px; padding:20px; min-height:420px; }
+.dice-race-sub { color:var(--text-dim); text-align:center; font-size:.9rem; }
+.dice-choices { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+.gem-bids { display:grid; grid-template-columns:repeat(6,1fr); gap:8px; }
+.dice-choice { display:flex; flex-direction:column; gap:6px; padding:14px 10px; border:1px solid rgba(255,255,255,.12); border-radius:12px; background:rgba(255,255,255,.04); color:var(--text); cursor:pointer; transition:transform .15s,border-color .15s,background .15s; }
+.dice-choice:hover:not(:disabled) { transform:translateY(-2px); border-color:var(--accent2); background:rgba(255,255,255,.08); }
+.dice-choice:disabled { opacity:.55; cursor:default; }
+.dice-choice.mine { border-color:var(--accent2); background:rgba(80,180,255,.14); }
+.dice-choice strong { font-size:1rem; }
+.dice-choice small { color:var(--text-dim); line-height:1.35; }
+.dice-player-row { display:flex; justify-content:space-between; align-items:center; padding:9px 12px; border-bottom:1px solid rgba(255,255,255,.08); color:var(--text); }
+.dice-player-row span { color:var(--text-dim); font-size:.86rem; }
+@media (max-width:600px) { .dice-choices { grid-template-columns:1fr; } }
+@media (max-width:600px) { .gem-bids { grid-template-columns:repeat(3,1fr); } }
 @media (max-width: 600px) {
   body { padding-bottom: env(safe-area-inset-bottom); }
   header { flex-wrap: wrap; gap: 8px; }

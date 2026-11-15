@@ -807,6 +807,7 @@ function renderNimPanel() {
   const v = rpgView;
   const myTurn = gameState === 'PLAYING' && !v.over && currentTurn === myStone && myId !== 'SPECTATOR';
   const unoPending = v.unoPendingSide === myStone;
+  const drawnPending = v.drawnPendingSide === myStone;
   // 三堆石子
   pilesEl.innerHTML = v.piles.map(function (n, i) {
     const selectable = myTurn && n > 0;
@@ -909,8 +910,10 @@ function renderQuizPanel() {
   // 题号 + 主题：主题让玩家知道「这局在考什么」，也避免同主题连出时显得重复
   const cat = (v.question && v.question.category) ? ' · ' + v.question.category : '';
   progressEl.textContent = '第 ' + v.round + ' / ' + v.totalRounds + ' 题' + cat;
-  scoreEl.textContent = (v.players[0] ? v.players[0].score : 0) + ' : '
-    + (v.players[1] ? v.players[1].score : 0);
+  scoreEl.textContent = (v.players[0] ? v.players[0].score : 0) + ' 分'
+    + (v.players[0] && v.players[0].streak ? ' · 连击 ' + v.players[0].streak : '')
+    + '  :  ' + (v.players[1] ? v.players[1].score : 0) + ' 分'
+    + (v.players[1] && v.players[1].streak ? ' · 连击 ' + v.players[1].streak : '');
 
   if (v.question) {
     qEl.textContent = v.question.text;
@@ -974,6 +977,65 @@ function renderQuizPanel() {
     logEl.scrollTop = logEl.scrollHeight;
   }
 }
+
+// 骰子竞速：所有玩家同时选策略，服务端揭晓后更新积分。
+function renderDiceRacePanel() {
+  const progress = document.getElementById('dice-progress');
+  const score = document.getElementById('dice-score');
+  const status = document.getElementById('dice-status');
+  const choicesEl = document.getElementById('dice-choices');
+  const playersEl = document.getElementById('dice-players');
+  const logEl = document.getElementById('dice-log');
+  if (!progress || !choicesEl || !rpgView || !rpgView.players) return;
+  const v = rpgView;
+  progress.textContent = '第 ' + v.round + ' / ' + v.totalRounds + ' 轮';
+  score.textContent = (v.players || []).map(p => p.name + ' ' + p.score).join('  ·  ');
+  const me = v.players.find(p => p.side === myStone);
+  const waiting = !v.over && myStone > 0 && me && !me.answered && myId !== 'SPECTATOR';
+  status.textContent = v.over ? '本局结束' : waiting ? '选择你的策略，所有人提交后一起揭晓' : '等待其他玩家选择…';
+  const labels = ['稳健', '冒险', '追击'];
+  const desc = ['1d6，稳定拿分', '2d6，掷出 1 会爆掉', '落后时 +3，领先时 -1'];
+  choicesEl.innerHTML = labels.map((label, i) => {
+    let cls = 'dice-choice';
+    if (v.revealed) cls += ' revealed';
+    if (me && me.choice === i) cls += ' mine';
+    return '<button class="' + cls + '" data-choice="' + i + '"' + (waiting ? '' : ' disabled') + '>'
+      + '<strong>' + label + '</strong><small>' + desc[i] + '</small></button>';
+  }).join('');
+  playersEl.innerHTML = v.players.map(p => '<div class="dice-player-row"><b>' + escHtml(p.name) + '</b><span>'
+    + p.score + ' 分' + (p.lastRoundScore != null ? '（上轮 +' + p.lastRoundScore + '，掷出 ' + p.lastRoll + '）' : '')
+    + (p.answered ? ' · 已选' : '') + '</span></div>').join('');
+  logEl.innerHTML = (v.log || []).map(line => '<div>' + escHtml(line) + '</div>').join('');
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function renderGemAuctionPanel() {
+  const progress = document.getElementById('gem-progress'), score = document.getElementById('gem-score');
+  const status = document.getElementById('gem-status'), bidsEl = document.getElementById('gem-bids');
+  const playersEl = document.getElementById('gem-players'), logEl = document.getElementById('gem-log');
+  if (!progress || !bidsEl || !rpgView || !rpgView.players) return;
+  const v = rpgView, me = v.players.find(p => p.side === myStone);
+  progress.textContent = '第 ' + v.round + ' / ' + v.totalRounds + ' 轮';
+  score.textContent = '本轮宝石 ' + v.gemValue + ' 分';
+  const waiting = !v.over && myStone > 0 && me && !me.answered && myId !== 'SPECTATOR';
+  status.textContent = v.over ? '本局结束' : waiting ? '选择出价，所有人提交后揭晓' : '等待其他玩家暗投…';
+  bidsEl.innerHTML = Array.from({length: 11}, (_, i) => '<button class="dice-choice gem-bid" data-bid="' + i + '"' + (waiting && i <= (me?.coins || 0) ? '' : ' disabled') + '><strong>' + i + '</strong><small>金币</small></button>').join('');
+  playersEl.innerHTML = v.players.map(p => '<div class="dice-player-row"><b>' + escHtml(p.name) + '</b><span>' + p.gems + ' 宝石分 · ' + p.coins + ' 金币' + (p.answered ? ' · 已出价' : '') + ((v.revealed && p.bid != null) ? ' · 出价 ' + p.bid : '') + '</span></div>').join('');
+  logEl.innerHTML = (v.log || []).map(line => '<div>' + escHtml(line) + '</div>').join(''); logEl.scrollTop = logEl.scrollHeight;
+}
+
+document.getElementById('gem-bids').addEventListener('click', function (e) {
+  const btn = e.target.closest ? e.target.closest('.gem-bid') : null;
+  if (!btn || btn.disabled) return;
+  const bid = parseInt(btn.dataset.bid, 10); if (!isNaN(bid)) sendAction(bid);
+});
+
+document.getElementById('dice-choices').addEventListener('click', function (e) {
+  const btn = e.target.closest ? e.target.closest('.dice-choice') : null;
+  if (!btn || btn.disabled) return;
+  const choice = parseInt(btn.dataset.choice, 10);
+  if (!isNaN(choice)) sendAction(choice);
+});
 
 // 选项点击 -> 按选项下标提交（action 通道）
 document.getElementById('quiz-options').addEventListener('click', function (e) {
@@ -1286,7 +1348,7 @@ function copyInvite() {
   if (!roomId) return;
   const code = roomId.replace(/^ROOM-/, '');
   const url = location.origin + '/?room=' + encodeURIComponent(code) + '&game=' + currentGameType;
-  const text = '来下棋：房间号 ' + code + '\\n' + url;
+  const text = '来下棋：房间号 ' + code + '\n' + url;
   const done = function () { setStatusMsg('邀请已复制，发给好友即可', 'waiting'); };
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text); done(); });
@@ -1375,11 +1437,17 @@ function sendMove(row, col, fromRow, fromCol) {
 // 非棋盘玩法：按行动序号出招（RPG 技能栏按下标发送）
 function sendAction(actionIndex) {
   if (gameState !== 'PLAYING' || myStone <= 0 || myId === 'SPECTATOR') return;
-  if (currentGameType === 'QUIZ' || currentGameType === 'HIGH_CARD') {
+  if (currentGameType === 'QUIZ' || currentGameType === 'HIGH_CARD' || currentGameType === 'DICE_RACE' || currentGameType === 'GEM_AUCTION') {
     const mine = rpgView?.players?.find(p => p.side === myStone);
     if (!mine || mine.answered || mine.active === false || rpgView.over) return;
   } else if (currentTurn !== myStone) return;
   send({ type: 'MOVE', action: actionIndex, moveSeq });
+}
+
+function sendUnoCatch() {
+  if (gameState !== 'PLAYING' || myStone <= 0 || myId === 'SPECTATOR') return;
+  if (currentGameType !== 'UNO' || !rpgView || !rpgView.unoCatchable || rpgView.unoPendingSide === myStone) return;
+  send({ type: 'MOVE', action: 103, moveSeq });
 }
 
 function sendPass() {
@@ -2422,7 +2490,7 @@ function updateTurnStatus() {
     if (el) el.style.display = 'none';
   });
 
-  const simultaneous = currentGameType === 'HIGH_CARD' || currentGameType === 'QUIZ';
+  const simultaneous = currentGameType === 'HIGH_CARD' || currentGameType === 'QUIZ' || currentGameType === 'DICE_RACE' || currentGameType === 'GEM_AUCTION';
   const pendingSides = simultaneous && rpgView?.players
     ? rpgView.players.filter(p => p.active !== false && !p.answered).map(p => p.side)
     : [currentTurn];
@@ -2701,6 +2769,8 @@ const GAME_TYPE_LABEL = {
   HIGH_CARD: '比大小',
   UNO: 'UNO 对战',
   QUIZ: '答题对战'
+  ,DICE_RACE: '骰子竞速'
+  ,GEM_AUCTION: '宝石拍卖'
 };
 
 function gameTypeLabel(type) {
@@ -3065,20 +3135,33 @@ setInterval(function () {
 
 
 function renderUnoPanel() {
-  const topEl = document.getElementById('uno-top'), playersEl = document.getElementById('uno-players'), handEl = document.getElementById('uno-hand'), logEl = document.getElementById('uno-log'), drawBtn = document.getElementById('uno-draw');
+  const topEl = document.getElementById('uno-top'), playersEl = document.getElementById('uno-players'), handEl = document.getElementById('uno-hand'), logEl = document.getElementById('uno-log'), drawBtn = document.getElementById('uno-draw'), drawEndBtn = document.getElementById('uno-draw-end'), catchBtn = document.getElementById('uno-catch');
   if (!topEl || !playersEl || !handEl || !logEl) return;
   const v = rpgView;
   if (!v || !v.players) { topEl.textContent = '等待开始…'; playersEl.innerHTML = ''; handEl.innerHTML = ''; logEl.innerHTML = ''; return; }
   const mine = v.players.find(p => p.side === myStone);
   const myTurn = gameState === 'PLAYING' && !v.over && currentTurn === myStone && myId !== 'SPECTATOR';
   const unoPending = v.unoPendingSide === myStone;
-  topEl.textContent = unoPending ? '你只剩 1 张牌，请喊 UNO' : (v.over ? '本局结束' : (myTurn ? '你的回合' : '轮到 ' + ((v.players.find(p => p.side === v.turn) || {}).name || ('第 ' + v.turn + ' 方'))) + ' · 顶牌：' + (v.top?.label || '—') + (v.pendingDraw ? ' · 需摸 ' + v.pendingDraw + ' 张' : '') + (v.direction < 0 ? ' · 逆时针' : ' · 顺时针'));
-  playersEl.innerHTML = v.players.map(p => '<span class="score-chip">' + escHtml(p.name) + ' · 手牌 ' + p.handCount + (p.side === v.turn && !v.over ? ' · 行动中' : '') + '</span>').join('');
+  const drawnPending = v.drawnPendingSide === myStone;
+  let statusText;
+  if (drawnPending) statusText = '摸到了可出的牌：请选择立即打出或结束摸牌';
+  else if (unoPending) statusText = '你只剩 1 张牌，请喊 UNO';
+  else if (v.unoCatchable && v.unoPendingSide !== myStone) statusText = '有人忘了喊 UNO，可以抓牌';
+  else if (v.over) statusText = '本局结束';
+  else statusText = (myTurn ? '你的回合' : '轮到 ' + ((v.players.find(p => p.side === v.turn) || {}).name || ('第 ' + v.turn + ' 方')))
+    + ' · 顶牌：' + (v.top?.label || '—')
+    + (v.pendingDraw ? ' · 需摸 ' + v.pendingDraw + ' 张' : '')
+    + (v.discardLeft ? ' · 弃牌 ' + v.discardLeft : '')
+    + (v.direction < 0 ? ' · 逆时针' : ' · 顺时针');
+  topEl.textContent = statusText;
+  playersEl.innerHTML = v.players.map(p => '<span class="score-chip">' + escHtml(p.name) + ' · 手牌 ' + p.handCount + (p.score ? ' · ' + p.score + '分' : '') + (p.side === v.turn && !v.over ? ' · 行动中' : '') + '</span>').join('');
   const hand = (mine && mine.hand) || [];
   handEl.innerHTML = hand.map(c => '<button class="number-card" data-uno-index="' + c.index + '" ' + ((!myTurn || !c.playable) ? 'disabled' : '') + '><span>' + escHtml(c.label) + '</span></button>').join('');
-  handEl.querySelectorAll('[data-uno-index]').forEach(el => el.addEventListener('click', () => { const idx = Number(el.dataset.unoIndex); const card = hand.find(c => c.index === idx); if (card && card.color < 0) { const chosen = Number(window.prompt(card.value === 14 ? '万能 +4 选择颜色：0 红 / 1 黄 / 2 绿 / 3 蓝' : '万能牌选择颜色：0 红 / 1 黄 / 2 绿 / 3 蓝', String(v.activeColor || 0))); if (chosen >= 0 && chosen < 4) send({ type: 'MOVE', action: idx, targetSide: 1, targetIndex: chosen, moveSeq }); } else sendAction(idx); }));
-  if (drawBtn) drawBtn.disabled = !myTurn || unoPending || !!(mine && mine.hand && mine.hand.some(c => c.playable));
+  handEl.querySelectorAll('[data-uno-index]').forEach(el => el.addEventListener('click', () => { const idx = Number(el.dataset.unoIndex); const card = hand.find(c => c.index === idx); if (card && card.color < 0) { const chosen = Number(window.prompt(card.value === 14 ? '万能 +4 选择颜色：0 红 / 1 黄 / 2 绿 / 3 蓝' : '万能牌选择颜色：0 红 / 1 黄 / 2 绿 / 3 蓝', String(v.activeColor || 0))); if (chosen >= 0 && chosen < 4) send({ type: 'MOVE', action: idx, targetSide: 1, targetIndex: chosen, moveSeq }); } else if (card && card.value === 7) { const target = Number(window.prompt('7 交换手牌：输入目标座位号（1-' + v.players.length + '）', '2')); if (target >= 1 && target <= v.players.length && target !== myStone) send({ type: 'MOVE', action: idx, targetSide: 2, targetIndex: target, moveSeq }); } else sendAction(idx); }));
+  if (drawBtn) drawBtn.disabled = !myTurn || unoPending || drawnPending || !!(mine && mine.hand && mine.hand.some(c => c.playable));
+  if (drawEndBtn) drawEndBtn.disabled = !drawnPending;
   const unoButton = document.getElementById('uno-call'); if (unoButton) unoButton.disabled = !unoPending;
+  if (catchBtn) catchBtn.disabled = !v.unoCatchable || unoPending || v.over || myId === 'SPECTATOR';
   logEl.innerHTML = (v.log || []).map(line => '<div>' + escHtml(line) + '</div>').join('');
 }
 function renderHighCardPanel() {
@@ -3086,12 +3169,18 @@ function renderHighCardPanel() {
   if (!rpgView) { panel.innerHTML = '<div class="table-intro">♠<h2>比大小</h2><p>2–8 人 · 同时暗选 · 五轮定胜负</p><p>邀请朋友，或添加电脑填满座位。</p></div>'; return; }
   const view = rpgView;
   const me = view.players.find(p => p.side === myStone);
-  panel.innerHTML = `<div class="table-heading"><span>THE CARD TABLE</span><h2>比大小 <small>第 ${view.round} / 5 轮</small></h2><p>每轮最大者得 1 分 · 并列均得分</p></div>
-    <div class="table-seats">${view.players.map(p => `<div class="table-seat ${p.side === myStone ? 'is-you' : ''} ${p.active ? '' : 'is-out'}"><span>${escHtml(p.name)}</span><strong>${p.score}<small> 分</small></strong><span>${!p.active ? '已退出' : p.answered ? '已暗选' : '正在选牌'}</span>${p.lastChoice > 0 ? '<span>上轮 ' + p.lastChoice + '</span>' : ''}</div>`).join('')}</div>
+  panel.innerHTML = `<div class="table-heading"><span>THE CARD TABLE</span><h2>比大小 <small>第 ${view.round} / 5 轮</small></h2><p>${view.roundPoints === 2 ? '决胜轮：最大牌得 2 分 · 并列均得分' : '本轮最大牌得 1 分 · 并列均得分'}</p></div>
+    <div class="table-seats">${view.players.map(p => `<div class="table-seat ${p.side === myStone ? 'is-you' : ''} ${p.active ? '' : 'is-out'}"><span>${escHtml(p.name)}</span><strong>${p.score}<small> 分</small></strong><span>${p.streak ? '连击 ' + p.streak : '暂无连击'}</span><span>${!p.active ? '已退出' : p.answered ? '已暗选' : '正在选牌'}</span>${p.lastChoice > 0 ? '<span>上轮 ' + p.lastChoice + (p.lastAce ? ' · 王牌' : '') + '</span>' : ''}</div>`).join('')}</div>
     <div class="hand-caption">${!me ? '观战中 · 隐藏选择在本轮结束后揭晓' : !me.active ? '你已退出本局，可以继续观战' : me.answered ? '已提交，等待其他玩家' : '选择一张牌，本轮结束后一起揭晓'}</div>
     <div class="high-card-hand">${(me?.hand || []).map(card => `<button class="number-card" data-card="${card}" ${gameState !== 'PLAYING' || me.answered || !me.active ? 'disabled' : ''} aria-label="出牌 ${card}"><span>♠</span>${card}</button>`).join('')}</div>
+    ${me && me.aceAvailable && gameState === 'PLAYING' && !me.answered ? '<button class="btn-endturn" id="high-card-ace">使用王牌（本局一次，牌值翻倍）</button>' : ''}
     <div class="table-log">${(view.log || []).map(line => '<p>' + escHtml(line) + '</p>').join('')}</div>`;
   panel.querySelectorAll('[data-card]').forEach(button => button.onclick = () => send({ type: 'MOVE', action: Number(button.dataset.card) }));
+  const aceButton = panel.querySelector('#high-card-ace');
+  if (aceButton) aceButton.onclick = () => {
+    const card = Number(window.prompt('选择要翻倍的手牌（1-10）：', '10'));
+    if (card >= 1 && card <= 10 && me.hand.includes(card)) send({ type: 'MOVE', action: 100, targetSide: 1, targetIndex: card, moveSeq });
+  };
 }
 
 document.getElementById('player-name').value = readPreference('gomoku_name', '');
@@ -3118,6 +3207,10 @@ async function requestCoach() {
   } catch (_) { answer.textContent = '讲解暂不可用，请稍后重试'; }
   finally { button.disabled = !coachAvailable; }
 }
+
+
+
+
 
 
 
