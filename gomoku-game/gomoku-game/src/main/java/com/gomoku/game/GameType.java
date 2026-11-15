@@ -21,7 +21,8 @@ public enum GameType {
     NIM("取石子", 0, 0, false),
     /** 答题对战：同一题双方各自作答，提交前互相看不到选择 */
     QUIZ("答题对战", 0, 0, false),
-    HIGH_CARD("比大小", 0, 0, false, 2, 8, 4);
+    HIGH_CARD("比大小", 0, 0, false, 2, 8, 4),
+    UNO("UNO 对战", 0, 0, false, 2, 4, 2);
 
     private final String displayName;
     private final int rows;
@@ -77,3 +78,4 @@ public enum GameType {
         }
     }
 }
+

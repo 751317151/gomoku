@@ -933,5 +933,14 @@
     drawGhost() {}, isLegal() { return false; }, applyEffects() {}, legalMoves() { return []; }
   };
 
-  window.GameModules = { HIGH_CARD, GOMOKU, REVERSI, GO9, XIANGQI, CONNECT4, RPG, CARD, NIM, QUIZ };
+  const UNO = {
+    name: 'UNO 对战', html: true, panel: 'uno-panel', render: 'renderUnoPanel',
+    minPlayers: 2, maxPlayers: 4, defaultPlayers: 2, stepTime: 30, totalTime: 300, icon: '🃏',
+    footer: '2–4 人 · 按颜色或数字出牌 · 无牌可出时摸牌',
+    actionLabels: ['摸一张'],
+    initialBoard() { return null; }, draw() {}, hitTest() { return null; }, drawGhost() {}, isLegal() { return false; }, applyEffects() {}, legalMoves() { return []; }
+  };
+
+  window.GameModules = { HIGH_CARD, GOMOKU, REVERSI, GO9, XIANGQI, CONNECT4, RPG, CARD, NIM, QUIZ, UNO };
 })();
+

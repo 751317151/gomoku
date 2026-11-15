@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>棋战大厅 · 棋类与卡牌对战</title>
-<link rel="stylesheet" href="style.css?v=38">
+<link rel="stylesheet" href="style.css?v=39">
 </head>
 <body>
 
@@ -280,6 +280,14 @@
       </div>
 
       <div id="high-card-panel" class="high-card-panel" style="display:none" aria-live="polite"></div>
+      <div id="uno-panel" class="high-card-panel" style="display:none" aria-live="polite">
+        <div class="table-heading"><span>THE CARD TABLE</span><h2>UNO 对战</h2><p>按颜色或数字出牌 · 无牌可出时摸一张</p></div>
+        <div id="uno-top" class="quiz-question">等待开始…</div>
+        <div id="uno-players" class="high-card-score"></div>
+        <div id="uno-hand" class="high-card-hand"></div>
+        <div class="card-actions-row"><button class="btn-endturn" id="uno-draw" onclick="sendAction(100)">摸一张</button><button class="btn-endturn" id="uno-call" onclick="sendAction(101)" disabled>喊 UNO</button><span id="uno-hint"></span></div>
+        <div id="uno-log" class="quiz-log"></div>
+      </div>
       <!-- 取石子博弈面板 -->
       <div id="nim-panel" class="nim-panel" style="display:none">
         <div class="nim-title" id="nim-title">取石子</div>
@@ -353,7 +361,11 @@
 
 </main>
 
-<script src="js/games.js?v=38"></script>
-<script src="app.js?v=38"></script>
+<script src="js/games.js?v=39"></script>
+<script src="app.js?v=39"></script>
 </body>
 </html>
+
+
+
+

@@ -150,6 +150,7 @@ public class GameRoom {
     private static GameEngine createEngine(GameType type) {
         switch (type) {
             case HIGH_CARD: return new HighCardEngine();
+            case UNO:       return new UnoBattleEngine();
             case REVERSI:  return new ReversiBoard();
             case GO9:      return new GoBoard();
             case XIANGQI:  return new XiangqiBoard();
@@ -166,6 +167,7 @@ public class GameRoom {
     private GameAI aiFor() {
         switch (gameType) {
             case HIGH_CARD: return HighCardAI.INSTANCE;
+            case UNO:       return UnoAI.INSTANCE;
             case REVERSI:  return ReversiAI.INSTANCE;
             case GO9:      return GoAI.INSTANCE;
             case XIANGQI:  return XiangqiAI.INSTANCE;
@@ -1432,3 +1434,4 @@ public class GameRoom {
     public boolean isFull() { return players.size() >= targetPlayers; }
     public int getAiDifficulty() { return aiDifficulty; }
 }
+

@@ -4,7 +4,7 @@
 
 `GameType.resolvePlayerCount(0)` 使用玩法默认人数，超出玩法范围直接拒绝。`GameRoom` 的目标人数在建房后固定，达到目标人数自动开局；不能中途插入参战玩家。`RoomManager` 只匹配同玩法、同目标人数的公共等待房；房号加入沿用目标房间设置。
 
-旧玩法全部声明为 2–2；新玩法 HIGH_CARD 声明为 2–8，默认 4。双人 `GameEngine.configurePlayers` 默认拒绝非 2 人。多人引擎必须实现人数配置、轮次、`forfeit` 淘汰和 `getWinningSides` 结果，房间不能把第一位对手当作多人唯一胜者。
+旧玩法全部声明为 2–2；新玩法 HIGH_CARD 声明为 2–8，默认 4；UNO 声明为 2–4，默认 2。双人 `GameEngine.configurePlayers` 默认拒绝非 2 人。多人引擎必须实现人数配置、轮次、`forfeit` 淘汰和 `getWinningSides` 结果，房间不能把第一位对手当作多人唯一胜者。
 
 `stone` 为兼容保留的协议字段，现在语义为从 1 起的座位号；0 为观众。每局轮换先手座位，已有双人黑白交换行为保持一致。卡牌的 targetSide 是其自身双人规则，未推广成多人卡牌。
 
@@ -64,5 +64,11 @@ AI 导师通过本地 HTTP 模型模拟测试验证消息格式、只发送当�
 - 房间数据与 GAME_MOVE 增加公开 `actionVersion`，由房间号、对局次数和行动阶段组成。同时行动只绑定整轮，其他座位先提交不会使当前玩家请求失效；顺序行动绑定 moveSeq，防止旧手牌下标、旧攻击或旧结束回合在新局面生效。重开后即使序号回到零，旧操作仍会失效。
 - 网页 MOVE / PASS / END_TURN 自动携带版本，使用 JSON 保留字段；服务端在房间写锁内校验版本与参战资格。未生效操作返回当前连接所属玩家裁剪后的 GAME_SYNC，恢复版本、手数与计时，页面不需要刷新。观众仍为公开视角。
 - 保留未携带版本的旧 JSON/二进制协议兼容；旧客户端仍依赖原有规则与棋盘序号校验，不具备新增过期操作保护。actionVersion 为公开并发校验值，不是身份凭证。
-- 新增 ActionVersionTest 8 项与 smoke-action-version.mjs。259 项测试零失败，Maven package 通过；真实 WS 过期操作、重连、独立计时、8 人整局、答题八题、卡牌整局及旧序号错位恢复通过。修复旧序号冒烟重复处理 WAITING 而重复添加 AI 的脚本问题。
+- 新增 ActionVersionTest 8 项与 smoke-action-version.mjs。261 项测试零失败，Maven package 通过；真实 WS 过期操作、重连、独立计时、8 人整局、答题八题、卡牌整局及旧序号错位恢复通过。修复旧序号冒烟重复处理 WAITING 而重复添加 AI 的脚本问题。
 - 320px 手机浏览器实测座位 2 在 currentTurn=1 时先答并进入第二题，四选项仍可用，无横向溢出。缓存版本 38。本轮未重新验证生产镜像与公网证书。
+
+## 2026-11-15 持续验证入口
+
+- `scripts/verify-project.ps1` 统一运行 261 项 Java 测试、所有冒烟脚本语法检查、静态缓存版本检查和两套 Compose 配置校验。
+- `.github/workflows/ci.yml` 在 `master` push 与 Pull Request 上使用 Java 11 和 Node 20 执行轻量验证；不会在 CI 中强制构建生产镜像或申请公网证书。
+
