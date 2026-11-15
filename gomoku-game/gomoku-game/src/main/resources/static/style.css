@@ -822,6 +822,14 @@
     margin-top: 2px;
   }
 
+  .daily-streak { color: var(--accent); font: 0.72rem 'JetBrains Mono', monospace; }
+  .daily-progress { display: grid; gap: 7px; padding: 8px 10px 12px; }
+  .daily-item { display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 7px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 5px; color: var(--text-dim); font-size: 0.75rem; }
+  .daily-item strong { color: var(--text); font: 0.72rem 'JetBrains Mono', monospace; }
+  .daily-item.done { border-color: var(--accent); background: rgba(212,168,67,0.08); color: var(--text); }
+  .daily-item.done strong { color: var(--accent); }
+  .daily-icon { font-size: 0.9rem; }
+
   /* ============ 最近对局列表 ============ */
   .record-panel { max-height: 360px; overflow-y: auto; }
 

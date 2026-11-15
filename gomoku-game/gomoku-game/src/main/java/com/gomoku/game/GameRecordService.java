@@ -29,6 +29,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
+import java.time.LocalDate;
+import java.time.ZoneId;
 
 /**
  * 对局记录服务 — 落盘 + 战绩查询
@@ -297,9 +299,57 @@ public class GameRecordService {
         return result;
     }
 
+    /**
+     * 面向大厅的轻量运营进度：今日完成对局、今日胜场、今日体验过的玩法数、连续活跃天数。
+     * 只按持久身份统计，避免昵称重名互相污染；AI 局不算进每日任务。
+     */
+    public synchronized Map<String, Object> getIdentityDailyProgress(String identityId) {
+        LocalDate today = LocalDate.now(ZoneId.systemDefault());
+        int todayGames = 0, todayWins = 0;
+        java.util.Set<String> todayTypes = new java.util.HashSet<>();
+        java.util.Set<LocalDate> activeDays = new java.util.HashSet<>();
+        for (GameRecord record : recent) {
+            GameRecord.Participant participant = findParticipantByIdentity(record, identityId);
+            if (participant == null || participant.isAi() || !record.isRanked()) continue;
+            LocalDate day = LocalDate.ofInstant(java.time.Instant.ofEpochMilli(record.getEndedAt()), ZoneId.systemDefault());
+            activeDays.add(day);
+            if (day.equals(today)) {
+                todayGames++;
+                if ("WIN".equals(participant.getResult())) todayWins++;
+                if (record.getGameType() != null) todayTypes.add(record.getGameType());
+            }
+        }
+        int streak = 0;
+        LocalDate cursor = today;
+        while (activeDays.contains(cursor)) { streak++; cursor = cursor.minusDays(1); }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("date", today.toString());
+        result.put("todayGames", todayGames);
+        result.put("todayWins", todayWins);
+        result.put("todayGameTypes", todayTypes.size());
+        result.put("streakDays", streak);
+        result.put("gamesGoal", 3);
+        result.put("winsGoal", 1);
+        result.put("gameTypesGoal", 2);
+        result.put("streakGoal", 3);
+        result.put("gamesDone", todayGames >= 3);
+        result.put("winsDone", todayWins >= 1);
+        result.put("gameTypesDone", todayTypes.size() >= 2);
+        result.put("streakDone", streak >= 3);
+        return result;
+    }
+
     private static GameRecord.Participant findParticipant(GameRecord record, String playerName) {
         for (GameRecord.Participant p : record.getParticipants()) {
             if (playerName.equals(p.getName())) return p;
+        }
+        return null;
+    }
+
+    private static GameRecord.Participant findParticipantByIdentity(GameRecord record, String identityId) {
+        if (identityId == null) return null;
+        for (GameRecord.Participant p : record.getParticipants()) {
+            if (identityId.equals(p.getIdentityId())) return p;
         }
         return null;
     }

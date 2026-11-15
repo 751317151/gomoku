@@ -1285,6 +1285,7 @@ function showLobby() {
   gameState = 'LOBBY';
   // 回到大厅时立刻刷新战绩（刚打完的那局应该马上出现在列表里）
   loadMyStats();
+  loadDailyProgress();
   loadRecentGames();
   loadLeaderboard();
 }
@@ -2432,6 +2433,7 @@ function handleGameOver(msg) {
   if (mod().html) drawBoard();
 
   overlay.classList.add('show');
+  loadDailyProgress();
 }
 
 function handleGameChat(msg) {
@@ -2802,6 +2804,23 @@ function loadMyStats() {
       set('my-elo', s.elo ? 'ELO ' + s.elo : 'ELO —');
     })
     .catch(() => {});
+}
+
+function loadDailyProgress() {
+  const box = document.getElementById('daily-progress');
+  const streakEl = document.getElementById('daily-streak');
+  if (!box || !guestToken) return;
+  fetch('/api/me/daily-progress', { headers: { Authorization: 'Bearer ' + guestToken } })
+    .then(r => r.ok ? r.json() : Promise.reject(new Error('unauthorized')))
+    .then(p => {
+      if (streakEl) streakEl.textContent = '连续 ' + (p.streakDays || 0) + ' 天';
+      const item = (icon, label, value, goal, done) => '<div class="daily-item ' + (done ? 'done' : '') + '"><span class="daily-icon">' + icon + '</span><span class="daily-label">' + label + '</span><strong>' + Math.min(value || 0, goal) + '/' + goal + '</strong></div>';
+      box.innerHTML = item('🎮', '完成 3 局', p.todayGames, p.gamesGoal || 3, p.gamesDone)
+        + item('🏆', '赢 1 局', p.todayWins, p.winsGoal || 1, p.winsDone)
+        + item('🧩', '体验 2 种玩法', p.todayGameTypes, p.gameTypesGoal || 2, p.gameTypesDone)
+        + item('🔥', '连续活跃 3 天', p.streakDays, p.streakGoal || 3, p.streakDone);
+    })
+    .catch(() => { box.textContent = '游客身份准备中…'; });
 }
 
 /** 套牌筛选只属于卡牌对战；切到其他页签时收起并复位，避免隐藏条件继续过滤 */

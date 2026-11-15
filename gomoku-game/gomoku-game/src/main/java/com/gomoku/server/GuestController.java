@@ -26,5 +26,12 @@ public class GuestController {
         if (id == null) return ResponseEntity.status(401).build();
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(records.getIdentityStats(id, gameType));
     }
+    @GetMapping("/api/me/daily-progress")
+    public ResponseEntity<Map<String, Object>> dailyProgress(
+            @RequestHeader(value="Authorization", required=false) String authorization) {
+        String id = guests.resolve(token(authorization));
+        if (id == null) return ResponseEntity.status(401).build();
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(records.getIdentityDailyProgress(id));
+    }
     private static String token(String header) { return header != null && header.startsWith("Bearer ") ? header.substring(7) : null; }
 }

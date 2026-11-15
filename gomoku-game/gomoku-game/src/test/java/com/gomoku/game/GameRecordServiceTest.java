@@ -7,6 +7,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.time.LocalDate;
+import java.time.ZoneId;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -21,6 +23,34 @@ import static org.junit.jupiter.api.Assertions.*;
  * 4. 落盘后可从磁盘按 ID 取回完整棋谱
  */
 class GameRecordServiceTest {
+
+    @Test
+    void dailyProgressUsesIdentityAndCountsStreak() throws Exception {
+        GameRecordService svc = newService();
+        String identity = "guest-daily";
+        long today = LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() + 3600000L;
+        long yesterday = LocalDate.now().minusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() + 3600000L;
+        svc.saveAsync(dailyRecord("TODAY-1", today, identity, "WIN", "GOMOKU"));
+        svc.saveAsync(dailyRecord("TODAY-2", today, identity, "LOSE", "REVERSI"));
+        svc.saveAsync(dailyRecord("YESTERDAY", yesterday, identity, "WIN", "GOMOKU"));
+
+        Map<String, Object> progress = svc.getIdentityDailyProgress(identity);
+        assertEquals(2, progress.get("todayGames"));
+        assertEquals(1, progress.get("todayWins"));
+        assertEquals(2, progress.get("todayGameTypes"));
+        assertEquals(2, progress.get("streakDays"));
+        assertEquals(Boolean.FALSE, progress.get("gamesDone"));
+        assertEquals(Boolean.TRUE, progress.get("winsDone"));
+    }
+
+    private static GameRecord dailyRecord(String roomId, long endedAt, String identity, String result, String gameType) {
+        GameRecord rec = new GameRecord();
+        rec.setRoomId(roomId); rec.setGameType(gameType); rec.setEndedAt(endedAt); rec.setRanked(true);
+        GameRecord.Participant p = new GameRecord.Participant("p-" + roomId, "每日玩家", 1, result, false, 1200, 1200, 0);
+        p.setIdentityId(identity);
+        rec.getParticipants().add(p);
+        return rec;
+    }
 
     private Player newPlayer(String id, String name) {
         return new Player(id, name, null);
