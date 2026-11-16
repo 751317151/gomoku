@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>棋战大厅 · 多人游戏大厅</title>
-<link rel="stylesheet" href="style.css?v=48">
+<link rel="stylesheet" href="style.css?v=49">
 </head>
 <body>
 
@@ -109,6 +109,23 @@
   </div>
 </header>
 
+<!-- 新手指引 -->
+<div class="onboard-overlay" id="onboard-overlay">
+  <div class="onboard-box">
+    <div class="onboard-title">欢迎来到棋战大厅</div>
+    <div class="onboard-sub">14 种玩法 · 2–8 人在线同桌</div>
+    <div class="onboard-steps">
+      <div class="onboard-step"><span>1</span><div><b>选玩法</b><p>用分类快速找到棋类、卡牌或派对玩法。</p></div></div>
+      <div class="onboard-step"><span>2</span><div><b>一键开局</b><p>「人机对战」随时练习，「快速匹配」找在线玩家。</p></div></div>
+      <div class="onboard-step"><span>3</span><div><b>持续成长</b><p>完成每日目标可获得等级与成就，战绩自动保存。</p></div></div>
+    </div>
+    <div class="onboard-btns">
+      <button class="btn-match" onclick="startOnboardingSolo()">先打一局人机</button>
+      <button class="btn-outline" onclick="dismissOnboarding()">直接逛大厅</button>
+    </div>
+  </div>
+</div>
+
 <!-- MAIN -->
 <div id="lobby-screen">
   <div class="lobby-header">
@@ -122,6 +139,7 @@
       <button class="btn-outline" onclick="createRoom()">创建房间</button>
       <button class="btn-outline" onclick="refreshRooms()">刷新列表</button>
       <button class="btn-solo-top" onclick="startSoloQuick()">▶ 人机对战</button>
+      <button class="btn-outline" onclick="showOnboarding()">新手指南</button>
     </div>
   </div>
 
@@ -399,8 +417,8 @@
 
 </main>
 
-<script src="js/games.js?v=48"></script>
-<script src="app.js?v=48"></script>
+<script src="js/games.js?v=49"></script>
+<script src="app.js?v=49"></script>
 </body>
 </html>
 

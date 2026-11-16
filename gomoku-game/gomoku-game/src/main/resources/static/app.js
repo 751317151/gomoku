@@ -1316,6 +1316,27 @@ function refreshRooms() {
  * 快速匹配：优先进入同玩法、同人数的公开等待房间；没有就自动开一间公开房。
  * createRoom=false 是关键 —— true 会强制私有房，永远匹配不到人。
  */
+function showOnboarding() {
+  const el = document.getElementById('onboard-overlay');
+  if (el) el.classList.add('show');
+}
+
+function dismissOnboarding() {
+  const el = document.getElementById('onboard-overlay');
+  if (el) el.classList.remove('show');
+  savePreference('gomoku_onboarded', '1');
+}
+
+function startOnboardingSolo() {
+  dismissOnboarding();
+  startSoloGame('GOMOKU');
+}
+
+function maybeShowOnboarding() {
+  if (readPreference('gomoku_onboarded', '')) return;
+  setTimeout(showOnboarding, 600);
+}
+
 function quickMatch() {
   send({ type: 'JOIN', playerName: myName, gameType: selectedGameType, createRoom: false, playerCount: selectedPlayerCount() });
   initGameModule(selectedGameType);
@@ -1951,6 +1972,7 @@ function handleMessage(msg) {
         buildGameSelector();
         updatePlayerCountSelector();
         loadLeaderboard();
+        maybeShowOnboarding();
         // 邀请链接（/?room=CODE）：登录成功后直接进房，不用再点一次
         if (pendingJoinCode) {
           const code = pendingJoinCode;
