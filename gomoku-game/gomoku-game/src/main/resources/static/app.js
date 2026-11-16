@@ -3046,6 +3046,32 @@ function closeRecordReplay() {
   document.getElementById('replay-modal').classList.remove('show');
 }
 
+/** 把各玩法的历史编码翻译成可读行动（新玩法不再显示「行动 0」） */
+function replayActionText(type, mv) {
+  if (!mv) return '';
+  if (type === 'HIGH_CARD') return mv[1] < 0 ? '退出本局' : '暗选 ' + mv[1] + '（第 ' + mv[2] + ' 轮）';
+  if (type === 'DICE_RACE') {
+    const names = ['稳健', '冒险', '追击'];
+    const choice = names[mv[1]] || ('策略 ' + mv[1]);
+    const score = mv[2] > 0 ? '，本轮 +' + mv[2] : '';
+    return choice + score + '（总分 ' + (mv[3] || 0) + '）';
+  }
+  if (type === 'GEM_AUCTION') {
+    const gems = mv[2] > 0 ? '，拿下 ' + mv[2] + ' 分宝石' : '';
+    return '出价 ' + mv[1] + ' 金币' + gems + '（余 ' + (mv[3] || 0) + ' 金币）';
+  }
+  if (type === 'BLACKJACK') {
+    if (mv[1] === 0) {
+      const ranks = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+      const suits = ['♠', '♥', '♦', '♣'];
+      return '要牌 ' + (ranks[(mv[2] || 1) - 1] || '?') + (suits[mv[3]] || '') + '（' + (mv[4] || 0) + ' 点）';
+    }
+    if (mv[1] === 1) return '停牌（' + (mv[4] || 0) + ' 点）';
+    return '退出本局';
+  }
+  return '';
+}
+
 /** 按 rmIndex 重建盘面 */
 function rmDraw() {
   const m = window.GameModules[rmGameType];
@@ -3062,8 +3088,9 @@ function rmDraw() {
       for (let i = 0; i < rmIndex; i++) {
         const mv = rmMoves[i];
         const sideName = sides[mv[0] - 1] ? sides[mv[0] - 1].label + '方' : ('第' + mv[0] + '方');
-        const actionName = rmGameType === 'HIGH_CARD' ? (mv[1] < 0 ? '退出本局' : '暗选 ' + mv[1] + '（第 ' + mv[2] + ' 轮）') : labels[mv[1]] || ('行动 ' + mv[1]);
-        const extra = mv[2] > 0 ? '（' + mv[2] + '）' : '';
+        const custom = replayActionText(rmGameType, mv);
+        const actionName = custom || labels[mv[1]] || ('行动 ' + mv[1]);
+        const extra = (!custom && mv[2] > 0) ? '（' + mv[2] + '）' : '';
         lines.push('<div>' + (i + 1) + '. ' + escHtml(sideName) + ' ' + escHtml(actionName) + escHtml(extra) + '</div>');
       }
       logEl.innerHTML = lines.join('') || '<div>还没有可回放的行动</div>';
