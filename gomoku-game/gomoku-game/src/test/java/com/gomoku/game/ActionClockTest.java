@@ -20,6 +20,16 @@ class ActionClockTest {
             room.addPlayer(new Player("clock-" + i, "玩家" + i, channel));
         }
         ReflectionTestUtils.invokeMethod(room, "cancelTurnTimer");
+        // 单测直接调用 tickTimers，不依赖真实调度线程。
+        // 但 startGame 会先排定每秒节拍：高负载下可能在 cancel 前已经跑过一次，
+        // 导致后续断言从 28 甚至更低开始（曾在全量测试中偶发）。这里在取消后显式归零基线。
+        int[] stepBaseline = new int[count];
+        int[] totalBaseline = new int[count];
+        Arrays.fill(stepBaseline, room.getEngine().getStepTimeSeconds());
+        Arrays.fill(totalBaseline, room.getEngine().getTotalTimeSeconds());
+        ReflectionTestUtils.setField(room, "seatStepTimeLeft", stepBaseline);
+        ReflectionTestUtils.setField(room, "totalTimeLeft", totalBaseline);
+        ReflectionTestUtils.setField(room, "stepTimeLeft", room.getEngine().getStepTimeSeconds());
     }
     private void tick() { ReflectionTestUtils.invokeMethod(room, "tickTimers"); }
     private Map<String, Object> clocks() { return room.buildSyncDataForReconnect(room.getPlayers().get(0)).getTimers(); }
