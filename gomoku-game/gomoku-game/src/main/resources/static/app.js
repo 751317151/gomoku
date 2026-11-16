@@ -2803,7 +2803,9 @@ function loadMyStats() {
       set('my-lose', s.losses || 0);
       set('my-draw', s.draws || 0);
       set('my-rate', s.total ? s.winRate + '%' : '—');
-      set('my-elo', s.elo ? 'ELO ' + s.elo : 'ELO —');
+      // 多人休闲局也计入胜/负/平；ELO 只对计分局有意义，避免把默认 1200 当成竞技分展示
+      if (s.rankedTotal) set('my-elo', 'ELO ' + s.elo + (s.casualTotal ? ' · 休闲 ' + s.casualTotal : ''));
+      else set('my-elo', s.casualTotal ? '休闲局 ' + s.casualTotal : 'ELO —');
     })
     .catch(() => {});
 }

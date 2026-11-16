@@ -280,15 +280,26 @@ public class GameRecordService {
         return stats;
     }
 
-    /** 新身份不按昵称认领旧战绩，避免重名冒领。 */
+    /**
+     * 新身份不按昵称认领旧战绩，避免重名冒领。
+     *
+     * 统计口径：所有真人对局（含 2–8 人休闲局）。ELO 只认计分局，
+     * 否则多人局默认分 1200 会被误显示成「竞技分」。
+     */
     public synchronized Map<String, Object> getIdentityStats(String identityId, String gameType) {
-        int wins = 0, losses = 0, draws = 0, elo = 0;
+        int wins = 0, losses = 0, draws = 0;
+        int rankedTotal = 0, rankedWins = 0, rankedLosses = 0, rankedDraws = 0, elo = 0;
         for (GameRecord record : recent) {
-            if (!record.isRanked() || (gameType != null && !gameType.equalsIgnoreCase(record.getGameType()))) continue;
-            for (GameRecord.Participant p : record.getParticipants()) {
-                if (!identityId.equals(p.getIdentityId()) || p.isAi()) continue;
-                if ("WIN".equals(p.getResult())) wins++; else if ("LOSE".equals(p.getResult())) losses++; else draws++;
-                if (elo == 0) elo = p.getEloAfter();
+            if (gameType != null && !gameType.isEmpty() && !gameType.equalsIgnoreCase(record.getGameType())) continue;
+            GameRecord.Participant me = findParticipantByIdentity(record, identityId);
+            if (me == null || me.isAi()) continue;
+            boolean win = "WIN".equals(me.getResult());
+            boolean draw = !win && !"LOSE".equals(me.getResult());
+            if (win) wins++; else if (draw) draws++; else losses++;
+            if (record.isRanked()) {
+                rankedTotal++;
+                if (win) rankedWins++; else if (draw) rankedDraws++; else rankedLosses++;
+                if (elo == 0 && me.getEloAfter() > 0) elo = me.getEloAfter();
             }
         }
         int total = wins + losses + draws;
@@ -296,6 +307,11 @@ public class GameRecordService {
         result.put("wins", wins); result.put("losses", losses); result.put("draws", draws);
         result.put("total", total); result.put("elo", elo);
         result.put("winRate", total == 0 ? 0 : Math.round(wins * 1000.0 / total) / 10.0);
+        result.put("rankedTotal", rankedTotal);
+        result.put("rankedWins", rankedWins);
+        result.put("rankedLosses", rankedLosses);
+        result.put("rankedDraws", rankedDraws);
+        result.put("casualTotal", total - rankedTotal);
         return result;
     }
 

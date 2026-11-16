@@ -36,4 +36,24 @@ class GuestIdentityTest {
         assertEquals(1, records.getIdentityStats("guest-a", "GOMOKU").get("wins"));
         assertEquals(0, records.getIdentityStats("guest-b", "GOMOKU").get("wins"));
     }
+    @Test void multiplayerCasualWinCountsButDoesNotPolluteElo() {
+        GameRecordService records = new GameRecordService(dir.resolve("games-multi")); records.init();
+        GameRecord casual = new GameRecord();
+        casual.setGameType("UNO"); casual.setRanked(false); casual.setEndedAt(1000L);
+        GameRecord.Participant me = new GameRecord.Participant("p", "玩家", 1, "WIN", false, 1200, 1200, 0);
+        me.setIdentityId("guest-multi"); casual.getParticipants().add(me);
+        for (int i = 2; i <= 4; i++) {
+            GameRecord.Participant other = new GameRecord.Participant("p" + i, "对手" + i, i, "LOSE", false, 1200, 1200, 0);
+            other.setIdentityId("guest-other-" + i);
+            casual.getParticipants().add(other);
+        }
+        records.saveAsync(casual); records.flushForTest();
+
+        Map<String, Object> stats = records.getIdentityStats("guest-multi", null);
+        assertEquals(1, stats.get("wins"), "多人休闲局胜利应显示在战绩里");
+        assertEquals(1, stats.get("total"));
+        assertEquals(1, stats.get("casualTotal"));
+        assertEquals(0, stats.get("rankedTotal"));
+        assertEquals(0, stats.get("elo"), "休闲局的默认分不能冒充竞技 ELO");
+    }
 }
