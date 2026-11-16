@@ -727,6 +727,10 @@
   }
 
   /* ============ 游戏类型选择（大厅） ============ */
+  .game-categories { display: flex; gap: 6px; margin: 0 0 10px; overflow-x: auto; padding-bottom: 2px; }
+  .game-category { flex: 0 0 auto; padding: 5px 12px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--text-dim); font-size: 0.75rem; cursor: pointer; transition: .15s; }
+  .game-category:hover { color: var(--text); border-color: var(--accent); }
+  .game-category.selected { background: var(--accent); border-color: var(--accent); color: #0b1512; font-weight: 700; }
   .game-selector {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));

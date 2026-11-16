@@ -1517,11 +1517,43 @@ function requestRestart() {
 // ============================================================
 // 大厅：游戏选择
 // ============================================================
+const GAME_CATEGORY = {
+  GOMOKU: 'board', REVERSI: 'board', GO9: 'board', XIANGQI: 'board', CONNECT4: 'board',
+  CARD: 'card', UNO: 'card', HIGH_CARD: 'card', BLACKJACK: 'card',
+  DICE_RACE: 'party', GEM_AUCTION: 'party',
+  RPG: 'duel', NIM: 'duel', QUIZ: 'duel'
+};
+const CATEGORY_LABELS = { ALL: '全部', board: '棋盘', card: '卡牌', party: '派对', duel: '对战' };
+let selectedCategory = 'ALL';
+
 function buildGameSelector() {
   const container = document.getElementById('game-selector');
   if (!container) return;
+  const types = Object.keys(GameModules).filter(type => selectedCategory === 'ALL' || GAME_CATEGORY[type] === selectedCategory);
+  const catBox = document.getElementById('game-categories');
+  if (catBox) {
+    catBox.innerHTML = '';
+    Object.keys(CATEGORY_LABELS).forEach(cat => {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'game-category' + (cat === selectedCategory ? ' selected' : '');
+      chip.textContent = CATEGORY_LABELS[cat];
+      chip.setAttribute('role', 'tab');
+      chip.setAttribute('aria-selected', String(cat === selectedCategory));
+      chip.onclick = function () {
+        selectedCategory = cat;
+        // 切分类时保持「当前选中玩法」可见，避免建房/人机按钮指向隐藏卡片
+        const inCategory = Object.keys(GameModules).filter(t => cat === 'ALL' || GAME_CATEGORY[t] === cat);
+        if (!inCategory.includes(selectedGameType) && inCategory.length) selectedGameType = inCategory[0];
+        buildGameSelector();
+        updatePlayerCountSelector();
+        refreshRooms();
+      };
+      catBox.appendChild(chip);
+    });
+  }
   container.innerHTML = '';
-  Object.keys(GameModules).forEach(type => {
+  types.forEach(type => {
     const m = GameModules[type];
     const selected = type === selectedGameType;
     const card = document.createElement('div');
