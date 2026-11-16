@@ -822,6 +822,19 @@
     margin-top: 2px;
   }
 
+  .level-badge { color: #0b1512; background: var(--accent); border-radius: 999px; padding: 1px 8px; font: 700 0.7rem 'JetBrains Mono', monospace; }
+  .level-body { padding: 8px 10px 12px; display: grid; gap: 8px; }
+  .level-title-row { display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-dim); }
+  .level-title-row span:first-child { color: var(--text); font-weight: 600; }
+  .level-bar { height: 7px; border-radius: 999px; background: rgba(255,255,255,0.08); overflow: hidden; }
+  .level-bar-fill { height: 100%; width: 0; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .3s ease; }
+  .level-meta { font-size: 0.68rem; color: var(--text-dim); }
+  .achievement-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .achievement { display: grid; grid-template-columns: 16px 1fr auto; align-items: center; gap: 4px; padding: 5px 7px; border: 1px solid var(--border); border-radius: 5px; font-size: 0.68rem; color: var(--text-dim); }
+  .achievement.unlocked { border-color: var(--accent); color: var(--text); background: rgba(212,168,67,0.08); }
+  .achievement-icon { color: var(--accent); }
+  .achievement-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .achievement-progress { font: 0.62rem 'JetBrains Mono', monospace; }
   .daily-streak { color: var(--accent); font: 0.72rem 'JetBrains Mono', monospace; }
   .daily-progress { display: grid; gap: 7px; padding: 8px 10px 12px; }
   .daily-item { display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 7px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 5px; color: var(--text-dim); font-size: 0.75rem; }

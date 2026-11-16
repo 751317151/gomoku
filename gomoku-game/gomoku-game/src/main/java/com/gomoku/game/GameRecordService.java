@@ -341,6 +341,23 @@ public class GameRecordService {
         return result;
     }
 
+    /**
+     * 某个持久身份参与过的全部真人对局（最新的在前）。
+     *
+     * 成长体系（等级/成就）需要遍历历史，但只认稳定身份：
+     * 昵称会重复，session 会过期，只有 identityId 能跨设备延续进度。
+     * AI 局不返回，避免刷人机刷经验。
+     */
+    public synchronized List<GameRecord> getIdentityRecords(String identityId) {
+        List<GameRecord> result = new ArrayList<>();
+        if (identityId == null) return result;
+        for (GameRecord record : recent) {
+            GameRecord.Participant participant = findParticipantByIdentity(record, identityId);
+            if (participant != null && !participant.isAi()) result.add(record);
+        }
+        return result;
+    }
+
     private static GameRecord.Participant findParticipant(GameRecord record, String playerName) {
         for (GameRecord.Participant p : record.getParticipants()) {
             if (playerName.equals(p.getName())) return p;

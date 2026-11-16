@@ -1286,6 +1286,7 @@ function showLobby() {
   // 回到大厅时立刻刷新战绩（刚打完的那局应该马上出现在列表里）
   loadMyStats();
   loadDailyProgress();
+  loadPlayerProgress();
   loadRecentGames();
   loadLeaderboard();
 }
@@ -2434,6 +2435,7 @@ function handleGameOver(msg) {
 
   overlay.classList.add('show');
   loadDailyProgress();
+  loadPlayerProgress();
 }
 
 function handleGameChat(msg) {
@@ -2821,6 +2823,30 @@ function loadDailyProgress() {
         + item('🔥', '连续活跃 3 天', p.streakDays, p.streakGoal || 3, p.streakDone);
     })
     .catch(() => { box.textContent = '游客身份准备中…'; });
+}
+
+function loadPlayerProgress() {
+  const grid = document.getElementById('achievement-grid');
+  if (!grid || !guestToken) return;
+  fetch('/api/me/progress', { headers: { Authorization: 'Bearer ' + guestToken } })
+    .then(r => r.ok ? r.json() : Promise.reject(new Error('unauthorized')))
+    .then(p => {
+      const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+      set('level-badge', 'Lv.' + p.level);
+      set('level-title', p.title || '新手');
+      set('level-xp', (p.levelXp || 0) + ' / ' + (p.levelXpGoal || 100) + ' XP');
+      set('level-meta', '成就 ' + (p.achievementsUnlocked || 0) + ' / ' + (p.achievementsTotal || 0)
+        + ' · 对局 ' + (p.totalGames || 0) + ' · 玩法 ' + (p.gameTypes || 0));
+      const fill = document.getElementById('level-bar-fill');
+      if (fill) fill.style.width = Math.max(0, Math.min(100, p.levelProgress || 0)) + '%';
+      grid.innerHTML = (p.achievements || []).map(a =>
+        '<div class="achievement ' + (a.unlocked ? 'unlocked' : '') + '" title="' + escHtml(a.desc || '') + '">'
+        + '<span class="achievement-icon">' + (a.unlocked ? '★' : '☆') + '</span>'
+        + '<span class="achievement-name">' + escHtml(a.name || '') + '</span>'
+        + '<span class="achievement-progress">' + (a.progress || 0) + '/' + (a.goal || 1) + '</span></div>'
+      ).join('');
+    })
+    .catch(() => {});
 }
 
 /** 套牌筛选只属于卡牌对战；切到其他页签时收起并复位，避免隐藏条件继续过滤 */
