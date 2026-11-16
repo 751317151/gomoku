@@ -4,7 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>棋战大厅 · 多人游戏大厅</title>
-<link rel="stylesheet" href="style.css?v=50">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0d2a23">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="棋战大厅">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css?v=51">
 </head>
 <body>
 
@@ -140,6 +146,7 @@
       <button class="btn-outline" onclick="refreshRooms()">刷新列表</button>
       <button class="btn-solo-top" onclick="startSoloQuick()">▶ 人机对战</button>
       <button class="btn-outline" onclick="showOnboarding()">新手指南</button>
+      <button class="btn-outline" id="pwa-install" style="display:none" onclick="installPwa()">安装应用</button>
     </div>
   </div>
 
@@ -423,8 +430,8 @@
 
 </main>
 
-<script src="js/games.js?v=50"></script>
-<script src="app.js?v=50"></script>
+<script src="js/games.js?v=51"></script>
+<script src="app.js?v=51"></script>
 </body>
 </html>
 

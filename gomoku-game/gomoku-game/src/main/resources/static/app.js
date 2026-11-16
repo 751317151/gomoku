@@ -1317,6 +1317,39 @@ function refreshRooms() {
  * 快速匹配：优先进入同玩法、同人数的公开等待房间；没有就自动开一间公开房。
  * createRoom=false 是关键 —— true 会强制私有房，永远匹配不到人。
  */
+// ============ PWA：安装入口与离线外壳 ============
+let deferredInstallPrompt = null;
+
+function installPwa() {
+  if (!deferredInstallPrompt) return;
+  const prompt = deferredInstallPrompt;
+  deferredInstallPrompt = null;
+  prompt.prompt();
+  prompt.userChoice.finally(() => {
+    const btn = document.getElementById('pwa-install');
+    if (btn) btn.style.display = 'none';
+  });
+}
+
+window.addEventListener('beforeinstallprompt', function (e) {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  const btn = document.getElementById('pwa-install');
+  if (btn) btn.style.display = '';
+});
+
+window.addEventListener('appinstalled', function () {
+  const btn = document.getElementById('pwa-install');
+  if (btn) btn.style.display = 'none';
+});
+
+if ('serviceWorker' in navigator
+    && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('/sw.js').catch(function () {});
+  });
+}
+
 function showOnboarding() {
   const el = document.getElementById('onboard-overlay');
   if (el) el.classList.add('show');

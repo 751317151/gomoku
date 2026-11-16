@@ -2,6 +2,12 @@
 
 > 本轮任务：在骰子竞速之后继续新增非 UNO 多人玩法「宝石拍卖」，补齐引擎、AI、前端与测试链路。
 
+## ✅ PWA 可安装与离线外壳
+
+- 新增 `manifest.json`、应用图标（192/512）与 `sw.js`：支持浏览器安装到桌面/手机。
+- Service Worker 对静态资源使用 stale-while-revalidate，导航网络优先，API/WebSocket 不缓存。
+- 大厅增加“安装应用”入口；清测确认 manifest 以 `application/json`、sw 以 JS MIME 正常返回。
+
 ## ✅ 计时单测稳定性
 
 - `ActionClockTest` 在取消真实计时器后显式重置秒/总时基线，避免高负载下调度线程先跳几秒导致误报。
