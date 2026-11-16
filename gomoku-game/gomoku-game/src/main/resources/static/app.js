@@ -2358,9 +2358,13 @@ function handleGameOver(msg) {
   if (enterReplayBtn) enterReplayBtn.style.display = mod().html ? 'none' : '';
 
   const isSpectator = myId === 'SPECTATOR';
-  const winningSides = JSON.parse(msg.data || '{}').winningSides || [];
-  const isDraw = msg.winner === 'draw' && winningSides.length === 0;
-  const isWin = msg.winner === myId || winningSides.includes(myStone);
+  const overData = JSON.parse(msg.data || '{}');
+  const winningSides = overData.winningSides || [];
+  const drawingSides = overData.drawingSides || [];
+  const isPush = drawingSides.includes(myStone);
+  const decisiveNoWinner = overData.decisiveNoWinner === true;
+  const isDraw = isPush || (msg.winner === 'draw' && winningSides.length === 0 && !decisiveNoWinner);
+  const isWin = !isPush && (msg.winner === myId || winningSides.includes(myStone));
 
   // 解析附加数据（分数 + 获胜连线 + ELO + 对局记录）
   let winLineData = null;
@@ -2397,6 +2401,9 @@ function handleGameOver(msg) {
     if (isDraw) {
       result.textContent = '平  局';
       setStatusMsg('游戏结束：平局', 'draw');
+    } else if (decisiveNoWinner) {
+      result.textContent = '庄家获胜';
+      setStatusMsg('游戏结束：庄家获胜', 'lose');
     } else {
       const winnerName = Object.values(players).filter(p => winningSides.includes(p.stone)).map(p => p.name).join('、') || players[msg.winner]?.name || '玩家';
       result.textContent = winnerName + ' 获胜';
@@ -2772,7 +2779,8 @@ const GAME_TYPE_LABEL = {
   NIM: '取石子',
   HIGH_CARD: '比大小',
   UNO: 'UNO 对战',
-  QUIZ: '答题对战'
+  QUIZ: '答题对战',
+  BLACKJACK: '21 点'
   ,DICE_RACE: '骰子竞速'
   ,GEM_AUCTION: '宝石拍卖'
 };
@@ -2825,6 +2833,44 @@ function loadDailyProgress() {
         + item('🔥', '连续活跃 3 天', p.streakDays, p.streakGoal || 3, p.streakDone);
     })
     .catch(() => { box.textContent = '游客身份准备中…'; });
+}
+
+function renderBlackjackPanel() {
+  const status = document.getElementById('bj-status');
+  const dealer = document.getElementById('bj-dealer');
+  const dealerCards = document.getElementById('bj-dealer-cards');
+  const playersEl = document.getElementById('bj-players');
+  const logEl = document.getElementById('bj-log');
+  const hitBtn = document.getElementById('bj-hit');
+  const standBtn = document.getElementById('bj-stand');
+  const hint = document.getElementById('bj-hint');
+  if (!status || !playersEl || !rpgView || !rpgView.players) return;
+  const v = rpgView;
+  const me = v.players.find(p => p.side === myStone);
+  const turnPlayer = v.players.find(p => p.side === v.turn);
+  status.textContent = v.over ? '本局结束' : (turnPlayer ? '轮到 ' + turnPlayer.name + ' 行动' : '结算中…');
+  dealer.textContent = v.over ? '庄家 ' + v.dealerTotal + ' 点' : '庄家明牌 ' + v.dealerVisibleTotal + ' 点';
+  const cardHtml = c => c.hidden
+    ? '<div class="bj-card hidden">?</div>'
+    : '<div class="bj-card ' + (c.suit === 1 || c.suit === 2 ? 'red' : '') + '"><span>' + escHtml(c.label) + '</span><small>' + escHtml(c.suitLabel) + '</small></div>';
+  dealerCards.innerHTML = (v.dealer || []).map(cardHtml).join('');
+  playersEl.innerHTML = (v.players || []).map(p => {
+    const cards = (p.cards || []).map(cardHtml).join('');
+    let badge = '';
+    if (p.blackjack) badge = ' · 黑杰克';
+    else if (p.busted) badge = ' · 爆牌';
+    else if (p.stood) badge = ' · 已停牌';
+    const result = v.over && p.result != null ? (p.result > 0 ? ' · 胜' : p.result === 0 ? ' · 平' : ' · 负') : '';
+    return '<div class="bj-player ' + (p.side === myStone ? 'is-you' : '') + ' ' + (p.busted ? 'is-busted' : '') + '">'
+      + '<div class="bj-player-head"><b>' + escHtml(p.name) + '</b><span>' + p.total + ' 点' + badge + result + '</span></div>'
+      + '<div class="bj-hand">' + cards + '</div></div>';
+  }).join('');
+  const myTurn = !v.over && v.turn === myStone && myStone > 0;
+  if (hitBtn) hitBtn.disabled = !myTurn;
+  if (standBtn) standBtn.disabled = !myTurn;
+  if (hint) hint.textContent = v.over ? '' : myTurn ? '要牌可多次，点停牌结束本回合' : '等待其他玩家';
+  logEl.innerHTML = (v.log || []).map(line => '<div>' + escHtml(line) + '</div>').join('');
+  logEl.scrollTop = logEl.scrollHeight;
 }
 
 function loadPlayerProgress() {

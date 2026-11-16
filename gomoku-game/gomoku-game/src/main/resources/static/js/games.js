@@ -934,6 +934,16 @@
     drawGhost() {}, isLegal() { return false; }, applyEffects() {}, legalMoves() { return []; }
   };
 
+  const BLACKJACK = {
+    name: '21 点', html: true, panel: 'blackjack-panel', render: 'renderBlackjackPanel',
+    minPlayers: 2, maxPlayers: 8, defaultPlayers: 4,
+    stepTime: 30, totalTime: 300, icon: '🂡',
+    footer: '2–8 人 · 依次要牌/停牌 · 庄家 17 点停牌 · 爆牌即负',
+    actionLabels: ['要牌', '停牌'],
+    initialBoard() { return null; }, draw() {}, hitTest() { return null; },
+    drawGhost() {}, isLegal() { return false; }, applyEffects() {}, legalMoves() { return []; }
+  };
+
   const GEM_AUCTION = {
     name: '宝石拍卖', html: true, panel: 'gem-auction-panel', render: 'renderGemAuctionPanel',
     minPlayers: 2, maxPlayers: 8, defaultPlayers: 4,
@@ -961,6 +971,6 @@
     initialBoard() { return null; }, draw() {}, hitTest() { return null; }, drawGhost() {}, isLegal() { return false; }, applyEffects() {}, legalMoves() { return []; }
   };
 
-  window.GameModules = { HIGH_CARD, GOMOKU, REVERSI, GO9, XIANGQI, CONNECT4, RPG, CARD, NIM, QUIZ, DICE_RACE, GEM_AUCTION, UNO };
+  window.GameModules = { HIGH_CARD, BLACKJACK, GOMOKU, REVERSI, GO9, XIANGQI, CONNECT4, RPG, CARD, NIM, QUIZ, DICE_RACE, GEM_AUCTION, UNO };
 })();
 

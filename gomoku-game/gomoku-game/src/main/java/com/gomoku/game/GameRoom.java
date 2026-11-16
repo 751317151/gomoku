@@ -150,6 +150,7 @@ public class GameRoom {
     private static GameEngine createEngine(GameType type) {
         switch (type) {
             case HIGH_CARD: return new HighCardEngine();
+            case BLACKJACK: return new BlackjackEngine();
             case UNO:       return new UnoBattleEngine();
             case REVERSI:  return new ReversiBoard();
             case GO9:      return new GoBoard();
@@ -169,6 +170,7 @@ public class GameRoom {
     private GameAI aiFor() {
         switch (gameType) {
             case HIGH_CARD: return HighCardAI.INSTANCE;
+            case BLACKJACK: return BlackjackAI.INSTANCE;
             case UNO:       return UnoAI.INSTANCE;
             case REVERSI:  return ReversiAI.INSTANCE;
             case GO9:      return GoAI.INSTANCE;
@@ -881,12 +883,15 @@ public class GameRoom {
         List<Integer> winningSides = engine.isOver() ? engine.getWinningSides()
                 : winnerPlayer == null ? java.util.Collections.emptyList()
                 : java.util.Collections.singletonList(winnerPlayer.getStone());
+        java.util.List<Integer> drawingSides = engine.isOver() ? engine.getDrawingSides()
+                : java.util.Collections.emptyList();
         for (Player p : players) {
             if (winningSides.contains(p.getStone())) p.addWin();
-            else if (!winningSides.isEmpty()) p.addLoss();
+            else if (!winningSides.isEmpty() && !drawingSides.contains(p.getStone())) p.addLoss();
         }
 
-        boolean ranked = gameType != GameType.HIGH_CARD && targetPlayers == 2
+        // 纯运气类玩法（比大小 / 21 点）不进入双人 ELO，避免随机性污染竞技分。
+        boolean ranked = gameType != GameType.HIGH_CARD && gameType != GameType.BLACKJACK && targetPlayers == 2
                 && players.stream().noneMatch(Player::isAi)
                 && !players.get(0).getRatingKey().equals(players.get(1).getRatingKey());
         // ELO 更新（跳过 AI）。判定用 Player.isAi 而不是 aiPlayer 引用，
@@ -924,6 +929,10 @@ public class GameRoom {
         dataMap.put("scores", scoreData.getScores());
         dataMap.put("eloChange", eloChange);
         dataMap.put("winningSides", winningSides);
+        dataMap.put("drawingSides", drawingSides);
+        // 21 点可能出现「有庄家、但所有玩家都没赢」的决胜局：此时不能把所有人当平局。
+        dataMap.put("decisiveNoWinner", gameType == GameType.BLACKJACK
+                && winningSides.isEmpty() && drawingSides.isEmpty());
         if (engine.getScoreSummary() != null) {
             dataMap.put("scoreSummary", engine.getScoreSummary());
         }
@@ -968,7 +977,8 @@ public class GameRoom {
 
             // 计分局：双方都是真人。有 AI 或一方缺席都不算
             boolean hasAi = players.stream().anyMatch(Player::isAi);
-            record.setRanked(gameType != GameType.HIGH_CARD && !hasAi && players.size() == 2
+            record.setRanked(gameType != GameType.HIGH_CARD && gameType != GameType.BLACKJACK
+                    && !hasAi && players.size() == 2
                     && !players.get(0).getRatingKey().equals(players.get(1).getRatingKey()));
             List<GameRecord.Participant> participants = new ArrayList<>();
             for (Player p : players) {
@@ -979,7 +989,9 @@ public class GameRoom {
                 List<Integer> wins = engine.isOver() ? engine.getWinningSides()
                         : winnerPlayer == null ? java.util.Collections.emptyList()
                         : java.util.Collections.singletonList(winnerPlayer.getStone());
-                if (wins.isEmpty()) result = "DRAW";
+                java.util.List<Integer> draws = engine.isOver() ? engine.getDrawingSides()
+                        : java.util.Collections.emptyList();
+                if (wins.isEmpty() || draws.contains(p.getStone())) result = "DRAW";
                 else result = wins.contains(p.getStone()) ? "WIN" : "LOSE";
 
                 int before = eloBefore.getOrDefault(p.getId(), p.getElo());

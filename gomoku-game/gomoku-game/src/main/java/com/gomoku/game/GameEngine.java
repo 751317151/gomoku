@@ -37,6 +37,14 @@ public interface GameEngine {
         return side == null ? java.util.Collections.emptyList() : java.util.Collections.singletonList(side);
     }
 
+    /**
+     * 平局/和局的座位（例如 21 点玩家点数与庄家相同）。
+     *
+     * 默认空列表，表示「没有胜者就是整体平局」。卡牌类玩法需要单独标注平局座位，
+     * 否则房间只能把所有非胜者都记成负，战绩会失真。
+     */
+    default List<Integer> getDrawingSides() { return java.util.Collections.emptyList(); }
+
     /** 多人玩法自行处理淘汰；false 表示房间应终止本局。 */
     default boolean forfeit(int side) { return false; }
 

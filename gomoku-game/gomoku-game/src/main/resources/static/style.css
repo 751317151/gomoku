@@ -2176,6 +2176,17 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
   .high-card-panel { padding: 18px; border-radius: 12px; min-height: 400px; }
 }
 
+.blackjack-panel { display:flex; flex-direction:column; gap:12px; padding:18px; min-height:420px; }
+.bj-dealer-cards, .bj-hand { display:flex; flex-wrap:wrap; gap:6px; }
+.bj-card { width:46px; height:64px; border-radius:6px; background:#f6f1e2; color:#182420; display:flex; flex-direction:column; align-items:center; justify-content:center; font:700 1.15rem Georgia,serif; box-shadow:0 3px 0 rgba(0,0,0,.35); }
+.bj-card.red { color:#b3261e; }
+.bj-card small { font-size:.75rem; }
+.bj-card.hidden { background:linear-gradient(135deg,#244a63,#162f41); color:#8db4c9; }
+.bj-players { display:grid; gap:8px; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); }
+.bj-player { padding:9px; border:1px solid var(--border); border-radius:8px; }
+.bj-player.is-you { border-color:var(--accent); }
+.bj-player.is-busted { opacity:.6; }
+.bj-player-head { display:flex; justify-content:space-between; gap:6px; font-size:.75rem; margin-bottom:6px; }
 .dice-race-panel { display:flex; flex-direction:column; gap:14px; padding:20px; min-height:420px; }
 .dice-race-sub { color:var(--text-dim); text-align:center; font-size:.9rem; }
 .dice-choices { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }

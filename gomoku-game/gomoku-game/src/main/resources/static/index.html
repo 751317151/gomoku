@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>棋战大厅 · 多人游戏大厅</title>
-<link rel="stylesheet" href="style.css?v=44">
+<link rel="stylesheet" href="style.css?v=45">
 </head>
 <body>
 
@@ -88,7 +88,7 @@
 <div id="login-screen">
   <div class="login-box">
     <div class="login-title">棋战大厅</div>
-    <div class="login-sub">五子棋 · 黑白棋 · 围棋 · 象棋 · 四子棋 · 回合制 · 卡牌 · 取石子 · 答题 · 骰子竞速 · 多人比大小</div>
+    <div class="login-sub">五子棋 · 黑白棋 · 围棋 · 象棋 · 四子棋 · 回合制 · 卡牌 · 取石子 · 答题 · 骰子竞速 · 21 点 · 多人比大小</div>
 
     <input type="hidden" id="ws-url" value="" data-port="9001">
     <div class="field-label">你的昵称</div>
@@ -334,6 +334,13 @@
         <div class="high-card-score" id="dice-players"></div>
         <div class="quiz-log" id="dice-log"></div>
       </div>
+      <div id="blackjack-panel" class="blackjack-panel" style="display:none" aria-live="polite">
+        <div class="quiz-head"><span class="quiz-progress" id="bj-status">等待开局…</span><span class="quiz-score" id="bj-dealer"></span></div>
+        <div class="bj-dealer-cards" id="bj-dealer-cards"></div>
+        <div class="bj-players" id="bj-players"></div>
+        <div class="card-actions-row"><button class="btn-endturn" id="bj-hit" onclick="sendAction(0)">要牌</button><button class="btn-endturn" id="bj-stand" onclick="sendEndTurn()">停牌</button><span id="bj-hint"></span></div>
+        <div class="quiz-log" id="bj-log"></div>
+      </div>
       <div id="gem-auction-panel" class="dice-race-panel" style="display:none" aria-live="polite">
         <div class="quiz-head"><span class="quiz-progress" id="gem-progress">第 1 / 5 轮</span><span class="quiz-score" id="gem-score"></span></div>
         <div class="dice-race-sub" id="gem-status">等待所有玩家暗投金币…</div>
@@ -390,8 +397,8 @@
 
 </main>
 
-<script src="js/games.js?v=44"></script>
-<script src="app.js?v=44"></script>
+<script src="js/games.js?v=45"></script>
+<script src="app.js?v=45"></script>
 </body>
 </html>
 

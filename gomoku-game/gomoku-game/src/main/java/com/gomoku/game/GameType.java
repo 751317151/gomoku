@@ -25,6 +25,8 @@ public enum GameType {
     DICE_RACE("骰子竞速", 0, 0, false, 2, 8, 4),
     /** 宝石拍卖：2–8 人同时暗投金币，价高者获得宝石分数 */
     GEM_AUCTION("宝石拍卖", 0, 0, false, 2, 8, 4),
+    /** 21 点：2–8 人对庄家，依次要牌/停牌 */
+    BLACKJACK("21 点", 0, 0, false, 2, 8, 4),
     HIGH_CARD("比大小", 0, 0, false, 2, 8, 4),
     UNO("UNO 对战", 0, 0, false, 2, 8, 4);
 
