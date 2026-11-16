@@ -358,6 +358,49 @@ public class GameRecordService {
     }
 
     /**
+     * 本周活跃榜：最近 7 天所有真人玩法（含 2–8 人休闲局）按胜场、对局数排序。
+     *
+     * ELO 榜只覆盖双人竞技，多人玩法玩家此前没有任何排名曝光；
+     * 这个榜单用「谁在持续玩」来补足运营侧的另一半。
+     */
+    public synchronized List<Map<String, Object>> getWeeklyActivityLeaderboard(int topN) {
+        long cutoff = System.currentTimeMillis() - java.util.concurrent.TimeUnit.DAYS.toMillis(7);
+        Map<String, WeeklyRow> rows = new HashMap<>();
+        for (GameRecord record : recent) {
+            if (record.getEndedAt() <= 0 || record.getEndedAt() < cutoff) continue;
+            for (GameRecord.Participant p : record.getParticipants()) {
+                if (p.isAi() || p.getIdentityId() == null) continue;
+                WeeklyRow row = rows.computeIfAbsent(p.getIdentityId(), k -> new WeeklyRow());
+                if (p.getName() != null) row.name = p.getName();
+                row.games++;
+                if ("WIN".equals(p.getResult())) row.wins++;
+                if (record.getGameType() != null) row.types.add(record.getGameType());
+            }
+        }
+        return rows.values().stream()
+                .sorted(Comparator.comparingInt((WeeklyRow r) -> r.wins).reversed()
+                        .thenComparing(Comparator.comparingInt((WeeklyRow r) -> r.games).reversed())
+                        .thenComparing(r -> r.name == null ? "" : r.name))
+                .limit(Math.max(1, topN))
+                .map(r -> {
+                    Map<String, Object> view = new LinkedHashMap<>();
+                    view.put("name", r.name);
+                    view.put("wins", r.wins);
+                    view.put("games", r.games);
+                    view.put("gameTypes", r.types.size());
+                    return view;
+                })
+                .collect(Collectors.toList());
+    }
+
+    private static final class WeeklyRow {
+        String name;
+        int wins;
+        int games;
+        final java.util.Set<String> types = new java.util.HashSet<>();
+    }
+
+    /**
      * 某个持久身份参与过的全部真人对局（最新的在前）。
      *
      * 成长体系（等级/成就）需要遍历历史，但只认稳定身份：

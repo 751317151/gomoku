@@ -51,6 +51,15 @@ public class GameApiController {
     }
 
     /**
+     * 本周活跃榜：最近 7 天全部真人对局的胜场与活跃度（含多人休闲局）。
+     */
+    @GetMapping("/api/leaderboard/weekly")
+    public List<Map<String, Object>> getWeeklyLeaderboard(
+            @RequestParam(required = false, defaultValue = "10") int limit) {
+        return recordService.getWeeklyActivityLeaderboard(clamp(limit));
+    }
+
+    /**
      * 服务器实时统计（在线人数/房间数）
      */
     @GetMapping("/api/stats")

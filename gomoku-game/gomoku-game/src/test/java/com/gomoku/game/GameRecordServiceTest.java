@@ -58,6 +58,34 @@ class GameRecordServiceTest {
         assertEquals(1, progress.get("todayGameTypes"));
     }
 
+    @Test
+    void weeklyLeaderboardRanksRecentHumanActivityAcrossModes() throws Exception {
+        GameRecordService svc = newService();
+        long now = System.currentTimeMillis();
+        GameRecord uno = dailyRecord("W-UNO", now - 1000, "guest-week-a", "WIN", "UNO");
+        uno.setRanked(false);
+        addAiOpponents(uno, 4);
+        svc.saveAsync(uno);
+        GameRecord gomoku = dailyRecord("W-GOMOKU", now - 2000, "guest-week-a", "WIN", "GOMOKU");
+        svc.saveAsync(gomoku);
+        GameRecord old = dailyRecord("W-OLD", now - java.util.concurrent.TimeUnit.DAYS.toMillis(8), "guest-week-b", "WIN", "GOMOKU");
+        svc.saveAsync(old);
+
+        List<Map<String, Object>> board = svc.getWeeklyActivityLeaderboard(10);
+        assertEquals(1, board.size(), "8 天前的对局不应进入本周榜");
+        assertEquals("每日玩家", board.get(0).get("name"));
+        assertEquals(2, board.get(0).get("wins"));
+        assertEquals(2, board.get(0).get("games"));
+        assertEquals(2, board.get(0).get("gameTypes"));
+    }
+
+    private static void addAiOpponents(GameRecord rec, int count) {
+        for (int i = 2; i <= count; i++) {
+            GameRecord.Participant p = new GameRecord.Participant("x" + i, "AI" + i, i, "LOSE", true, 1200, 1200, 0);
+            rec.getParticipants().add(p);
+        }
+    }
+
     private static GameRecord dailyRecord(String roomId, long endedAt, String identity, String result, String gameType) {
         GameRecord rec = new GameRecord();
         rec.setRoomId(roomId); rec.setGameType(gameType); rec.setEndedAt(endedAt); rec.setRanked(true);

@@ -3114,7 +3114,39 @@ function buildLbTabs() {
   });
 }
 
+let leaderboardMode = 'elo'; // elo = 分游戏总榜；weekly = 近 7 天全玩法活跃榜
+
+function toggleLeaderboardMode() {
+  leaderboardMode = leaderboardMode === 'elo' ? 'weekly' : 'elo';
+  const btn = document.getElementById('lb-mode-toggle');
+  if (btn) btn.textContent = leaderboardMode === 'elo' ? '本周活跃' : 'ELO 总榜';
+  const tabs = document.getElementById('lb-tabs');
+  if (tabs) tabs.style.opacity = leaderboardMode === 'weekly' ? '0.45' : '';
+  loadLeaderboard();
+}
+
 function loadLeaderboard() {
+  if (leaderboardMode === 'weekly') {
+    fetch('/api/leaderboard/weekly?limit=10')
+      .then(r => r.json())
+      .then(list => {
+        const el = document.getElementById('leaderboard-list');
+        if (!el) return;
+        if (!Array.isArray(list) || list.length === 0) {
+          el.textContent = '本周暂无真人活跃数据';
+          return;
+        }
+        el.innerHTML = list.map((item, i) =>
+          `<div class="lb-row">
+            <span class="lb-rank">${i + 1}</span>
+            <span class="lb-name">${escHtml(item.name || '游客')}</span>
+            <span class="lb-elo">${item.wins}胜 / ${item.games}局</span>
+          </div>`
+        ).join('');
+      })
+      .catch(() => {});
+    return;
+  }
   fetch('/api/leaderboard?gameType=' + selectedLbType)
     .then(r => r.text())
     .then(jsonStr => {

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>棋战大厅 · 多人游戏大厅</title>
-<link rel="stylesheet" href="style.css?v=43">
+<link rel="stylesheet" href="style.css?v=44">
 </head>
 <body>
 
@@ -133,7 +133,7 @@
     </div>
     <div style="min-width:260px;display:flex;flex-direction:column;gap:16px;">
       <div class="panel leaderboard-panel">
-        <div class="panel-title">排行榜</div>
+        <div class="panel-title"><span style="flex:1">排行榜</span><button class="leave-btn" id="lb-mode-toggle" style="padding:2px 8px;" onclick="toggleLeaderboardMode()">本周活跃</button></div>
         <div class="lb-tabs" id="lb-tabs"></div>
         <div id="leaderboard-list" style="padding:8px;font-size:0.85rem;color:var(--text-dim)">加载中...</div>
       </div>
@@ -390,8 +390,8 @@
 
 </main>
 
-<script src="js/games.js?v=43"></script>
-<script src="app.js?v=43"></script>
+<script src="js/games.js?v=44"></script>
+<script src="app.js?v=44"></script>
 </body>
 </html>
 
