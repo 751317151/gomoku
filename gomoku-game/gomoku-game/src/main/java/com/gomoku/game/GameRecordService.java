@@ -310,7 +310,9 @@ public class GameRecordService {
         java.util.Set<LocalDate> activeDays = new java.util.HashSet<>();
         for (GameRecord record : recent) {
             GameRecord.Participant participant = findParticipantByIdentity(record, identityId);
-            if (participant == null || participant.isAi() || !record.isRanked()) continue;
+            // 每日活跃统计的是所有真人对局（包括多人休闲房）；只有 AI 局不计入。
+            // ranked 只决定 ELO/竞技战绩，不能让多人玩法从运营任务里消失。
+            if (participant == null || participant.isAi()) continue;
             LocalDate day = LocalDate.ofInstant(java.time.Instant.ofEpochMilli(record.getEndedAt()), ZoneId.systemDefault());
             activeDays.add(day);
             if (day.equals(today)) {

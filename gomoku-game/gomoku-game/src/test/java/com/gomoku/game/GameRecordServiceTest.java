@@ -43,6 +43,21 @@ class GameRecordServiceTest {
         assertEquals(Boolean.TRUE, progress.get("winsDone"));
     }
 
+    @Test
+    void dailyProgressIncludesHumanMultiplayerCasualGames() throws Exception {
+        GameRecordService svc = newService();
+        String identity = "guest-multi";
+        long today = LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() + 3600000L;
+        GameRecord rec = dailyRecord("MULTI", today, identity, "WIN", "UNO");
+        rec.setRanked(false); // 多人休闲局不计 ELO，但仍应激励活跃
+        svc.saveAsync(rec);
+
+        Map<String, Object> progress = svc.getIdentityDailyProgress(identity);
+        assertEquals(1, progress.get("todayGames"));
+        assertEquals(1, progress.get("todayWins"));
+        assertEquals(1, progress.get("todayGameTypes"));
+    }
+
     private static GameRecord dailyRecord(String roomId, long endedAt, String identity, String result, String gameType) {
         GameRecord rec = new GameRecord();
         rec.setRoomId(roomId); rec.setGameType(gameType); rec.setEndedAt(endedAt); rec.setRanked(true);
