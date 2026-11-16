@@ -1287,6 +1287,7 @@ function showLobby() {
   loadMyStats();
   loadDailyProgress();
   loadPlayerProgress();
+  loadOnlineStats();
   loadRecentGames();
   loadLeaderboard();
 }
@@ -1487,6 +1488,26 @@ function sendUnoCatch() {
 function sendPass() {
   if (gameState !== 'PLAYING' || currentTurn !== myStone) return;
   send({ type: 'PASS' });
+}
+
+function sendQuickChat(text) {
+  if (!['PLAYING', 'WAITING', 'OVER'].includes(gameState)) return;
+  if (myId === 'SPECTATOR') return;
+  send({ type: 'CHAT', message: text });
+}
+
+/** 大厅实时人气：在线人数与对局数，让玩家判断现在是否有人一起玩 */
+function loadOnlineStats() {
+  fetch('/api/stats')
+    .then(r => r.json())
+    .then(s => {
+      const el = document.getElementById('online-count');
+      if (!el) return;
+      const players = Number(s.totalPlayers || 0);
+      const playing = Number(s.playingRooms || 0);
+      el.textContent = '在线 ' + players + ' · 对局 ' + playing;
+    })
+    .catch(() => {});
 }
 
 function sendChat() {
@@ -3325,6 +3346,7 @@ loadLeaderboard();
 loadMyStats();
 loadRecentGames();
 setInterval(loadLeaderboard, 30000); // 30 秒刷新
+setInterval(loadOnlineStats, 30000);
 setInterval(function () {
   // 大厅可见时才刷新战绩，避免在棋局中无谓请求
   if (gameState === 'LOBBY') {

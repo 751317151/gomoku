@@ -739,6 +739,10 @@
   .onboard-step p { margin: 3px 0 0; color: var(--text-dim); font-size: .75rem; line-height: 1.5; }
   .onboard-btns { display: flex; gap: 10px; margin-top: 18px; }
   .onboard-btns button { flex: 1; min-height: 42px; }
+  .online-count { margin-left: 8px; font: 0.7rem 'JetBrains Mono', monospace; color: var(--accent2); letter-spacing: 0; }
+  .chat-emoji-row { display: flex; gap: 6px; padding: 6px 0; overflow-x: auto; }
+  .chat-emoji-row button { flex: 0 0 auto; padding: 4px 8px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--text-dim); font-size: 0.7rem; cursor: pointer; }
+  .chat-emoji-row button:hover { border-color: var(--accent); color: var(--text); }
   .btn-match { padding: 8px 14px; border: 1px solid var(--accent); border-radius: 5px; background: rgba(212,168,67,0.14); color: var(--accent); font-weight: 700; cursor: pointer; transition: .15s; }
   .btn-match:hover { background: var(--accent); color: #0b1512; }
   .game-categories { display: flex; gap: 6px; margin: 0 0 10px; overflow-x: auto; padding-bottom: 2px; }

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>棋战大厅 · 多人游戏大厅</title>
-<link rel="stylesheet" href="style.css?v=49">
+<link rel="stylesheet" href="style.css?v=50">
 </head>
 <body>
 
@@ -129,7 +129,7 @@
 <!-- MAIN -->
 <div id="lobby-screen">
   <div class="lobby-header">
-    <div class="lobby-title">游戏大厅</div>
+    <div class="lobby-title">游戏大厅 <span class="online-count" id="online-count">在线 —</span></div>
     <div class="lobby-actions">
       <label class="player-count-label">人数 <select id="room-player-count" aria-label="房间人数"><option value="2">2 人</option></select></label>
       <input class="join-code-input" id="join-code" maxlength="12" placeholder="输入房号"
@@ -407,6 +407,12 @@
     <div class="chat-messages" id="chat-messages">
       <div class="chat-msg system">欢迎来到棋战大厅！</div>
     </div>
+    <div class="chat-emoji-row">
+      <button type="button" onclick="sendQuickChat('👍 好棋')" aria-label="好棋">👍 好棋</button>
+      <button type="button" onclick="sendQuickChat('😂 哈哈')" aria-label="哈哈">😂 哈哈</button>
+      <button type="button" onclick="sendQuickChat('🤔 想想')" aria-label="想想">🤔 想想</button>
+      <button type="button" onclick="sendQuickChat('GG 好局')" aria-label="好局">GG</button>
+    </div>
     <div class="chat-input-row">
       <input class="chat-input" type="text" id="chat-input"
         placeholder="发送消息..." maxlength="100"
@@ -417,8 +423,8 @@
 
 </main>
 
-<script src="js/games.js?v=49"></script>
-<script src="app.js?v=49"></script>
+<script src="js/games.js?v=50"></script>
+<script src="app.js?v=50"></script>
 </body>
 </html>
 
