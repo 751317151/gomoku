@@ -1312,6 +1312,17 @@ function refreshRooms() {
     });
 }
 
+/**
+ * 快速匹配：优先进入同玩法、同人数的公开等待房间；没有就自动开一间公开房。
+ * createRoom=false 是关键 —— true 会强制私有房，永远匹配不到人。
+ */
+function quickMatch() {
+  send({ type: 'JOIN', playerName: myName, gameType: selectedGameType, createRoom: false, playerCount: selectedPlayerCount() });
+  initGameModule(selectedGameType);
+  showGame();
+  setStatusMsg('正在匹配同玩法的在线玩家…', 'waiting');
+}
+
 function createRoom() {
   // createRoom=true：强制新建私有房间，不把我匹配进别人的等待房间。
   // 之前这里只是普通 JOIN，点「创建房间」有可能直接坐进陌生人的房间。

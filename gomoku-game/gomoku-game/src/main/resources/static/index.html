@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>棋战大厅 · 多人游戏大厅</title>
-<link rel="stylesheet" href="style.css?v=47">
+<link rel="stylesheet" href="style.css?v=48">
 </head>
 <body>
 
@@ -118,6 +118,7 @@
       <input class="join-code-input" id="join-code" maxlength="12" placeholder="输入房号"
              autocomplete="off" onkeydown="if (event.key === 'Enter') joinByCode()">
       <button class="btn-outline" onclick="joinByCode()">加入房间</button>
+      <button class="btn-match" onclick="quickMatch()">⚡ 快速匹配</button>
       <button class="btn-outline" onclick="createRoom()">创建房间</button>
       <button class="btn-outline" onclick="refreshRooms()">刷新列表</button>
       <button class="btn-solo-top" onclick="startSoloQuick()">▶ 人机对战</button>
@@ -398,8 +399,8 @@
 
 </main>
 
-<script src="js/games.js?v=47"></script>
-<script src="app.js?v=47"></script>
+<script src="js/games.js?v=48"></script>
+<script src="app.js?v=48"></script>
 </body>
 </html>
 
