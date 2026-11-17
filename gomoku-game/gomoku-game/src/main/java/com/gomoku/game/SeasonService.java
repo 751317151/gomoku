@@ -34,6 +34,7 @@ public class SeasonService {
     /** identityId -> 赛季 id -> 结算快照（分数、段位、结算时间） */
     private final Map<String, Map<String, Map<String, Object>>> settlements = new HashMap<>();
 
+    @org.springframework.beans.factory.annotation.Autowired
     public SeasonService(GameRecordService records) {
         this(records, Paths.get("data", "seasons.json"));
     }

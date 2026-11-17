@@ -9,9 +9,9 @@ const CACHE_NAME = 'gomoku-shell-v1';
 const SHELL = [
   '/',
   '/index.html',
-  '/style.css?v=56',
-  '/js/games.js?v=56',
-  '/app.js?v=56',
+  '/style.css?v=57',
+  '/js/games.js?v=57',
+  '/app.js?v=57',
   '/manifest.json',
   '/icons/icon-192.png',
   '/icons/icon-512.png'

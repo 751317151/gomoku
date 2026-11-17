@@ -3022,6 +3022,7 @@ function changeReplaySpeed() {
 let rmMoves = [];         // 复盘棋谱
 let rmEffects = [];       // 与棋谱对齐的每手效果
 let rmGameType = 'GOMOKU';
+let rmShareId = null;
 let rmIndex = 0;
 let rmTimer = null;
 let rmPlaying = false;
@@ -3297,6 +3298,9 @@ function openRecordReplay(id, gameType) {
       rmMoves = rec.moveHistory || [];
       rmEffects = rec.moveEffects || [];
       rmGameType = rec.gameType || gameType || 'GOMOKU';
+      rmShareId = /^[A-Za-z0-9-]+$/.test(String(id)) ? id : null;
+      const shareBtn = document.getElementById('rm-share');
+      if (shareBtn) shareBtn.style.display = rmShareId ? '' : 'none';
 
       if (rmMoves.length === 0) {
         alert('该局棋谱未存档（手数过多或已过期）');
@@ -3367,6 +3371,23 @@ function closeRecordReplay() {
   rmPlaying = false;
   if (rmTimer) { clearInterval(rmTimer); rmTimer = null; }
   document.getElementById('replay-modal').classList.remove('show');
+  rmShareId = null;
+  const shareBtn = document.getElementById('rm-share');
+  if (shareBtn) shareBtn.style.display = 'none';
+}
+
+/** 分享复盘链接：任何拿到链接的人都能打开这局回放（记录为公开只读） */
+function copyReplayShare() {
+  if (!rmShareId) return;
+  const url = location.origin + location.pathname + '?replay=' + encodeURIComponent(rmShareId);
+  const text = '来看这局的复盘：' + url;
+  const done = function () { setStatusMsg('复盘链接已复制，发给朋友即可', 'waiting'); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text); done(); });
+  } else {
+    fallbackCopy(text);
+    done();
+  }
 }
 
 /** 把各玩法的历史编码翻译成可读行动（新玩法不再显示「行动 0」） */
@@ -3654,6 +3675,12 @@ try {
       hintEl.style.display = '';
     }
   }
+} catch (_) {}
+
+// 分享落地页：/?replay=<id> 直接打开对应复盘
+try {
+  const replayParam = new URLSearchParams(location.search).get('replay');
+  if (replayParam && /^[A-Za-z0-9-]+$/.test(replayParam)) openRecordReplay(replayParam);
 } catch (_) {}
 
 setInterval(loadLeaderboard, 30000); // 30 秒刷新
