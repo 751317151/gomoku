@@ -27,7 +27,8 @@ class RoomInviteTest {
         EloService elo = new EloService(dir.resolve("elo.properties"), dir.resolve("legacy.json"));
         GameRecordService records = new GameRecordService(dir.resolve("games"));
         records.init();
-        manager = new RoomManager(new SimpleMeterRegistry(), elo, records);
+        manager = new RoomManager(new SimpleMeterRegistry(), elo, records,
+                new SeasonService(records, dir.resolve("seasons.json")));
     }
 
     @Test

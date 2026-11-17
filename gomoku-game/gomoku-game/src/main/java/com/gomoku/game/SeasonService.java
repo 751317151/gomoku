@@ -106,6 +106,19 @@ public class SeasonService {
         persist();
     }
 
+    /** 当前赛季段位（含结算触发）；identityId 为 null 或无记录时返回 null */
+    public synchronized String tierOf(String identityId) {
+        settlePastSeasons();
+        if (identityId == null) return null;
+        LocalDate today = today();
+        LocalDate seasonStart = today.withDayOfMonth(1);
+        long since = seasonStart.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli();
+        long until = seasonStart.plusMonths(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli();
+        int points = intOf(records.getSeasonStats(identityId, since, until).get("points"));
+        if (points <= 0) return null; // 0 分玩家暂不给徽章，避免全员青铜的噪音
+        return (String) tierFor(points).get("tier");
+    }
+
     /** 某身份的赛季称号历史（按赛季倒序），供「我的赛季称号」展示 */
     public synchronized List<Map<String, Object>> settlementHistory(String identityId) {
         List<Map<String, Object>> history = new ArrayList<>();

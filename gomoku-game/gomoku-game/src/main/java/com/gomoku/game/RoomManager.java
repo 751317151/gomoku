@@ -54,10 +54,13 @@ public class RoomManager {
 
     private final EloService eloService;
     private final GameRecordService recordService;
+    private final SeasonService seasonService;
 
-    public RoomManager(MeterRegistry meterRegistry, EloService eloService, GameRecordService recordService) {
+    public RoomManager(MeterRegistry meterRegistry, EloService eloService,
+                       GameRecordService recordService, SeasonService seasonService) {
         this.eloService = eloService;
         this.recordService = recordService;
+        this.seasonService = seasonService;
         // 每 60 秒扫描一次僵尸房间/过期会话
         cleanupExecutor.scheduleAtFixedRate(this::cleanupIdleRooms, 60, 60, TimeUnit.SECONDS);
 
@@ -238,6 +241,7 @@ public class RoomManager {
             room = new GameRoom(roomId, gameType, createRoom, targetPlayers);
             room.setEloService(eloService);
             room.setRecordService(recordService);
+            if (seasonService != null) room.setSeasonService(seasonService);
             rooms.put(roomId, room);
         }
 

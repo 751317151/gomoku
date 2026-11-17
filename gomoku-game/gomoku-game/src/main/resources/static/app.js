@@ -1267,6 +1267,9 @@ async function authenticateAccount() {
     setAccountHint('请输入用户名和密码', true);
     return false;
   }
+  if (authMode === 'register' && (password.length < 8 || !/[^A-Za-z0-9]/.test(password))) {
+    setAccountHint('建议密码 8 位以上并包含符号/数字，提高账号安全', true);
+  }
   const endpoint = authMode === 'register' ? '/api/account/register' : '/api/account/login';
   const body = { username, password, nickname: document.getElementById('player-name').value.trim() };
   try {
@@ -2728,7 +2731,7 @@ function updatePlayerPanel() {
       slot.innerHTML = `<div class="player-card"><div class="player-card-top">
         <span class="seat-number">${side}</span><div class="player-name ${player.id === myId ? 'you' : ''}">${escHtml(player.name)}${player.id === myId ? '（你）' : ''}</div>
         <span class="timer-display" id="timer-${side}">${formatTime(total)}</span></div>
-        <div class="player-stats">${escHtml(label)} · 胜 ${player.wins || 0}${targetPlayers === 2 ? ' · ELO ' + (player.elo || 1200) : ''}</div>
+        <div class="player-stats">${escHtml(label)} · 胜 ${player.wins || 0}${player.tier ? ' · <span class="seat-tier">' + escHtml(player.tier) + '</span>' : ''}${targetPlayers === 2 ? ' · ELO ' + (player.elo || 1200) : ''}</div>
         <div id="turn-${side}" style="display:none"><span class="turn-badge">● 行动中</span><span id="step-timer-${side}" class="timer-display">${timerData.stepTime}s</span></div></div>`;
     } else {
       slot.innerHTML = `<div class="waiting-slot">${escHtml(label)} · 等待玩家</div>`;

@@ -192,4 +192,17 @@ class SeasonServiceTest {
         assertEquals(1, second.settlementHistory("u1").size());
         assertEquals("2026-01", second.settlementHistory("u1").get(0).get("seasonId"));
     }
+
+    @Test
+    void tierOfReturnsCurrentSeasonTierOrNull() throws Exception {
+        GameRecordService records = newRecords();
+        SeasonService season = new SeasonService(records, Files.createTempFile("season-tier", ".json"));
+        long now = System.currentTimeMillis();
+        for (int i = 0; i < 4; i++) records.saveAsync(game("tier" + i, now - i * 1000L, "u-tier", "WIN"));
+        records.flushForTest();
+
+        assertEquals("白银", season.tierOf("u-tier"), "本月 4 胜 12 分应落在白银段");
+        assertNull(season.tierOf(null));
+        assertNull(season.tierOf("nobody"), "0 分玩家不给徽章");
+    }
 }

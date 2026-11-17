@@ -295,6 +295,7 @@
 
   .player-name.you { color: var(--accent); }
 
+  .seat-tier { color: var(--accent); font-weight: 700; }
   .player-stats {
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.7rem;

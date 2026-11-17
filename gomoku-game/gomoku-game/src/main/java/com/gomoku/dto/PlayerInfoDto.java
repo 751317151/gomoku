@@ -9,6 +9,8 @@ public class PlayerInfoDto {
     private int stone;
     private int wins;
     private int elo;
+    /** 当前赛季段位（青铜…王者）；0 分或游客可能为 null */
+    private String tier;
 
     public PlayerInfoDto() {}
 
@@ -35,4 +37,7 @@ public class PlayerInfoDto {
 
     public int getElo() { return elo; }
     public void setElo(int elo) { this.elo = elo; }
+
+    public String getTier() { return tier; }
+    public void setTier(String tier) { this.tier = tier; }
 }

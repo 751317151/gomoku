@@ -1,6 +1,7 @@
 package com.gomoku.game;
 
 import com.gomoku.dto.GameSyncDto;
+import com.gomoku.dto.PlayerInfoDto;
 import com.gomoku.model.Player;
 import com.google.gson.JsonParser;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -25,7 +26,8 @@ class RoomLifecycleTest {
         records = new GameRecordService(dir.resolve("games"));
         records.init();
         manager = new RoomManager(new SimpleMeterRegistry(),
-                new EloService(dir.resolve("elo.properties"), dir.resolve("legacy.json")), records);
+                new EloService(dir.resolve("elo.properties"), dir.resolve("legacy.json")), records,
+                new SeasonService(records, dir.resolve("seasons.json")));
     }
 
     @AfterEach void close() {
@@ -140,5 +142,42 @@ class RoomLifecycleTest {
         assertNotNull(finished.getGameOver());
         assertEquals(2, finished.getMoveCount());
         assertTrue(JsonParser.parseString(finished.getGameOver().getData()).getAsJsonObject().has("winningSides"));
+    }
+
+    @Test void roomInfoShowsSeasonTierForPersistentIdentity() {
+        // 本月四场胜利 = 12 赛季分 → 白银（阶梯 10 分起）
+        for (int i = 0; i < 4; i++) {
+            GameRecord win = new GameRecord();
+            win.setRoomId("ROOM-TIER" + i);
+            win.setGameType("HIGH_CARD");
+            win.setEndedAt(System.currentTimeMillis() - i * 1000L);
+            GameRecord.Participant winner = new GameRecord.Participant(
+                    "p-tier" + i, "段位玩家", 1, "WIN", false, 1200, 1200, 0);
+            winner.setIdentityId("tier-guest");
+            win.getParticipants().add(winner);
+            records.saveAsync(win);
+        }
+        records.flushForTest();
+        GameRecord rec = new GameRecord();
+        rec.setRoomId("ROOM-TIER");
+        rec.setGameType("HIGH_CARD");
+        rec.setEndedAt(System.currentTimeMillis());
+        GameRecord.Participant me = new GameRecord.Participant("p-tier", "段位玩家", 1, "WIN", false, 1200, 1200, 0);
+        me.setIdentityId("tier-guest");
+        rec.getParticipants().add(me);
+        records.saveAsync(rec);
+        records.flushForTest();
+
+        GameRoom room = create(channel(), 2);
+        io.netty.channel.embedded.EmbeddedChannel bound = channel();
+        assertTrue(manager.bindIdentity(bound, "段位玩家", "tier-guest"));
+        assertSame(room, manager.joinGame(bound, "段位玩家",
+                room.getRoomId().replace("ROOM-", ""), GameType.HIGH_CARD));
+
+        Player joined = manager.getPlayer(bound);
+        GameSyncDto sync = room.buildSyncDataForReconnect(joined);
+        PlayerInfoDto dto = sync.getRoomData().getPlayers().stream()
+                .filter(p -> "段位玩家".equals(p.getName())).findFirst().orElseThrow();
+        assertEquals("白银", dto.getTier(), "座位信息应携带赛季段位徽章");
     }
 }

@@ -112,6 +112,8 @@ public class GameRoom {
     private EloService eloService;
     // 对局记录服务（由 RoomManager 注入，为 null 时不做存档）
     private GameRecordService recordService;
+    // 赛季段位（由 RoomManager 注入，为 null 时座位不显示段位徽章）
+    private SeasonService seasonService;
     // 本局开局时间戳（用于对局记录的时长与排序）
     private volatile long gameStartedAt;
 
@@ -193,6 +195,10 @@ public class GameRoom {
 
     public void setRecordService(GameRecordService recordService) {
         this.recordService = recordService;
+    }
+
+    public void setSeasonService(SeasonService seasonService) {
+        this.seasonService = seasonService;
     }
 
     private void touchActivity() {
@@ -1306,7 +1312,12 @@ public class GameRoom {
         data.setActionVersion(actionVersion());
         List<PlayerInfoDto> playerDtos = new ArrayList<>();
         for (Player p : players) {
-            playerDtos.add(new PlayerInfoDto(p.getId(), p.getName(), p.getStone(), p.getWins(), p.getElo()));
+            PlayerInfoDto dto = new PlayerInfoDto(p.getId(), p.getName(), p.getStone(), p.getWins(), p.getElo());
+            // 段位徽章挂在座位上：多人房里一眼看出谁是老玩家，也把「赛季」变成可见身份
+            if (seasonService != null && !p.isAi()) {
+                dto.setTier(seasonService.tierOf(p.getIdentityId()));
+            }
+            playerDtos.add(dto);
         }
         data.setPlayers(playerDtos);
         data.setSpectatorCount(spectators.size());
