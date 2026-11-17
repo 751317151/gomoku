@@ -44,6 +44,7 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
     private static final int ATTACK_MARKER = -2;
     private final RoomManager roomManager;
     @Autowired private com.gomoku.game.GuestIdentityService guests;
+    @Autowired private com.gomoku.game.FriendService friends;
 
     private final EnumMap<GameMessage.Type, BiConsumer<Channel, GameMessage>> handlers = new EnumMap<>(GameMessage.Type.class);
 
@@ -55,6 +56,7 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
 
     private void registerHandlers() {
         handlers.put(GameMessage.Type.GET_ROOMS, (conn, msg) -> handleGetRooms(conn));
+        handlers.put(GameMessage.Type.HALL_BIND, this::handleHallBind);
         handlers.put(GameMessage.Type.JOIN, this::handleJoin);
         handlers.put(GameMessage.Type.SPECTATE, this::handleSpectate);
         handlers.put(GameMessage.Type.ADD_AI, this::handleAddAI);
@@ -62,6 +64,7 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
         handlers.put(GameMessage.Type.PASS, this::handlePass);
         handlers.put(GameMessage.Type.END_TURN, this::handleEndTurn);
         handlers.put(GameMessage.Type.CHAT, this::handleChat);
+        handlers.put(GameMessage.Type.DIRECT_MSG, this::handleDirectMsg);
         handlers.put(GameMessage.Type.RESTART, (conn, msg) -> handleRestart(conn));
         handlers.put(GameMessage.Type.LEAVE, (conn, msg) -> handleLeave(conn));
         handlers.put(GameMessage.Type.RECONNECT, this::handleReconnect);
@@ -198,6 +201,23 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
         GameMessage res = new GameMessage(GameMessage.Type.ROOM_LIST);
         res.setData(roomManager.getRoomsListJson());
         Player.sendMessageTo(conn, gson.toJson(res));
+    }
+
+    /**
+     * 大厅身份绑定：连接建立后携带 token 上报，不进房。
+     * 好友在线状态与实时推送（FRIEND_EVENT）依赖这条消息——
+     * 旧客户端不发也不受影响（不显示在线、收不到推送，走轮询兜底）。
+     */
+    private void handleHallBind(Channel conn, GameMessage msg) {
+        String identityId = guests.resolve(msg.getGuestToken());
+        if (identityId == null) {
+            sendError(conn, "游客凭证无效，请重新进入大厅");
+            return;
+        }
+        String playerName = NameSanitizer.sanitize(msg.getPlayerName());
+        if (!roomManager.bindIdentity(conn, playerName, identityId)) {
+            sendError(conn, "游客凭证无效，请重新进入大厅");
+        }
     }
 
     private void handleJoin(Channel conn, GameMessage msg) {
@@ -351,6 +371,36 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
         String text = NameSanitizer.sanitizeChat(msg.getMessage());
         if (text == null) return;
         room.handleChat(player, text);
+    }
+
+    /**
+     * 好友私聊：只允许好友之间、对方在线才送达（v1 不做离线消息，未送达有明确报错）。
+     * 与房间聊天同款清洗（去控制字符、200 字截断）与 1 秒限流（超限静默丢弃）。
+     * 接收方是连接级身份寻址：人在大厅或对局中都能收到。
+     */
+    private void handleDirectMsg(Channel conn, GameMessage msg) {
+        Player sender = roomManager.getPlayer(conn);
+        if (sender == null || sender.getIdentityId() == null) {
+            sendError(conn, "请先进入大厅获取身份");
+            return;
+        }
+        if (!sender.canSendChat()) return; // 限流窗口内静默丢弃，与房间聊天一致
+        String target = msg.getData();
+        String text = NameSanitizer.sanitizeChat(msg.getMessage());
+        if (target == null || target.isEmpty() || text == null) return;
+        if (!friends.areFriends(sender.getIdentityId(), target)) {
+            sendError(conn, "只能给好友发私聊");
+            return;
+        }
+        if (!roomManager.isIdentityOnline(target)) {
+            sendError(conn, "对方当前不在线，私聊未送达");
+            return;
+        }
+        GameMessage out = new GameMessage(GameMessage.Type.DIRECT_MSG);
+        out.setPlayerId(sender.getIdentityId());
+        out.setPlayerName(sender.getName());
+        out.setMessage(text);
+        roomManager.sendToIdentity(target, out);
     }
 
     private void handleRestart(Channel conn) {

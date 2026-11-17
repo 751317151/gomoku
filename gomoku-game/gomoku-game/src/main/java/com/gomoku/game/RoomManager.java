@@ -44,6 +44,11 @@ public class RoomManager {
     private final ConcurrentHashMap<String, Integer> ipConnectionCount = new ConcurrentHashMap<>();
     // 玩家ID -> 断线时刻（用于 TTL 清理）
     private final ConcurrentHashMap<String, Long> disconnectedAt = new ConcurrentHashMap<>();
+    // 连接 -> 持久身份（大厅在线判定用；LEAVE 不清，掉线才清，
+    // 否则玩家离开房间回大厅后好友会误判其离线）
+    private final ConcurrentHashMap<Channel, String> identityByConn = new ConcurrentHashMap<>();
+    // 持久身份 -> 最近一次绑定的昵称（人不在房间时 presence 仍能给出展示名）
+    private final ConcurrentHashMap<String, String> identityNames = new ConcurrentHashMap<>();
 
     // 僵尸房间清理定时任务
     private final ScheduledExecutorService cleanupExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -55,12 +60,15 @@ public class RoomManager {
     private final EloService eloService;
     private final GameRecordService recordService;
     private final SeasonService seasonService;
+    private final FriendService friends;
 
     public RoomManager(MeterRegistry meterRegistry, EloService eloService,
-                       GameRecordService recordService, SeasonService seasonService) {
+                       GameRecordService recordService, SeasonService seasonService,
+                       FriendService friendService) {
         this.eloService = eloService;
         this.recordService = recordService;
         this.seasonService = seasonService;
+        this.friends = friendService;
         // 每 60 秒扫描一次僵尸房间/过期会话
         cleanupExecutor.scheduleAtFixedRate(this::cleanupIdleRooms, 60, 60, TimeUnit.SECONDS);
 
@@ -131,8 +139,54 @@ public class RoomManager {
         if (identityId == null) return false;
         Player player = getOrCreatePlayer(conn, name);
         if (player.getIdentityId() != null && !identityId.equals(player.getIdentityId())) return false;
+        // 上线边缘触发：该身份此前没有任何活动连接才算「上线」，避免每次 JOIN/换房都打扰好友
+        boolean wasOnline = identityByConn.containsValue(identityId);
         player.setIdentityId(identityId);
+        identityByConn.put(conn, identityId);
+        identityNames.put(identityId, player.getName());
+        if (!wasOnline) {
+            pushFriendEvent("online", identityId, player.getName());
+        }
         return true;
+    }
+
+    /** 该身份当前是否在线（连接级判定，大厅绑定即在线）——私聊可达性检查用 */
+    public boolean isIdentityOnline(String identityId) {
+        return identityId != null && identityByConn.containsValue(identityId);
+    }
+
+    /**
+     * 大厅推送：把一条消息发给某身份的全部活动连接（好友系统实时提醒用）。
+     * 连接级寻址，不依赖房间成员关系——人在大厅也能收到。
+     */
+    public void sendToIdentity(String identityId, GameMessage msg) {
+        if (identityId == null || msg == null) return;
+        String json = gson.toJson(msg);
+        for (Map.Entry<Channel, String> e : identityByConn.entrySet()) {
+            if (!identityId.equals(e.getValue())) continue;
+            Player p = playerByConn.get(e.getKey());
+            if (p != null && p.isConnected()) p.sendMessage(json);
+        }
+    }
+
+    /** 给某身份的全部在线好友推送同一条好友事件（下线/上线广播用）。 */
+    public void pushFriendEvent(String kind, String aboutId, String aboutName) {
+        if (friends == null || aboutId == null) return;
+        GameMessage msg = friendEvent(kind, aboutId, aboutName);
+        for (String friendId : friends.friendsOf(aboutId)) {
+            sendToIdentity(friendId, msg);
+        }
+    }
+
+    /** 构造好友事件消息（data 为 JSON：{kind, id, name}；kind = online/offline/request/accepted）。 */
+    public static GameMessage friendEvent(String kind, String aboutId, String aboutName) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("kind", kind);
+        payload.put("id", aboutId);
+        payload.put("name", aboutName);
+        GameMessage msg = new GameMessage(GameMessage.Type.FRIEND_EVENT);
+        msg.setData(gson.toJson(payload));
+        return msg;
     }
 
     public Player getPlayerBySession(String sessionId) {
@@ -342,6 +396,10 @@ public class RoomManager {
         playerByConn.put(conn, newPlayer);
         playerById.put(playerId, newPlayer);
         disconnectedAt.remove(playerId);
+        // 重连后新连接接管该身份的大厅在线状态（旧连接随后关闭，不会触发下线边缘）
+        if (newPlayer.getIdentityId() != null) {
+            identityByConn.put(conn, newPlayer.getIdentityId());
+        }
         // 切换后旧连接不再能行动，也不继续接收房间消息。
         if (oldPlayer.getConnection() != null) oldPlayer.getConnection().close();
 
@@ -381,6 +439,8 @@ public class RoomManager {
      * 连接断开（掉线）：保留会话与席位，玩家可凭 sessionId 重连
      */
     public synchronized void handleDisconnect(Channel conn) {
+        // 连接级身份先摘除：reconnect 关闭旧连接也会走到这里，此时新连接已登记，不会误判离线
+        String identityId = identityByConn.remove(conn);
         Player player = playerByConn.remove(conn);
         if (player == null) return;
 
@@ -390,6 +450,10 @@ public class RoomManager {
         }
 
         disconnectedAt.put(player.getId(), System.currentTimeMillis());
+        // 下线边缘：该身份没有其他活动连接才通知好友（多标签页/双端掉一个不算下线）
+        if (identityId != null && !identityByConn.containsValue(identityId)) {
+            pushFriendEvent("offline", identityId, player.getName());
+        }
         // IP 释放由 GameServerHandler.handlerRemoved 统一处理
         broadcastRoomsList();
     }
@@ -496,6 +560,44 @@ public class RoomManager {
         stats.put("waitingRooms", rooms.values().stream()
                 .filter(r -> r.getState() == GameRoom.State.WAITING).count());
         return stats;
+    }
+
+    /**
+     * 按持久身份查询在线状态与房间位置（好友面板展示 + 一键加入好友房间）。
+     *
+     * 在线判定走连接级身份表（identityByConn）：人在大厅但没进房间也算在线；
+     * 同一身份可能同时开着多个标签页（多个 Player），优先取在线的那个取昵称/房间；
+     * 房间位置对好友可见是「邀请」语义 —— 私有房也返回房号，因为只有好友能查到。
+     */
+    public Map<String, Object> getIdentityPresence(String identityId) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("online", identityId != null && identityByConn.containsValue(identityId));
+        if (identityId == null) return result;
+        Player online = null;
+        Player any = null;
+        for (Player p : playerById.values()) {
+            if (!identityId.equals(p.getIdentityId())) continue;
+            if (online == null && p.isConnected()) online = p;
+            if (any == null) any = p;
+        }
+        Player best = online != null ? online : any;
+        if (best == null) {
+            // 人在大厅但没进过房间（或刚 LEAVE）：用最近一次绑定的昵称兜底
+            String lastName = identityNames.get(identityId);
+            if (lastName != null) result.put("name", lastName);
+            return result;
+        }
+        result.put("name", best.getName());
+        if (!best.isConnected()) return result;
+        String roomId = playerRoom.get(best.getId());
+        if (roomId == null) return result;
+        GameRoom room = rooms.get(roomId);
+        if (room == null) return result;
+        result.put("roomId", room.getRoomId());
+        result.put("roomState", room.getState().name());
+        result.put("gameType", room.getGameType().name());
+        result.put("joinable", room.getState() == GameRoom.State.WAITING && !room.isFull());
+        return result;
     }
 
     /**

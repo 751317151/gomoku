@@ -8,6 +8,7 @@ public class GameMessage {
     public enum Type {
         // 客户端 -> 服务端
         GET_ROOMS,      // 获取房间列表
+        HALL_BIND,      // 大厅身份绑定（连接后携 token 上报，不进房；好友在线状态与实时推送依赖它）
         JOIN,           // 加入游戏
         SPECTATE,       // 观战
         ADD_AI,         // 添加电脑
@@ -15,6 +16,7 @@ public class GameMessage {
         PASS,           // 停一手（围棋）
         END_TURN,       // 结束回合（一回合多行动的玩法，如卡牌）
         CHAT,           // 聊天
+        DIRECT_MSG,     // 好友私聊（客户端→服务端：data=对方身份，message=文本；服务端→客户端：playerId/playerName=发送者）
         RESTART,        // 请求重新开始
         LEAVE,          // 离开房间/大厅
         RECONNECT,      // 断线重连
@@ -33,6 +35,7 @@ public class GameMessage {
         RESTART_REQUEST,// 对手请求重玩
         TIMER_SYNC,     // 计时同步（服务端→客户端，每秒推送）
         PLAYER_STATUS,  // 玩家连接状态（断线/重连通知，不重置棋盘）
+        FRIEND_EVENT,   // 好友事件推送（上线/下线/收到申请/申请通过，data 为 JSON：{kind,id,name}）
         ERROR           // 错误信息
     }
 

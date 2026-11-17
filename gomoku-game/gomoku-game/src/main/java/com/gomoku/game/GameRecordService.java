@@ -497,6 +497,21 @@ public class GameRecordService {
         return result;
     }
 
+    /**
+     * 某持久身份最近一次真人对局使用的昵称（好友列表离线展示用）。
+     * 摘要索引最新的在前，找到即返回；该身份没有真人记录返回 null。
+     */
+    public synchronized String getLastKnownName(String identityId) {
+        if (identityId == null) return null;
+        for (GameRecord record : recent) {
+            GameRecord.Participant participant = findParticipantByIdentity(record, identityId);
+            if (participant != null && !participant.isAi() && participant.getName() != null) {
+                return participant.getName();
+            }
+        }
+        return null;
+    }
+
     private static GameRecord.Participant findParticipant(GameRecord record, String playerName) {
         for (GameRecord.Participant p : record.getParticipants()) {
             if (playerName.equals(p.getName())) return p;

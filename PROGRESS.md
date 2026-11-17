@@ -1791,3 +1791,64 @@ export PATH="/usr/bin:/bin:/e/JAVA/apache-maven-3.9.11/bin:/e/JAVA/jdk/jdk-21.0.
 - 服务端支持隐藏出价、并列得分、离场处理、AI 出价、回放历史和观战视图。
 - 前端新增金币/宝石分面板与 0–10 出价按钮，移动端自动折行。
 
+
+## 2026-11-18：好友系统（社交裂变第一步：好友码互加 + 在线状态 + 一键加入好友房间）
+
+- 定位：延续 11-17 的路线图（账号体系 → 留存引擎 → 社交裂变），本轮落地社交第一块。留存与身份都有了，缺的是「叫朋友一起来」的直接通路；房号邀请需要口头传码，好友系统把它变成面板里的一次点击。
+- 新增 FriendService（data/friends.json，单文件存 codes + graph，原子落盘）：
+  - 好友码：每个持久身份一个 8 位编码（字符集去掉 I/O/0/1），随机分配一次落盘；游客与账号通用，账号还可直接按用户名加好友。解析顺序：先按码后按用户名。
+  - 好友图按 identityId 存储（昵称可变、身份才是主键），申请需对方同意（incoming/outgoing 双队列）；好友上限 50、每方向待处理申请上限 20；磁盘只存身份与关系，不存昵称不存凭证。
+  - 变更统一「校验 → 改内存 → persist → 失败按节点深拷贝回滚」，与 AccountService 同款原子写。
+- RoomManager 新增 getIdentityPresence(identityId)：按身份查在线与房间位置（同身份多标签页取在线者）。房间号对好友可见是「邀请」语义——私有房也返回，但只有好友能查到；joinable = WAITING 且未满员。断线宽限期内昵称仍展示，在线判定以活动连接为准。
+- AccountService 新增 findByIdentity / identityOfUsername；GameRecordService 新增 getLastKnownName（摘要索引最新的在前）。展示名解析顺序：实时在线昵称 → 账号昵称 → 最近对局昵称 → 「玩家+身份尾号」。
+- 新增 FriendController（/api/friends）：GET 全景（me.code / friends 含在线与房间 / incoming / outgoing）、POST /requests（target=好友码或用户名）、requests/{id}/accept|decline、DELETE requests/{id}（撤回）、DELETE /{id}（删除）。错误带 code（INVALID/NOT_FOUND/CONFLICT/LIMIT/UNAUTHORIZED → 400/404/409/429/401），全部 no-store；打开面板即补发好友码（老身份无需迁移）。
+- 前端大厅新增「好友」面板：我的好友码 + 复制、好友码/用户名添加、收到的申请同意/拒绝、发出的申请可撤回、好友列表在线圆点 + 「▶ 加入 TA 的房间」一键进房（带玩法类型发 JOIN）+ 删除；大厅可见时每 15 秒轮询，登录/登出/注册身份切换后重取。缓存版本 v58→v59（本轮中途修 bug 后再 v59→v60，见下）。
+- 新增测试：FriendServiceTest 14 例（好友码格式/稳定性/重启保留、按码与按用户名解析、同意/拒绝/撤回/删除、重复与反向申请 409、待处理上限、好友满员、磁盘不含昵称）；FriendPresenceTest 6 例（陌生身份只有 offline、等待房 joinable 带玩法、开局后不可加入、私有房对好友可见且不在公共列表、断线离线但保留昵称、双开任一连接在线即算在线）。全量 344 项测试零失败。
+- 新增 smoke-friends.mjs（36 项）：REST 全流程 + WS 真实链路（好友建房 → 对端看到 online/roomId/joinable、私有房不在公共列表、一键加入开局、对端转 PLAYING 不可加入、断线转离线）。已录入 docs/smoke/README.md。
+- 真实浏览器（ZCode 内置浏览器）实测通过：面板渲染好友码/计数/空态；REST 发申请 → 面板出现申请行 → UI 点「同意」→ 好友 1/50；对方 WS 建房 → 列表出现绿色在线点与「▶ 加入 TA 的房间」→ 点击后直接进入对局（PLAYING，座位显示双方昵称）；离开后返回大厅列表仍在。截图确认样式正常。
+- 踩坑与修复：
+  - renderFriends 里 `const rows` 后又 `rows = rows.concat(...)` → TypeError 被链上 catch 静默吞掉，表现为「好友码渲染了但列表停在加载中」。单测与 REST 冒烟都测不到（纯前端渲染），浏览器实测才暴露；已改为 push 复用，并借机把缓存版本升到 v60——SW 按 URL（含 ?v=59）缓存，修复后内容变了必须再升版本号，否则已访问过的客户端拿不到修复。
+  - 冷启动 JVM 的首条 WS 握手可能远超 5s，wsJoin 5s 超时会在服务端完成加入前就 resolve，导致冒烟偶发「好友离线/加入失败」；放宽到 15s（smoke-room-invite.mjs 有同款备注）。
+  - Playwright 在该页面点按钮易超时（页面自身轮询导致 actionability 检查不稳定），冒烟与脚本统一用「页面内 DOM click」路径。
+- 本机验证：compile / package 通过；surefire -DforkCount=0 全量 344 项 0 失败 0 错误；smoke-friends 36/36、smoke-account 13/13、smoke-checkin 17/17、smoke-season 9/9（冷启动全新数据目录下复跑仍全过）；全部 JS 语法检查通过；index.html 缓存版本一致（v=60）。冒烟在临时目录跑，未污染仓库 data/。
+- 保留：不自动 commit；未动生产 Dockerfile 与公网证书验证。
+
+## 2026-11-18（第二轮）：好友 WS 实时推送（上线/下线/申请/通过的大厅提醒）
+
+- 定位：好友面板此前只靠 15 秒 REST 轮询，好友上线或收到申请最多要等一个轮询周期；本轮把四类事件做成 WS 即时推送，轮询降级为兜底。这是社交裂变的「叫人上线」钩子：好友上线的提醒本身就会把人拉回大厅。
+- 协议新增（GameMessage.Type）：
+  - `HALL_BIND`（客户端→服务端）：连接建立后携带 guestToken + 昵称绑定大厅身份，**不进房**。此前身份只在 JOIN 时绑定——纯大厅用户既不显示在线也收不到任何推送，是本功能的前提缺口。旧客户端不发这条也不受影响（无推送、走轮询）。
+  - `FRIEND_EVENT`（服务端→客户端）：data 为 JSON `{kind, id, name}`，kind = online/offline/request/accepted。前端 switch 无 default，未知类型静默忽略——旧前端 + 新服务端安全；新前端 + 旧服务端只是没推送。
+- RoomManager 重构在线模型：
+  - 新增连接级身份表 `identityByConn`（连接→identityId）：**LEAVE 不清、掉线才清**——修掉一个隐藏缺陷：玩家离开房间回大厅后 `playerById` 已无其 Player，好友会误判其离线。同时新增 `identityNames`（身份→最近绑定昵称）供 presence 在无 Player 时兜底展示名。
+  - 在线边缘触发：bindIdentity 时该身份此前没有任何活动连接才推 `online`（换房/重复 JOIN/双开第二标签页都不打扰）；handleDisconnect 摘除连接后没有任何同身份连接才推 `offline`（reconnect 关闭旧连接不会误推）。
+  - 新增 `sendToIdentity`（连接级寻址，人在大厅也能收到，同一身份的所有标签页都收）与 `pushFriendEvent`（发给对方好友列表，经 FriendService）。
+  - `getIdentityPresence` 的 online 判定改为连接级：大厅绑定即在线、无房间位置。
+- FriendController：申请发出 → 目标在线即收 `request`；通过申请 → 发起方在线即收 `accepted`（拒绝/撤回/删除不做推送，15 秒轮询兜底，避免打扰）。
+- 前端：ws.onopen 在 RECONNECT 之后发 `HALL_BIND`（带 guestToken 的消息走 JSON 路径，二进制编码器不涉及）；handleMessage 新增 FRIEND_EVENT 分支 → 立即 loadFriends() + setStatusMsg 文案（👥 xx 上线了 / 请求加你为好友 / 同意了你的好友申请）。缓存版本 v60→v61。
+- 测试：
+  - 新增 RoomFriendNotifyTest 6 例（EmbeddedChannel 出站帧 + Gson 解析）：只推好友不推陌生人、事件带身份昵称且不回推当事人、双开掉一条连接不算下线/最后一条才推 offline、第二个连接不重复推 online、LEAVE 不触发 offline 且 presence 仍在线、sendToIdentity 同身份双标签页都收到、payload 结构。
+  - FriendPresenceTest 新增 2 例：LEAVE 回大厅仍在线且无房间位置；HALL_BIND 大厅绑定即在线（带昵称、无 roomId）、断开才算离线。RoomInviteTest/RoomLifecycleTest 构造器同步加 FriendService 参数。
+  - smoke-friends.mjs 扩到 44 项：新增 `hallClient`（HALL_BIND+GET_ROOMS 确认）与 `waitForFriendEvent`；覆盖大厅绑定 presence、online/offline/request/accepted 四类推送、陌生人上线不推送。
+  - 全量 352 项测试 0 失败 0 错误；ContextSmokeTest（Spring 装配，覆盖 RoomManager←FriendService 新依赖）通过。
+- 真实浏览器实测（v61）：REST 发申请 → toast「👥 xx 请求加你为好友…」即时弹出、申请行自动渲染；UI 点同意 → 1/50；对方 HALL_BIND 上线 → toast「👥 xx 上线了」即时弹出、列表自动刷新出绿点与实时昵称（截图确认）。
+- 踩坑：
+  - EmbeddedChannel 的 eventLoop().execute 任务不自动执行，读出站帧前必须 runPendingTasks()（首轮 4 例失败的原因）。
+  - 测试 setup bug：双开场景忘了绑定第二个连接，断言「不掉线」反而失败——行为是对的，用例错了。
+  - GameServerHandler 插 handleHallBind 时一次 Edit 把 `{` 与下一行拼到一行（仍合法但丑），已修正并补齐方法。
+- 生产 Dockerfile：Docker Desktop 守护进程当日本机未就绪（已拉起 Desktop，info 持续超时），本轮仍未验证完整构建与公网证书；继续挂账。
+
+## 2026-11-18（第三轮）：好友私聊（DIRECT_MSG）
+
+- 定位：推送上线后，私聊是社交闭环的最后一块——从「看见好友在线」到「直接说话」。v1 边界：仅好友之间、对方在线才送达（不做离线消息，未送达有明确报错）、消息不落盘（刷新清空），先把实时对话体验做对。
+- 协议：`DIRECT_MSG` 双向复用。客户端→服务端 `{data: 对方身份, message: 文本}`；服务端→客户端 `{playerId: 发送者身份, playerName: 发送者昵称, message: 文本}`。
+- 后端（GameServerHandler.handleDirectMsg）：
+  - 准入：发送者已绑定身份；`FriendService.areFriends`（新增，好友图对称查询，自己对自己拒绝）；`RoomManager.isIdentityOnline`（新增，连接级判定）。
+  - 清洗与限流：复用 `NameSanitizer.sanitizeChat`（去控制字符 + 200 字截断，与房间聊天同款）与 `Player.canSendChat` 1 秒限流（超限静默丢弃，不惊动双方）。
+  - 送达：`sendToIdentity` 连接级寻址——收信人在大厅或对局中都收到，双开标签页每屏一份。
+  - 错误明确：非好友「只能给好友发私聊」、离线「对方当前不在线，私聊未送达」——前端对含「私聊」的 ERROR 走状态栏内联提示，不弹模态打断。
+- 前端：好友面板每个好友加 💬 按钮 → 私聊弹窗（标题「与 xx 私聊」，气泡区分对方/自己，回车发送）；弹窗没开时收信累计未读红点徽标 + 一条「💬 xx：消息…」提示；打开弹窗即清零未读并就地渲染后续消息。消息历史仅内存（dmHistory/dmUnread），刷新清空。缓存版本 v61→v62。
+- 测试：FriendServiceTest 新增 areFriendsFollowsGraphLifecycle（陌生人/自己/仅申请未同意/对称/删除后）；smoke-friends.mjs 扩到 51 项：好友在线双向可达、1 秒限流只送首条、300 字截断到 200、非好友被拒且不送达、离线好友明确报错。
+- 真实浏览器实测（v62）：对方脚本 HALL_BIND 上线并申请 → REST 同意 → 我方弹窗未开时收到「💬 私聊对手乙：你好，我是乙！」toast + 未读徽标 1；点 💬 打开弹窗看到消息 → 输入回复 → 对方脚本确认收到并回信 → 弹窗就地渲染第三条气泡（截图确认）。全链路：申请→同意→上线提醒→未读→开窗→往返对话。
+- 全量回归 353 项测试（新增 1 例 areFriends）0 失败；smoke-friends 51/51。
+- 生产 Dockerfile：Docker Desktop 守护进程本轮拉起成功（docker info 29.9.3 正常），`docker build` 已启动并进入基础镜像拉取阶段，但 docker.io 下载带宽极低（maven:3.9.11-eclipse-temurin-11 约 50KB/s，10 分钟仅 31/145MB），与 2026-11-14 记录的历史瓶颈一致；构建转后台继续，如完成另行记录，否则下一轮换国内镜像源重试。

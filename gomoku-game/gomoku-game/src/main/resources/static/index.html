@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="棋战大厅">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="style.css?v=58">
+<link rel="stylesheet" href="style.css?v=62">
 </head>
 <body>
 
@@ -218,6 +218,23 @@
         <div id="daily-progress" class="daily-progress" aria-live="polite">加载中...</div>
       </div>
 
+      <!-- 好友：好友码/用户名互加，在线状态与一键加入好友房间 -->
+      <div class="panel friends-panel">
+        <div class="panel-title"><span style="flex:1">好友</span><span class="friend-count" id="friend-count">—</span></div>
+        <div class="friend-me-row" id="friend-me-row">
+          <span class="friend-me-label">我的好友码</span>
+          <span class="friend-code" id="friend-code">—</span>
+          <button class="leave-btn" style="padding:2px 8px;" onclick="copyFriendCode()">复制</button>
+        </div>
+        <div class="friend-add-row">
+          <input id="friend-input" class="join-code-input" style="flex:1;min-width:0;" maxlength="24" placeholder="好友码或用户名"
+                 autocomplete="off" onkeydown="if (event.key === 'Enter') addFriend()">
+          <button class="btn-outline" onclick="addFriend()">添加</button>
+        </div>
+        <div id="friend-requests" class="friend-requests" hidden></div>
+        <div id="friends-list" class="friends-list" aria-live="polite">加载中...</div>
+      </div>
+
       <!-- 最近对局（可点进去复盘） -->
       <div class="panel record-panel">
         <div class="panel-title">
@@ -263,6 +280,21 @@
       <button class="btn-outline" onclick="rmStep(1)">&gt;|</button>
       <input type="range" id="rm-slider" min="0" max="0" value="0" oninput="rmSeek(this.value)">
       <span id="rm-step-text" class="replay-modal-step">0/0</span>
+    </div>
+  </div>
+</div>
+
+<!-- 好友私聊弹窗（仅大厅好友面板入口；消息不落盘，刷新后清空） -->
+<div class="dm-modal" id="dm-modal">
+  <div class="dm-box">
+    <div class="dm-head">
+      <div class="dm-title" id="dm-title">私聊</div>
+      <button class="leave-btn" onclick="closeDm()">关闭</button>
+    </div>
+    <div class="dm-messages" id="dm-messages"></div>
+    <div class="dm-input-row">
+      <input id="dm-input" maxlength="200" placeholder="输入消息，回车发送…" autocomplete="off" onkeydown="if (event.key === 'Enter') sendDm()">
+      <button class="btn-outline" onclick="sendDm()">发送</button>
     </div>
   </div>
 </div>
@@ -455,8 +487,8 @@
 
 </main>
 
-<script src="js/games.js?v=58"></script>
-<script src="app.js?v=58"></script>
+<script src="js/games.js?v=62"></script>
+<script src="app.js?v=62"></script>
 </body>
 </html>
 

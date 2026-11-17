@@ -138,6 +138,29 @@ public class AccountService {
         return result;
     }
 
+    /**
+     * 由持久身份反查账号信息（好友系统展示昵称、按用户名加好友用）。
+     * 该身份不属于任何账号（纯游客）时返回 null。
+     */
+    public synchronized Map<String, String> findByIdentity(String identityId) {
+        String key = identityId == null ? null : byIdentity.get(identityId);
+        Account account = key == null ? null : accounts.get(key);
+        if (account == null) return null;
+        Map<String, String> result = new LinkedHashMap<>();
+        result.put("id", identityId);
+        result.put("username", account.username);
+        result.put("nickname", account.nickname);
+        return result;
+    }
+
+    /** 用户名 → 持久身份；账号不存在返回 null（好友系统按用户名申请时解析目标）。 */
+    public synchronized String identityOfUsername(String username) {
+        String key = normalize(username);
+        if (key.isEmpty()) return null;
+        Account account = accounts.get(key);
+        return account == null ? null : account.identityId;
+    }
+
     /** 修改密码：需提供当前凭证与旧密码；成功后旧凭证仍有效（同一身份），只是密码变了。 */
     public synchronized void changePassword(String token, String oldPassword, String newPassword) {
         String identityId = guests.resolve(token);

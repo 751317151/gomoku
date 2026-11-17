@@ -25,9 +25,15 @@ class RoomLifecycleTest {
     @BeforeEach void setUp() {
         records = new GameRecordService(dir.resolve("games"));
         records.init();
+        GuestIdentityService guests = new GuestIdentityService(dir.resolve("guests.json"));
+        guests.init();
+        AccountService accounts = new AccountService(dir.resolve("accounts.json"), guests);
+        accounts.init();
+        FriendService friends = new FriendService(dir.resolve("friends.json"), accounts);
+        friends.init();
         manager = new RoomManager(new SimpleMeterRegistry(),
                 new EloService(dir.resolve("elo.properties"), dir.resolve("legacy.json")), records,
-                new SeasonService(records, dir.resolve("seasons.json")));
+                new SeasonService(records, dir.resolve("seasons.json")), friends);
     }
 
     @AfterEach void close() {

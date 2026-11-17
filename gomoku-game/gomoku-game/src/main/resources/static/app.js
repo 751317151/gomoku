@@ -1294,6 +1294,8 @@ async function authenticateAccount() {
     // 凭证已落 localStorage，切回游客态：否则按钮仍是「注册并进入」，再点会重复注册报 409。
     switchAuthTab('guest');
     setLoginStatus(successMessage);
+    // 身份变了（游客升级为账号或换号登录），好友列表按新身份重取
+    loadFriends();
     return true;
   } catch (_) {
     setAccountHint('连接失败，请稍后重试', true);
@@ -1310,6 +1312,8 @@ async function accountLogout() {
   document.getElementById('player-name').readOnly = false;
   switchAuthTab('guest');
   setAccountHint('已退出账号，接下来为游客身份。');
+  // 退出账号回到游客身份，好友面板按游客身份重取
+  loadFriends();
 }
 
 async function joinGame() {
@@ -1351,6 +1355,9 @@ function connect(url) {
     if (mySessionId) {
       send({ type: 'RECONNECT', sessionId: mySessionId });
     }
+    // 大厅身份绑定：告诉服务端「我在大厅」——好友在线状态与实时推送（FRIEND_EVENT）都依赖它。
+    // 带 guestToken 的消息走 JSON 路径；旧客户端不发这条也不受影响（服务端轮询兜底）。
+    if (guestToken) send({ type: 'HALL_BIND', playerName: myName, guestToken });
 
     // 先发探测消息，等服务端确认后再进入（防止 IP 限流等场景）
     send({ type: 'GET_ROOMS' });
@@ -1433,6 +1440,7 @@ function showLobby() {
   loadOnlineStats();
   loadRecentGames();
   loadLeaderboard();
+  loadFriends();
 }
 
 function showGame() {
@@ -2228,6 +2236,15 @@ function handleMessage(msg) {
       handleTimerSync(msg);
       break;
 
+    case 'FRIEND_EVENT':
+      // 好友事件实时提醒（上线/下线/收到申请/申请通过）；旧前端无此分支会静默忽略
+      handleFriendEvent(msg);
+      break;
+
+    case 'DIRECT_MSG':
+      handleDirectMsg(msg);
+      break;
+
     case 'ERROR':
       // Silently handle reconnect failure — clear stale session
       if (msg.message && msg.message.includes('重连')) {
@@ -2240,6 +2257,11 @@ function handleMessage(msg) {
         reconnectAttempts = MAX_RECONNECT; // 阻止指数退避重连
         showConfirm(msg.message, null);
         showLogin();
+        break;
+      }
+      // 私聊未送达（对方不在线/非好友/过长）：状态栏内联提示，不弹模态打断
+      if (msg.message && msg.message.includes('私聊')) {
+        setStatusMsg(msg.message, 'error');
         break;
       }
       // 落子被拒：用服务端回传的真实手数校准本地 moveSeq
@@ -3162,6 +3184,257 @@ function loadDailyProgress() {
     .catch(() => { box.textContent = '游客身份准备中…'; });
 }
 
+// ============ 好友：好友码互加 · 在线状态 · 一键加入好友房间 ============
+
+let friendsLoadedOnce = false;
+let lastFriendsData = null;
+
+/** 拉取好友全景（好友码/好友列表/申请）；失败静默，不打扰大厅 */
+function loadFriends() {
+  const listEl = document.getElementById('friends-list');
+  if (!listEl || !guestToken) return;
+  fetch('/api/friends', { headers: { Authorization: 'Bearer ' + guestToken } })
+    .then(r => r.ok ? r.json() : Promise.reject(new Error('unauthorized')))
+    .then(data => renderFriends(data))
+    .catch(() => { if (!friendsLoadedOnce) listEl.textContent = '好友服务暂不可用'; });
+}
+
+function renderFriends(data) {
+  friendsLoadedOnce = true;
+  lastFriendsData = data;
+  const listEl = document.getElementById('friends-list');
+  const countEl = document.getElementById('friend-count');
+  const codeEl = document.getElementById('friend-code');
+  const reqEl = document.getElementById('friend-requests');
+  if (!listEl || !reqEl) return;
+
+  if (codeEl && data.me && data.me.code) codeEl.textContent = data.me.code;
+  if (countEl) countEl.textContent = (data.friends ? data.friends.length : 0) + '/50';
+
+  // 待处理申请：收到的可同意/拒绝，发出的可撤回
+  const incoming = data.incoming || [];
+  const outgoing = data.outgoing || [];
+  const rows = incoming.map(r =>
+    '<div class="friend-request-row"><span class="friend-dot offline"></span><span class="friend-name">' + escHtml(r.name || '玩家') + ' 请求加你为好友</span>'
+    + '<span class="friend-request-actions"><button class="btn-outline friend-mini" onclick="respondFriendRequest(\'' + r.id + '\',\'accept\')">同意</button>'
+    + '<button class="leave-btn friend-mini" onclick="respondFriendRequest(\'' + r.id + '\',\'decline\')">拒绝</button></span></div>');
+  for (const r of outgoing) {
+    rows.push('<div class="friend-request-row"><span class="friend-dot offline"></span><span class="friend-name">已向 ' + escHtml(r.name || '玩家') + ' 发出申请</span>'
+      + '<span class="friend-request-actions"><button class="leave-btn friend-mini" onclick="cancelFriendRequest(\'' + r.id + '\')">撤回</button></span></div>');
+  }
+  reqEl.hidden = rows.length === 0;
+  reqEl.innerHTML = rows.join('');
+
+  const friends = data.friends || [];
+  if (!friends.length) {
+    listEl.innerHTML = '<div class="friends-empty">还没有好友。把你的好友码发给朋友互加，或直接输入对方的好友码 / 用户名。</div>';
+    return;
+  }
+  listEl.innerHTML = friends.map(f => {
+    const roomLabel = f.roomId
+      ? (f.joinable
+          ? '<button class="btn-outline friend-mini" onclick="joinFriendRoom(\'' + f.roomId + '\',\'' + (f.gameType || '') + '\')">▶ 加入 TA 的房间</button>'
+          : '<span class="friend-room-label">房间 ' + escHtml(String(f.roomId).replace(/^ROOM-/, '')) + '（不可加入）</span>')
+      : '';
+    const unread = dmUnread[f.id];
+    const badge = unread ? '<span class="dm-badge" title="未读私聊">' + unread + '</span>' : '';
+    return '<div class="friend-row">'
+      + '<span class="friend-dot ' + (f.online ? 'online' : 'offline') + '"></span>'
+      + '<span class="friend-name" title="' + escHtml(f.id) + '">' + escHtml(f.name || '玩家') + '</span>' + badge
+      + '<span class="friend-room">' + roomLabel + '</span>'
+      + '<button class="btn-outline friend-mini" title="私聊" onclick="openFriendChat(\'' + f.id + '\')">💬</button>'
+      + '<button class="leave-btn friend-mini" onclick="removeFriendById(\'' + f.id + '\')">✕</button>'
+      + '</div>';
+  }).join('');
+}
+
+/** 好友码 / 用户名添加好友 */
+function addFriend() {
+  const input = document.getElementById('friend-input');
+  if (!input || !guestToken) return;
+  const target = (input.value || '').trim();
+  if (!target) { setStatusMsg('请输入对方的好友码或用户名', 'error'); return; }
+  fetch('/api/friends/requests', {
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, { Authorization: 'Bearer ' + guestToken }),
+    body: JSON.stringify({ target })
+  })
+    .then(async r => {
+      const body = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(friendErrorText(body));
+      input.value = '';
+      setStatusMsg(body && body.message ? body.message : '申请已发送', 'waiting');
+      loadFriends();
+    })
+    .catch(e => setStatusMsg(e.message || '添加失败，请稍后重试', 'error'));
+}
+
+/** 同意 / 拒绝收到的申请 */
+function respondFriendRequest(id, action) {
+  if (!guestToken) return;
+  fetch('/api/friends/requests/' + encodeURIComponent(id) + '/' + action, {
+    method: 'POST', headers: { Authorization: 'Bearer ' + guestToken }
+  })
+    .then(async r => {
+      if (!r.ok) throw new Error(friendErrorText(await r.json().catch(() => null)));
+      if (action === 'accept') setStatusMsg('已添加好友', 'win');
+      loadFriends();
+    })
+    .catch(e => setStatusMsg(e.message || '操作失败', 'error'));
+}
+
+/** 撤回我发出的申请 */
+function cancelFriendRequest(id) {
+  if (!guestToken) return;
+  fetch('/api/friends/requests/' + encodeURIComponent(id), {
+    method: 'DELETE', headers: { Authorization: 'Bearer ' + guestToken }
+  })
+    .then(async r => {
+      if (!r.ok) throw new Error(friendErrorText(await r.json().catch(() => null)));
+      loadFriends();
+    })
+    .catch(e => setStatusMsg(e.message || '操作失败', 'error'));
+}
+
+/** 删除好友（双向移除） */
+function removeFriendById(id) {
+  if (!guestToken || !confirm('确定删除该好友？双方都会移除这条关系。')) return;
+  fetch('/api/friends/' + encodeURIComponent(id), {
+    method: 'DELETE', headers: { Authorization: 'Bearer ' + guestToken }
+  })
+    .then(async r => {
+      if (!r.ok) throw new Error(friendErrorText(await r.json().catch(() => null)));
+      loadFriends();
+    })
+    .catch(e => setStatusMsg(e.message || '操作失败', 'error'));
+}
+
+/** 一键加入好友所在房间（带玩法类型，服务端校验房间与玩法匹配） */
+function joinFriendRoom(roomId, gameType) {
+  joinSpecificRoom(roomId, gameType || selectedGameType);
+}
+
+function copyFriendCode() {
+  const codeEl = document.getElementById('friend-code');
+  const code = codeEl ? codeEl.textContent.trim() : '';
+  if (!code || code === '—') return;
+  const done = () => setStatusMsg('好友码已复制，发给朋友即可互加', 'waiting');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(code).then(done, () => { fallbackCopy(code); done(); });
+  } else {
+    fallbackCopy(code);
+    done();
+  }
+}
+
+/** 好友接口业务错误 → 用户可读文案 */
+function friendErrorText(body) {
+  if (!body) return '操作失败，请稍后重试';
+  const messages = {
+    NOT_FOUND: '找不到该好友码或用户名',
+    CONFLICT: body.message || '请求与当前状态冲突',
+    LIMIT: body.message || '操作过于频繁或已达上限',
+    INVALID: body.message || '输入无效',
+    UNAUTHORIZED: '身份已失效，请重新进入大厅'
+  };
+  return messages[body.code] || body.message || '操作失败，请稍后重试';
+}
+
+/** 大厅可见时每 15 秒刷新好友在线状态；切到后台不请求 */
+function startFriendsPolling() {
+  setInterval(() => {
+    const lobby = document.getElementById('lobby-screen');
+    if (!lobby || lobby.style.display === 'none' || document.hidden) return;
+    loadFriends();
+  }, 15000);
+}
+
+/** 好友事件实时提醒：收到 WS 推送立即刷新面板并弹提示（轮询只作兜底） */
+function handleFriendEvent(msg) {
+  let payload = null;
+  try { payload = JSON.parse(msg.data); } catch (_) { return; }
+  if (!payload || !payload.kind) return;
+  // 面板立即刷新；人在对局中也不打断（面板在大厅，回大厅自然看到新状态）
+  loadFriends();
+  const who = payload.name || '好友';
+  const tips = {
+    online: '👥 ' + who + ' 上线了',
+    offline: who + ' 离线了',
+    request: '👥 ' + who + ' 请求加你为好友，去大厅好友面板处理',
+    accepted: '👥 ' + who + ' 同意了你的好友申请'
+  };
+  const text = tips[payload.kind];
+  if (text) setStatusMsg(text, 'waiting');
+}
+
+// ============ 好友私聊（DIRECT_MSG，仅好友之间；消息不落盘，刷新页面清空） ============
+
+let dmOpenId = null;
+const dmHistory = {};   // identityId -> [{me, text}]
+const dmUnread = {};    // identityId -> 未读条数（弹窗没开时累计）
+
+/** 从最近一次好友数据里反查展示名（申请列表里的人也能聊） */
+function friendNameOf(id) {
+  const data = lastFriendsData;
+  if (!data) return '好友';
+  const all = [].concat(data.friends || [], data.incoming || [], data.outgoing || []);
+  const hit = all.find(x => x.id === id);
+  return (hit && hit.name) || '好友';
+}
+
+function openFriendChat(id) {
+  dmOpenId = id;
+  dmUnread[id] = 0;
+  if (!dmHistory[id]) dmHistory[id] = [];
+  document.getElementById('dm-title').textContent = '与 ' + escHtml(friendNameOf(id)) + ' 私聊';
+  document.getElementById('dm-modal').classList.add('show');
+  renderDm();
+  setTimeout(() => { const input = document.getElementById('dm-input'); if (input) input.focus(); }, 50);
+}
+
+function closeDm() {
+  dmOpenId = null;
+  document.getElementById('dm-modal').classList.remove('show');
+}
+
+function renderDm() {
+  const box = document.getElementById('dm-messages');
+  if (!box || !dmOpenId) return;
+  const history = dmHistory[dmOpenId] || [];
+  box.innerHTML = history.map(m =>
+    '<div class="dm-line ' + (m.me ? 'me' : 'them') + '"><span>' + escHtml(m.text) + '</span></div>'
+  ).join('') || '<div class="dm-empty">还没有消息，打个招呼吧～</div>';
+  box.scrollTop = box.scrollHeight;
+}
+
+function sendDm() {
+  const input = document.getElementById('dm-input');
+  if (!input || !dmOpenId) return;
+  const text = (input.value || '').trim();
+  if (!text) return;
+  if (!dmHistory[dmOpenId]) dmHistory[dmOpenId] = [];
+  dmHistory[dmOpenId].push({ me: true, text });
+  renderDm();
+  input.value = '';
+  send({ type: 'DIRECT_MSG', data: dmOpenId, message: text });
+}
+
+/** 收到好友私聊：弹窗开着就地渲染，否则累计未读徽标 + 提示一条 */
+function handleDirectMsg(msg) {
+  const from = msg.playerId;
+  const text = msg.message || '';
+  if (!from || !text) return;
+  if (!dmHistory[from]) dmHistory[from] = [];
+  dmHistory[from].push({ me: false, text });
+  if (dmOpenId === from) {
+    renderDm();
+  } else {
+    dmUnread[from] = (dmUnread[from] || 0) + 1;
+    loadFriends();
+    setStatusMsg('💬 ' + (msg.playerName || '好友') + '：' + text.slice(0, 40), 'waiting');
+  }
+}
+
 function renderBlackjackPanel() {
   const status = document.getElementById('bj-status');
   const dealer = document.getElementById('bj-dealer');
@@ -3765,6 +4038,7 @@ function renderHighCardPanel() {
 
 document.getElementById('player-name').value = readPreference('gomoku_name', '');
 restoreAccount();
+startFriendsPolling();
 const soundButton = document.getElementById('sound-toggle');
 soundButton.textContent = '音效 ' + (soundEnabled ? '开' : '关');
 soundButton.setAttribute('aria-pressed', String(soundEnabled));

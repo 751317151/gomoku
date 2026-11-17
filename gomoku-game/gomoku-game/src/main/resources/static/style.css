@@ -2361,3 +2361,48 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 .coach-panel { padding: 14px; border-top: 1px solid var(--border); font-size: .8rem; line-height: 1.6; }
 .coach-panel summary { cursor: pointer; color: var(--accent); min-height: 32px; }
 #coach-answer { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ============ 好友面板 ============ */
+.friend-count { font-size: .78rem; color: var(--text-dim); }
+.friend-me-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; margin-bottom: 8px; background: rgba(212,168,67,.08); border: 1px solid var(--border); border-radius: 8px; font-size: .82rem; }
+.friend-me-label { color: var(--text-dim); white-space: nowrap; }
+.friend-code { flex: 1; color: var(--accent); font-weight: 700; letter-spacing: 2px; overflow-wrap: anywhere; user-select: all; }
+.friend-add-row { display: flex; gap: 8px; margin-bottom: 10px; }
+.friend-add-row .btn-outline { white-space: nowrap; }
+.friend-requests { margin-bottom: 8px; }
+.friend-request-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; margin-bottom: 6px; background: rgba(212,168,67,.06); border: 1px dashed var(--border); border-radius: 8px; font-size: .82rem; }
+.friend-request-row .friend-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.friend-request-actions { display: flex; gap: 6px; }
+.friend-mini { padding: 2px 10px; font-size: .78rem; min-height: 0; }
+.friends-list { display: flex; flex-direction: column; }
+.friend-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-bottom: 1px solid rgba(255,255,255,.06); font-size: .85rem; }
+.friend-row:last-child { border-bottom: none; }
+.friend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.friend-dot.online { background: #4caf6d; box-shadow: 0 0 6px rgba(76,175,109,.8); }
+.friend-dot.offline { background: #4a4a4a; }
+.friend-name { color: var(--text); min-width: 0; overflow-wrap: anywhere; }
+.friend-row .friend-name { flex: 1; }
+.friend-room { display: flex; align-items: center; min-width: 0; }
+.friend-room-label { color: var(--text-dim); font-size: .76rem; white-space: nowrap; }
+.friends-empty { padding: 10px 6px; color: var(--text-dim); font-size: .8rem; line-height: 1.6; }
+@media (max-width: 600px) {
+  .friend-row { flex-wrap: wrap; }
+  .friend-row .friend-room { flex-basis: 100%; }
+}
+
+/* ============ 好友私聊弹窗 ============ */
+.dm-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 210; align-items: center; justify-content: center; }
+.dm-modal.show { display: flex; }
+.dm-box { width: min(420px, calc(100vw - 24px)); max-height: 70vh; display: flex; flex-direction: column; background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 14px; box-sizing: border-box; }
+.dm-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.dm-title { color: var(--accent); font-weight: 700; }
+.dm-messages { flex: 1; min-height: 180px; max-height: 42vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 6px; border: 1px solid var(--border); border-radius: 8px; background: rgba(255,255,255,.03); }
+.dm-line { display: flex; }
+.dm-line span { max-width: 78%; padding: 6px 10px; border-radius: 10px; font-size: .86rem; line-height: 1.5; overflow-wrap: anywhere; }
+.dm-line.me { justify-content: flex-end; }
+.dm-line.me span { background: rgba(212,168,67,.22); color: var(--text); }
+.dm-line.them span { background: rgba(255,255,255,.08); color: var(--text); }
+.dm-empty { color: var(--text-dim); font-size: .82rem; text-align: center; padding: 24px 0; }
+.dm-input-row { display: flex; gap: 8px; margin-top: 10px; }
+.dm-input-row input { flex: 1; min-width: 0; }
+.dm-badge { display: inline-block; min-width: 18px; padding: 1px 5px; border-radius: 9px; background: #c0392b; color: #fff; font-size: .7rem; text-align: center; }
