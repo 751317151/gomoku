@@ -1857,3 +1857,9 @@ export PATH="/usr/bin:/bin:/e/JAVA/apache-maven-3.9.11/bin:/e/JAVA/jdk/jdk-21.0.
 
 - 首次真正跑通到编译阶段的生产 Dockerfile 构建暴露一个潜伏 bug：AiLeaderboardIsolationTest 用了 Stream.toList()（Java 16+），而 pom 目标 Java 11；本地 Java 21 一直掩盖（历史上构建从未走到过这一步）。改回 collect(Collectors.toList()) 并补 import。
 - 第二次容器内构建确认主代码在 Java 11 下编译通过（失败点只剩测试编译），修复后第三次构建进行中。
+
+## 2026-11-18（补充 2）：生产 Dockerfile 构建与容器验证通过
+
+- Java 11 兼容修复后，生产镜像构建成功（gomoku-game:prod-verify，291MB，多阶段 maven:3.9.11-temurin-11 → temurin-11-jre-jammy）。
+- 用生产镜像真实起容器端到端验证：actuator/health UP；HTTP API（/api/stats、/api/guest 签发）正常；Netty 9001 WS 握手 101 Switching Protocols；容器内 whoami=gomoku（非 root）；数据卷 /app/data 归属 gomoku 且 guests.json 正常落盘。验证后容器/卷/镜像已清理。
+- 至此「生产 Dockerfile 完整构建」从挂账清单移除；剩余：公网域名 HTTPS/WSS 证书签发需部署者真实域名与 80/443 可达，无法在开发机代替验证。
