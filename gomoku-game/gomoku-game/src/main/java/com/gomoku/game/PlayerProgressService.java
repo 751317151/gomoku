@@ -68,9 +68,17 @@ public class PlayerProgressService {
     }
 
     public Map<String, Object> getProgress(String identityId) {
+        return getProgress(identityId, 0);
+    }
+
+    /**
+     * 叠加签到等运营来源的经验。签到奖励单独存，不写成对局记录，
+     * 因此战绩/ELO/对局数不受影响；这里只把它计入等级经验。
+     */
+    public Map<String, Object> getProgress(String identityId, int bonusXp) {
         List<GameRecord> games = records.getIdentityRecords(identityId);
 
-        int xp = 0;
+        int xp = Math.max(0, bonusXp);
         int wins = 0, draws = 0, losses = 0;
         int multiplayerGames = 0;
         int maxWinStreak = 0, currentStreak = 0;

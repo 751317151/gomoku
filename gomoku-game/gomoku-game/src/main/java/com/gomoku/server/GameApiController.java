@@ -3,11 +3,14 @@ package com.gomoku.server;
 import com.gomoku.dto.RoomListItemDto;
 import com.gomoku.game.GameRecord;
 import com.gomoku.game.GameRecordService;
+import com.gomoku.game.GuestIdentityService;
 import com.gomoku.game.RoomManager;
+import com.gomoku.game.SeasonService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -25,11 +28,16 @@ public class GameApiController {
 
     private final RoomManager roomManager;
     private final GameRecordService recordService;
+    private final SeasonService seasonService;
+    private final GuestIdentityService guests;
 
     @Autowired
-    public GameApiController(RoomManager roomManager, GameRecordService recordService) {
+    public GameApiController(RoomManager roomManager, GameRecordService recordService,
+                             SeasonService seasonService, GuestIdentityService guests) {
         this.roomManager = roomManager;
         this.recordService = recordService;
+        this.seasonService = seasonService;
+        this.guests = guests;
     }
 
     /**
@@ -57,6 +65,22 @@ public class GameApiController {
     public List<Map<String, Object>> getWeeklyLeaderboard(
             @RequestParam(required = false, defaultValue = "10") int limit) {
         return recordService.getWeeklyActivityLeaderboard(clamp(limit));
+    }
+
+    /**
+     * 当前赛季（自然月）：赛季信息 + 本人赛季数据与段位 + 赛季榜。
+     * 携带凭证时返回本人的赛季段位；未携带时 me 为空战绩。
+     */
+    @GetMapping("/api/season")
+    public Map<String, Object> getSeason(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestParam(required = false, defaultValue = "10") int limit) {
+        String identityId = guests.resolve(token(authorization));
+        return seasonService.current(identityId, clamp(limit));
+    }
+
+    private static String token(String header) {
+        return header != null && header.startsWith("Bearer ") ? header.substring(7) : null;
     }
 
     /**

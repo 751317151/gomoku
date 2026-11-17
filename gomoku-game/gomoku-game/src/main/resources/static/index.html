@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="棋战大厅">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="style.css?v=51">
+<link rel="stylesheet" href="style.css?v=55">
 </head>
 <body>
 
@@ -100,8 +100,24 @@
     <div class="field-label">你的昵称</div>
     <input class="field-input" type="text" id="player-name" placeholder="输入昵称..." maxlength="16">
 
+    <div class="account-tabs" role="tablist" aria-label="登录方式">
+      <button type="button" class="account-tab active" id="tab-guest" onclick="switchAuthTab('guest')">游客试玩</button>
+      <button type="button" class="account-tab" id="tab-login" onclick="switchAuthTab('login')">登录</button>
+      <button type="button" class="account-tab" id="tab-register" onclick="switchAuthTab('register')">注册账号</button>
+    </div>
+    <div id="account-fields" class="account-fields" hidden>
+      <input class="field-input" type="text" id="account-username" placeholder="用户名（3–20 位）" maxlength="20" autocomplete="username">
+      <input class="field-input" type="password" id="account-password" placeholder="密码（至少 6 位）" maxlength="128" autocomplete="current-password">
+      <p class="account-hint" id="account-hint"></p>
+    </div>
+
     <p id="login-sub-status" role="status"></p>
-    <button class="btn-join" onclick="joinGame()">进入大厅</button>
+    <p id="recovery-hint" class="recovery-hint" style="display:none" role="status"></p>
+    <button class="btn-join" id="join-button" onclick="joinGame()">进入大厅</button>
+    <div class="account-footer">
+      <span id="account-state">当前：游客身份（战绩仅存在本浏览器）</span>
+      <button type="button" id="account-logout" class="account-link" hidden onclick="accountLogout()">退出账号</button>
+    </div>
   </div>
 </div>
 
@@ -161,6 +177,7 @@
     <div style="min-width:260px;display:flex;flex-direction:column;gap:16px;">
       <div class="panel leaderboard-panel">
         <div class="panel-title"><span style="flex:1">排行榜</span><button class="leave-btn" id="lb-mode-toggle" style="padding:2px 8px;" onclick="toggleLeaderboardMode()">本周活跃</button></div>
+        <div class="season-banner" id="season-banner" hidden></div>
         <div class="lb-tabs" id="lb-tabs"></div>
         <div id="leaderboard-list" style="padding:8px;font-size:0.85rem;color:var(--text-dim)">加载中...</div>
       </div>
@@ -191,6 +208,13 @@
 
       <div class="panel daily-panel">
         <div class="panel-title"><span style="flex:1">今日目标</span><span class="daily-streak" id="daily-streak">连续 0 天</span></div>
+        <div class="checkin-card" id="checkin-card">
+          <div class="checkin-info">
+            <div class="checkin-title" id="checkin-title">每日签到 · +15 经验</div>
+            <div class="checkin-sub" id="checkin-sub">连续签到可解锁额外奖励</div>
+          </div>
+          <button class="checkin-btn" id="checkin-btn" onclick="doCheckIn()">签到</button>
+        </div>
         <div id="daily-progress" class="daily-progress" aria-live="polite">加载中...</div>
       </div>
 
@@ -430,8 +454,8 @@
 
 </main>
 
-<script src="js/games.js?v=51"></script>
-<script src="app.js?v=51"></script>
+<script src="js/games.js?v=55"></script>
+<script src="app.js?v=55"></script>
 </body>
 </html>
 

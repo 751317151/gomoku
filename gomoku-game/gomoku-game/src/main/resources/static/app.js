@@ -4,6 +4,8 @@ function readPreference(key, fallback = null) {
 function savePreference(key, value) { try { localStorage.setItem(key, value); } catch (_) {} }
 let soundEnabled = readPreference('gomoku_sound', 'on') === 'on';
 let guestToken = readPreference('gomoku_guest');
+let authMode = 'guest';
+let accountInfo = null;
 let targetPlayers = 2;
 function toggleSound() {
   soundEnabled = !soundEnabled; savePreference('gomoku_sound', soundEnabled ? 'on' : 'off');
@@ -78,7 +80,39 @@ let lastMove = null;
 let winLine = null; // 获胜连线坐标 [[row,col],...]
 let players = {};
 let myWins = 0, myLosses = 0;
-let mySessionId = sessionStorage.getItem('gomoku_session') || null;
+// ============ 会话持久化：标签页内 + 关闭后恢复 ============
+// sessionStorage 只覆盖当前标签页；关闭再打开时用它 + localStorage 备份找回座位。
+// 服务端会话与席位保留 10 分钟，备份超过这个窗口就不值得再试。
+const SESSION_BACKUP_KEY = 'gomoku_session_backup';
+const SESSION_BACKUP_TTL_MS = 10 * 60 * 1000;
+let mySessionId = null;
+try { mySessionId = sessionStorage.getItem('gomoku_session'); } catch (_) {}
+if (!mySessionId) {
+  try {
+    const raw = localStorage.getItem(SESSION_BACKUP_KEY);
+    if (raw) {
+      const backup = JSON.parse(raw);
+      if (backup && backup.id && Date.now() - backup.ts <= SESSION_BACKUP_TTL_MS) mySessionId = backup.id;
+      else localStorage.removeItem(SESSION_BACKUP_KEY);
+    }
+  } catch (_) {}
+}
+function clearSessionBackup() {
+  try { localStorage.removeItem(SESSION_BACKUP_KEY); } catch (_) {}
+}
+function clearPersistedSession() {
+  try { sessionStorage.removeItem('gomoku_session'); } catch (_) {}
+  clearSessionBackup();
+}
+function backupSessionForRecovery() {
+  // 只在页面即将关闭时写备份：多标签场景下「最后关闭的标签」决定恢复目标。
+  try {
+    if (!mySessionId || gameState === 'LOBBY') return;
+    localStorage.setItem(SESSION_BACKUP_KEY, JSON.stringify({ id: mySessionId, ts: Date.now() }));
+  } catch (_) {}
+}
+window.addEventListener('pagehide', backupSessionForRecovery);
+window.addEventListener('beforeunload', backupSessionForRecovery);
 /** 邀请链接里的房号，登录成功后自动加入 */
 let pendingJoinCode = '';
 let heartbeatTimer = null;
@@ -1172,7 +1206,110 @@ function getWsUrl() {
   // HTTP 80 或其它端口：视为反向代理，同源 /ws 转发到 Netty
   return proto + '//' + location.host + '/ws';
 }
+
+// ============ 账号体系 ============
+const authHeaders = () => guestToken ? { Authorization: 'Bearer ' + guestToken } : {};
+
+function setAccountHint(text, isError) {
+  const hint = document.getElementById('account-hint');
+  if (hint) { hint.textContent = text || ''; hint.style.color = isError ? 'var(--red)' : 'var(--text-dim)'; }
+}
+
+function setLoginStatus(text, isError) {
+  const el = document.getElementById('login-sub-status');
+  if (el) { el.textContent = text || ''; el.style.color = isError ? 'var(--red)' : 'var(--green)'; }
+}
+
+function switchAuthTab(mode) {
+  authMode = mode;
+  ['guest', 'login', 'register'].forEach(m => {
+    const tab = document.getElementById('tab-' + m);
+    if (tab) tab.classList.toggle('active', m === mode);
+  });
+  const fields = document.getElementById('account-fields');
+  const button = document.getElementById('join-button');
+  const pw = document.getElementById('account-password');
+  if (mode === 'guest') {
+    fields.hidden = true;
+    button.textContent = '进入大厅';
+  } else {
+    fields.hidden = false;
+    button.textContent = mode === 'register' ? '注册并进入' : '登录并进入';
+    if (pw) pw.autocomplete = mode === 'register' ? 'new-password' : 'current-password';
+  }
+  setAccountHint(mode === 'register'
+    ? '用当前游客身份注册，历史战绩与等级会完整保留。'
+    : (mode === 'login' ? '登录已有账号，换设备也能找回战绩。' : ''));
+  setLoginStatus('');
+}
+
+/** 页面加载时恢复登录态：有账号 token 就把它显示出来 */
+async function restoreAccount() {
+  if (!guestToken) return;
+  try {
+    const response = await fetch('/api/account/me', { headers: authHeaders() });
+    if (!response.ok) return;
+    accountInfo = await response.json();
+    document.getElementById('player-name').value = accountInfo.nickname || accountInfo.username;
+    document.getElementById('account-state').textContent = '已登录：' + (accountInfo.nickname || accountInfo.username);
+    document.getElementById('account-logout').hidden = false;
+    switchAuthTab('guest');
+    setAccountHint('账号已登录，直接进入即可延续战绩。');
+  } catch (_) { /* 网络异常时仍可按游客进入 */ }
+}
+
+/** 注册或登录，成功后把返回的 token 作为统一身份凭证 */
+async function authenticateAccount() {
+  const username = (document.getElementById('account-username').value || '').trim();
+  const password = document.getElementById('account-password').value || '';
+  if (!username || !password) {
+    setAccountHint('请输入用户名和密码', true);
+    return false;
+  }
+  const endpoint = authMode === 'register' ? '/api/account/register' : '/api/account/login';
+  const body = { username, password, nickname: document.getElementById('player-name').value.trim() };
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+      body: JSON.stringify(body)
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      setAccountHint(data.message || '操作失败，请重试', true);
+      return false;
+    }
+    guestToken = data.token;
+    savePreference('gomoku_guest', guestToken);
+    accountInfo = data;
+    document.getElementById('player-name').value = data.nickname || data.username;
+    document.getElementById('account-state').textContent = '已登录：' + (data.nickname || data.username);
+    document.getElementById('account-logout').hidden = false;
+    const successMessage = authMode === 'register' ? '注册成功，战绩已保留' : '登录成功';
+    // 凭证已落 localStorage，切回游客态：否则按钮仍是「注册并进入」，再点会重复注册报 409。
+    switchAuthTab('guest');
+    setLoginStatus(successMessage);
+    return true;
+  } catch (_) {
+    setAccountHint('连接失败，请稍后重试', true);
+    return false;
+  }
+}
+
+async function accountLogout() {
+  guestToken = null;
+  accountInfo = null;
+  try { localStorage.removeItem('gomoku_guest'); } catch (_) {}
+  document.getElementById('account-state').textContent = '当前：游客身份（战绩仅存在本浏览器）';
+  document.getElementById('account-logout').hidden = true;
+  switchAuthTab('guest');
+  setAccountHint('已退出账号，接下来为游客身份。');
+}
+
 async function joinGame() {
+  if (authMode !== 'guest') {
+    if (!await authenticateAccount()) return;
+  }
   const url = document.getElementById('ws-url').value.trim() || getWsUrl();
   myName = document.getElementById('player-name').value.trim() || '匿名玩家';
 
@@ -1453,6 +1590,7 @@ function spectateRoom(id, gameType) {
 function leaveRoom() {
   if (replayMode) exitReplay();
   send({ type: 'LEAVE' });
+  clearSessionBackup();
   // 重置前端状态
   initGameModule(selectedGameType);
   players = {};
@@ -2088,7 +2226,7 @@ function handleMessage(msg) {
       // Silently handle reconnect failure — clear stale session
       if (msg.message && msg.message.includes('重连')) {
         mySessionId = null;
-        sessionStorage.removeItem('gomoku_session');
+        clearPersistedSession();
         break;
       }
       // IP 限流：停止重连，留在登录页
@@ -2121,7 +2259,7 @@ function handleWaiting(msg) {
   const waitingCapacity = waitingType === currentGameType ? targetPlayers : null;
       if (msg.sessionId) {
         mySessionId = msg.sessionId;
-        sessionStorage.setItem('gomoku_session', mySessionId);
+        sessionStorage.setItem('gomoku_session', mySessionId); clearSessionBackup();
       }
       // 重置棋盘画面和游戏状态，但保留 players（由 ROOM_INFO 更新）
 
@@ -2275,7 +2413,7 @@ function handleGameSync(msg) {
   let restoredResult = null;
   if (msg.sessionId) {
     mySessionId = msg.sessionId;
-    sessionStorage.setItem('gomoku_session', mySessionId);
+    sessionStorage.setItem('gomoku_session', mySessionId); clearSessionBackup();
   }
 
   // 区分观战和断线重连
@@ -2284,7 +2422,7 @@ function handleGameSync(msg) {
     myStone = msg.stone;
     if (msg.sessionId) {
       mySessionId = msg.sessionId;
-      sessionStorage.setItem('gomoku_session', mySessionId);
+      sessionStorage.setItem('gomoku_session', mySessionId); clearSessionBackup();
     }
   } else {
     gameState = 'SPECTATING';
@@ -2353,7 +2491,7 @@ function handleGameSync(msg) {
 function handleGameStart(msg) {
   myId = msg.playerId;
   myStone = msg.stone;
-  if (msg.sessionId) { mySessionId = msg.sessionId; sessionStorage.setItem('gomoku_session', mySessionId); }
+  if (msg.sessionId) { mySessionId = msg.sessionId; sessionStorage.setItem('gomoku_session', mySessionId); clearSessionBackup(); }
   roomId = msg.roomId;
   // 开局后不再需要邀请入口
   const inviteBtnStart = document.getElementById('invite-btn');
@@ -2937,7 +3075,70 @@ function loadMyStats() {
     .catch(() => {});
 }
 
+/** 渲染签到卡片：未签到显示可点按钮，已签到显示今日已领与连续天数 */
+function renderCheckInStatus(s) {
+  const card = document.getElementById('checkin-card');
+  const title = document.getElementById('checkin-title');
+  const sub = document.getElementById('checkin-sub');
+  const btn = document.getElementById('checkin-btn');
+  if (!card || !title || !sub || !btn) return;
+  const signed = !!s.signedToday;
+  const streak = s.streak || 0;
+  card.classList.toggle('signed', signed);
+  if (signed) {
+    title.textContent = '今日已签到 · 连续 ' + streak + ' 天';
+    const next = s.nextMilestone || 0;
+    sub.textContent = next ? '再连续 ' + (next - streak) + ' 天可解锁 +' + milestoneXp(next) + ' 经验' : '已达最高连续奖励';
+    btn.textContent = '已签到';
+    btn.disabled = true;
+  } else {
+    title.textContent = '每日签到 · +15 经验';
+    let extra = '';
+    if (s.comebackAvailable) extra = ' · 欢迎回归，额外 +50';
+    else if (s.nextMilestone) extra = ' · 连续 ' + streak + ' 天，明日里程碑 +' + milestoneXp(s.nextMilestone);
+    sub.textContent = '连续签到可解锁额外奖励' + extra;
+    btn.textContent = '签到';
+    btn.disabled = false;
+  }
+}
+
+/** 里程碑经验与后端 CheckInService.MILESTONES 保持一致 */
+function milestoneXp(day) {
+  return ({ 3: 30, 7: 80, 14: 150, 30: 400 })[day] || 0;
+}
+
+function loadCheckInStatus() {
+  const card = document.getElementById('checkin-card');
+  if (!card || !guestToken) return;
+  fetch('/api/checkin/status', { headers: { Authorization: 'Bearer ' + guestToken } })
+    .then(r => r.ok ? r.json() : Promise.reject(new Error('unauthorized')))
+    .then(s => renderCheckInStatus(s))
+    .catch(() => {});
+}
+
+function doCheckIn() {
+  const btn = document.getElementById('checkin-btn');
+  if (!guestToken || (btn && btn.disabled)) return;
+  if (btn) { btn.disabled = true; btn.textContent = '签到中…'; }
+  fetch('/api/checkin', { method: 'POST', headers: { Authorization: 'Bearer ' + guestToken } })
+    .then(r => r.ok ? r.json() : Promise.reject(new Error('unauthorized')))
+    .then(s => {
+      renderCheckInStatus(Object.assign({}, s, { signedToday: true }));
+      const reward = s.rewardXp || 0;
+      if (reward > 0 && typeof setStatusMsg === 'function') {
+        setStatusMsg('签到成功，+' + reward + ' 经验' + (s.comeback ? '（含回归礼包）' : ''), 'win');
+      }
+      // 经验已计入等级，刷新成长面板让玩家立刻看到升级进度
+      loadPlayerProgress();
+    })
+    .catch(() => {
+      if (btn) { btn.disabled = false; btn.textContent = '签到'; }
+      if (typeof setStatusMsg === 'function') setStatusMsg('签到失败，请稍后重试', 'error');
+    });
+}
+
 function loadDailyProgress() {
+  loadCheckInStatus();
   const box = document.getElementById('daily-progress');
   const streakEl = document.getElementById('daily-streak');
   if (!box || !guestToken) return;
@@ -3306,39 +3507,55 @@ function buildLbTabs() {
   });
 }
 
-let leaderboardMode = 'elo'; // elo = 分游戏总榜；weekly = 近 7 天全玩法活跃榜
+let leaderboardMode = 'elo'; // elo = 分游戏总榜；weekly = 近 7 天活跃榜；season = 本月赛季段位
 
+/** 三种榜单循环切换：ELO 总榜 → 本周活跃 → 赛季段位 */
 function toggleLeaderboardMode() {
-  leaderboardMode = leaderboardMode === 'elo' ? 'weekly' : 'elo';
+  leaderboardMode = leaderboardMode === 'elo' ? 'weekly' : (leaderboardMode === 'weekly' ? 'season' : 'elo');
   const btn = document.getElementById('lb-mode-toggle');
-  if (btn) btn.textContent = leaderboardMode === 'elo' ? '本周活跃' : 'ELO 总榜';
+  if (btn) btn.textContent = leaderboardMode === 'elo' ? '本周活跃' : (leaderboardMode === 'weekly' ? '赛季段位' : 'ELO 总榜');
   const tabs = document.getElementById('lb-tabs');
-  if (tabs) tabs.style.opacity = leaderboardMode === 'weekly' ? '0.45' : '';
+  // 赛季榜是全玩法汇总，与「分游戏页签」无关，故淡化页签
+  if (tabs) tabs.style.opacity = leaderboardMode === 'elo' ? '' : '0.45';
+  const banner = document.getElementById('season-banner');
+  if (banner) banner.hidden = leaderboardMode !== 'season';
   loadLeaderboard();
 }
 
 function loadLeaderboard() {
   if (leaderboardMode === 'weekly') {
-    fetch('/api/leaderboard/weekly?limit=10')
-      .then(r => r.json())
-      .then(list => {
-        const el = document.getElementById('leaderboard-list');
-        if (!el) return;
-        if (!Array.isArray(list) || list.length === 0) {
-          el.textContent = '本周暂无真人活跃数据';
-          return;
-        }
-        el.innerHTML = list.map((item, i) =>
-          `<div class="lb-row">
-            <span class="lb-rank">${i + 1}</span>
-            <span class="lb-name">${escHtml(item.name || '游客')}</span>
-            <span class="lb-elo">${item.wins}胜 / ${item.games}局</span>
-          </div>`
-        ).join('');
-      })
-      .catch(() => {});
+    renderWeeklyLeaderboard();
     return;
   }
+  if (leaderboardMode === 'season') {
+    renderSeasonLeaderboard();
+    return;
+  }
+  renderEloLeaderboard();
+}
+
+function renderWeeklyLeaderboard() {
+  fetch('/api/leaderboard/weekly?limit=10')
+    .then(r => r.json())
+    .then(list => {
+      const el = document.getElementById('leaderboard-list');
+      if (!el) return;
+      if (!Array.isArray(list) || list.length === 0) {
+        el.textContent = '本周暂无真人活跃数据';
+        return;
+      }
+      el.innerHTML = list.map((item, i) =>
+        `<div class="lb-row">
+          <span class="lb-rank">${i + 1}</span>
+          <span class="lb-name">${escHtml(item.name || '游客')}</span>
+          <span class="lb-elo">${item.wins}胜 / ${item.games}局</span>
+        </div>`
+      ).join('');
+    })
+    .catch(() => {});
+}
+
+function renderEloLeaderboard() {
   fetch('/api/leaderboard?gameType=' + selectedLbType)
     .then(r => r.text())
     .then(jsonStr => {
@@ -3362,6 +3579,37 @@ function loadLeaderboard() {
     .catch(() => {});
 }
 
+function renderSeasonLeaderboard() {
+  const headers = guestToken ? { Authorization: 'Bearer ' + guestToken } : {};
+  fetch('/api/season?limit=10', { headers })
+    .then(r => r.json())
+    .then(s => {
+      const banner = document.getElementById('season-banner');
+      const me = s.me || {};
+      if (banner) {
+        banner.innerHTML = '<div class="season-name">' + escHtml(s.label || '赛季') + '</div>'
+          + '<div class="season-sub">剩余 ' + (s.daysLeft || 0) + ' 天 · 我：'
+          + escHtml(me.tier || '青铜') + ' ' + (me.points || 0) + ' 分</div>'
+          + '<div class="season-bar"><div class="season-bar-fill" style="width:' + (me.tierProgress || 0) + '%"></div></div>';
+      }
+      const el = document.getElementById('leaderboard-list');
+      if (!el) return;
+      const list = s.leaderboard || [];
+      if (list.length === 0) {
+        el.textContent = '本赛季暂无真人战绩，来抢第一！';
+        return;
+      }
+      el.innerHTML = list.map((item, i) =>
+        `<div class="lb-row">
+          <span class="lb-rank">${i + 1}</span>
+          <span class="lb-name">${escHtml(item.name || '游客')} <span class="lb-tier">${escHtml(item.tier || '')}</span></span>
+          <span class="lb-elo">${item.points} 分</span>
+        </div>`
+      ).join('');
+    })
+    .catch(() => {});
+}
+
 // ============================================================
 // 初始化
 // ============================================================
@@ -3378,6 +3626,17 @@ buildLbTabs();
 loadLeaderboard();
 loadMyStats();
 loadRecentGames();
+// 关闭标签页后重新打开：提示用户可以直接恢复上一局座位
+try {
+  if (localStorage.getItem(SESSION_BACKUP_KEY)) {
+    const hintEl = document.getElementById('recovery-hint');
+    if (hintEl) {
+      hintEl.textContent = '检测到未结束的对局，进入大厅后自动恢复座位';
+      hintEl.style.display = '';
+    }
+  }
+} catch (_) {}
+
 setInterval(loadLeaderboard, 30000); // 30 秒刷新
 setInterval(loadOnlineStats, 30000);
 setInterval(function () {
@@ -3456,6 +3715,7 @@ function renderHighCardPanel() {
 }
 
 document.getElementById('player-name').value = readPreference('gomoku_name', '');
+restoreAccount();
 const soundButton = document.getElementById('sound-toggle');
 soundButton.textContent = '音效 ' + (soundEnabled ? '开' : '关');
 soundButton.setAttribute('aria-pressed', String(soundEnabled));

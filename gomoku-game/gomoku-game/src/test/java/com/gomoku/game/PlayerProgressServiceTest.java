@@ -141,6 +141,23 @@ class PlayerProgressServiceTest {
         assertEquals("棋手", PlayerProgressService.titleForLevel(5));
     }
 
+    @Test
+    void checkInBonusAddsXpWithoutInflatingGameStats() throws Exception {
+        GameRecordService records = newRecords();
+        PlayerProgressService service = new PlayerProgressService(records);
+        String me = "guest-checkin";
+
+        records.saveAsync(game("R1", "GOMOKU", 1000L, 2000L, me, "WIN", 2));
+        Map<String, Object> plain = service.getProgress(me);
+        Map<String, Object> withBonus = service.getProgress(me, 75);
+
+        // 签到经验计入等级经验，但对局数/胜场/成就不受影响
+        assertEquals((Integer) plain.get("xp") + 75, withBonus.get("xp"));
+        assertEquals(plain.get("totalGames"), withBonus.get("totalGames"));
+        assertEquals(plain.get("wins"), withBonus.get("wins"));
+        assertEquals(plain.get("achievementsUnlocked"), withBonus.get("achievementsUnlocked"));
+    }
+
     @SuppressWarnings("unchecked")
     private static boolean unlocked(Map<String, Object> progress, String id) {
         for (Map<String, Object> a : (List<Map<String, Object>>) progress.get("achievements")) {

@@ -401,6 +401,73 @@ public class GameRecordService {
     }
 
     /**
+     * 某身份在一个时间窗口内的赛季战绩（只算真人对局，AI 局不计）。
+     * 赛季分：胜 +3、平 +1、负 0。纯派生，不改写任何记录或 ELO。
+     */
+    public synchronized Map<String, Object> getSeasonStats(String identityId, long since, long until) {
+        int wins = 0, draws = 0, losses = 0;
+        if (identityId != null) {
+            for (GameRecord record : recent) {
+                long ended = record.getEndedAt();
+                if (ended < since || ended >= until) continue;
+                GameRecord.Participant me = findParticipantByIdentity(record, identityId);
+                if (me == null || me.isAi()) continue;
+                if ("WIN".equals(me.getResult())) wins++;
+                else if ("LOSE".equals(me.getResult())) losses++;
+                else draws++;
+            }
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("wins", wins);
+        result.put("draws", draws);
+        result.put("losses", losses);
+        result.put("games", wins + draws + losses);
+        result.put("points", wins * 3 + draws);
+        return result;
+    }
+
+    /**
+     * 赛季排行榜：时间窗口内按赛季分降序（同分再按胜场、对局数）。
+     * 与 ELO 榜互补——ELO 是长期累计，赛季分只看本窗口表现，给新人和追赶者机会。
+     */
+    public synchronized List<Map<String, Object>> getSeasonLeaderboard(long since, long until, int topN) {
+        Map<String, WeeklyRow> rows = new HashMap<>();
+        Map<String, Integer> points = new HashMap<>();
+        for (GameRecord record : recent) {
+            long ended = record.getEndedAt();
+            if (ended < since || ended >= until) continue;
+            for (GameRecord.Participant p : record.getParticipants()) {
+                if (p.isAi() || p.getIdentityId() == null) continue;
+                WeeklyRow row = rows.computeIfAbsent(p.getIdentityId(), k -> new WeeklyRow());
+                if (p.getName() != null) row.name = p.getName();
+                row.games++;
+                if ("WIN".equals(p.getResult())) {
+                    row.wins++;
+                    points.merge(p.getIdentityId(), 3, Integer::sum);
+                } else if (!"LOSE".equals(p.getResult())) {
+                    points.merge(p.getIdentityId(), 1, Integer::sum);
+                }
+            }
+        }
+        return rows.entrySet().stream()
+                .sorted(Comparator
+                        .comparingInt((Map.Entry<String, WeeklyRow> e) -> points.getOrDefault(e.getKey(), 0)).reversed()
+                        .thenComparing(Comparator.comparingInt((Map.Entry<String, WeeklyRow> e) -> e.getValue().wins).reversed())
+                        .thenComparing(e -> e.getValue().name == null ? "" : e.getValue().name))
+                .limit(Math.max(1, topN))
+                .map(e -> {
+                    WeeklyRow r = e.getValue();
+                    Map<String, Object> view = new LinkedHashMap<>();
+                    view.put("name", r.name);
+                    view.put("points", points.getOrDefault(e.getKey(), 0));
+                    view.put("wins", r.wins);
+                    view.put("games", r.games);
+                    return view;
+                })
+                .collect(Collectors.toList());
+    }
+
+    /**
      * 某个持久身份参与过的全部真人对局（最新的在前）。
      *
      * 成长体系（等级/成就）需要遍历历史，但只认稳定身份：

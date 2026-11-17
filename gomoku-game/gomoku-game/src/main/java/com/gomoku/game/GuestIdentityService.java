@@ -38,6 +38,26 @@ public class GuestIdentityService {
         } catch (Exception e) { identities.remove(hash); throw new IllegalStateException("无法保存游客身份", e); }
         Map<String, String> result = new LinkedHashMap<>(); result.put("token", token); result.put("id", id); return result;
     }
+    /**
+     * 为一个已存在的身份签发新 token。账号登录时用它把登录态转成现有身份凭证，
+     * 这样战绩/ELO/成长全部延续，下游（GameServerHandler、/api/me/*）无需改动。
+     * 与 issue() 的区别：不生成新 identityId，而是绑定到传入的 id。
+     */
+    public synchronized String issueForId(String id) {
+        if (id == null || id.isEmpty()) throw new IllegalArgumentException("identityId 不能为空");
+        byte[] bytes = new byte[32]; new SecureRandom().nextBytes(bytes);
+        String token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        String hash = hash(token); identities.put(hash, id);
+        try {
+            if (path.getParent() != null) Files.createDirectories(path.getParent());
+            Path temporary = path.resolveSibling(path.getFileName() + ".tmp");
+            Files.writeString(temporary, new Gson().toJson(identities), StandardCharsets.UTF_8);
+            try { Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
+            catch (AtomicMoveNotSupportedException e) { Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING); }
+        } catch (Exception e) { identities.remove(hash); throw new IllegalStateException("无法保存身份凭证", e); }
+        return token;
+    }
+
     public synchronized String resolve(String token) {
         if (token == null || !token.matches("[A-Za-z0-9_-]{43}")) return null;
         return identities.get(hash(token));

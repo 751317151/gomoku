@@ -3,6 +3,7 @@ package com.gomoku.server;
 import com.gomoku.game.GuestIdentityService;
 import com.gomoku.game.PlayerProgressService;
 import com.gomoku.game.GameRecordService;
+import com.gomoku.game.CheckInService;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.http.*;
 import java.util.*;
@@ -12,8 +13,10 @@ public class GuestController {
     private final GuestIdentityService guests;
     private final GameRecordService records;
     private final PlayerProgressService progress;
-    public GuestController(GuestIdentityService guests, GameRecordService records, PlayerProgressService progress) {
-        this.guests = guests; this.records = records; this.progress = progress;
+    private final CheckInService checkIns;
+    public GuestController(GuestIdentityService guests, GameRecordService records, PlayerProgressService progress,
+                           CheckInService checkIns) {
+        this.guests = guests; this.records = records; this.progress = progress; this.checkIns = checkIns;
     }
     @PostMapping("/api/guest")
     public ResponseEntity<Map<String, String>> guest(@RequestHeader(value="Authorization", required=false) String authorization) {
@@ -42,7 +45,7 @@ public class GuestController {
             @RequestHeader(value="Authorization", required=false) String authorization) {
         String id = guests.resolve(token(authorization));
         if (id == null) return ResponseEntity.status(401).build();
-        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(progress.getProgress(id));
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(progress.getProgress(id, checkIns.bonusXpFor(id)));
     }
     private static String token(String header) { return header != null && header.startsWith("Bearer ") ? header.substring(7) : null; }
 }

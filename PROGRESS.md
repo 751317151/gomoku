@@ -1,6 +1,108 @@
+# 进度记录
+
+## ✅ 2026-11-17（留存引擎 · 赛季段位）
+
+> 路线第三步：给玩家长期目标——自然月赛季与六段位。
+
+### 关键取舍：赛季不动 ELO
+ELO 是长期累计资产，重置会让老玩家损失历史。赛季只是「本窗口表现」的另一种视图：赛季分从对局记录派生（胜 +3 / 平 +1 / 负 0，只认真人局），完全不动 ELO、不改写任何记录，因此零迁移、零历史损失，随时可从记录复算。
+
+### 改动
+- 新 `SeasonService.java`：自然月赛季（起止、剩余天数）、赛季分与段位映射（青铜 0/白银 10/黄金 25/铂金 50/钻石 90/王者 150）、赛季榜；`today()` 可被子类覆盖做确定性测试。
+- `GameRecordService`：新增 `getSeasonStats`（单身份窗口战绩）与 `getSeasonLeaderboard`（窗口榜，按赛季分→胜场排序）。
+- `GameApiController`：`GET /api/season?limit=`，带凭证返回本人段位，匿名可看榜。
+- 前端：排行榜改三态循环（ELO 总榜 → 本周活跃 → 赛季段位），赛季模式显示赛季名/剩余天数/我的段位进度条与赛季榜；缓存 v53→v54。
+- 测试：`SeasonServiceTest`（6 例）、`smoke-season.mjs`。
+
+### 验证
+- 赛季单测 6/6：月窗口、跨月不计、AI 不计、段位映射、榜单排序、**查询不动 ELO**。
+- 修正了 3 处测试期望值算错（1/15→2/1 是 17 天；12 分下一段位是 25；榜单按分数而非 identityId 断言）。
+- REST 冒烟 `smoke-season.mjs` 9/9：匿名可查赛季（id/标签/剩余天数）、本人 0 分落青铜、榜行带赛季分与段位、空榜文案。
+- 真实浏览器 `smoke-ui-season.mjs` 8/8：排行榜三态循环正确、赛季横幅显示「2026 年 11 月赛季 / 剩余 14 天 · 我：青铜 0 分」与进度条、空榜文案。
+- 全量回归 317 例：315 通过，2 例报错为 `RoomLifecycleTest` 的 `@TempDir` 删除失败（Windows + `forkCount=0` 环境问题，该类不引用本轮任何新代码，单独跑同样复现，与本轮无关）。
+
+### 下一轮可做
+1. 赛季结算：月切换时给达到段位的玩家发称号/纪念，需要一份"已结算赛季"快照。
+2. 账号昵称贯通到对局/排行榜展示。
+3. 好友系统与组队邀请。
+
+---
+
+# 进度记录 · 2026-11-17（留存引擎 · 每日签到）
+
+> 路线第二步：在账号地基之上补留存闭环——签到、连续奖励、回归礼包。
+
+### 为什么签到要独立存
+现有「每日目标」是从对局记录被动派生的：当天必须打一局才算活跃，且 `recent` 只保留最近 5000 条，老记录滚出内存会让连续天数断层。签到是「今天来点一下」就成立的运营动作，不该依赖对局。故新增独立 `data/checkins.json`。
+
+### 关键取舍：奖励只加经验，不写对局记录
+签到奖励换算成 `bonusXp` 叠加进等级经验，不生成 GameRecord。因此对局数、胜率、ELO、排行榜都不受影响，**不能靠签到刷竞技战绩**；`PlayerProgressService.getProgress(id, bonusXp)` 重载保持原方法向后兼容（5 处测试构造不变）。
+
+### 改动
+- 新 `CheckInService.java`：`data/checkins.json` 持久化签到日期（上限 400 天），每日 +15 经验；连续 3/7/14/30 天里程碑 +30/+80/+150/+400；断签 ≥3 天回归额外 +50；同日重复签到不发奖；`today()` 可被子类覆盖便于确定性测试。
+- 新 `CheckInController.java`：`GET /api/checkin/status`、`POST /api/checkin`，凭证解析复用游客/账号链路。
+- `GuestController`：`/api/me/progress` 叠加 `checkIns.bonusXpFor(id)`。
+- 前端：今日目标面板新增签到卡片（连续天数、里程碑预告、回归提示）；签到后刷新成长面板；缓存 v52→v53。
+- 测试：`CheckInServiceTest`（9 例）、`PlayerProgressServiceTest` 增叠加用例、`smoke-checkin.mjs`、`smoke-ui-checkin.mjs`。
+
+### 验证
+- 后端单测：CheckIn 9 + PlayerProgress 7 + Account 10 = 26 例全绿。
+- REST 冒烟 `smoke-checkin.mjs` **17/17**：首次签到 +15、重复不发奖、经验计入等级、**不虚增对局数**、未登录 401。
+- UI 冒烟 `smoke-ui-checkin.mjs` **7/7**：卡片渲染、点击签到、状态变已签、经验刷新、刷新后仍已签。截图确认布局正常。
+- 修复了 UI 冒烟两个测试脚本问题（端口 19000 需显式写 #ws-url；异步签到需等文案而非 disabled）。
+
+### 下一轮可做
+1. 赛季段位：按自然周/月重置的段位分与赛季奖励。
+2. 把账号昵称贯通到对局/排行榜展示（当前仍用登录时输入昵称）。
+3. 签到里程碑发"称号/头像框"等非数值奖励，增强展示性。
+
+---
+
+# 进度记录 · 2026-11-17（账号体系 · 持续运营第一步）
+
+> 目标转向：从「对战引擎」做成「能持续运营、留住用户」的产品。路线：账号体系 → 留存引擎（签到/赛季/回归）→ 社交裂变。本轮完成地基——持久账号。
+
+### 为什么先做账号
+项目已相当成熟（14 玩法 / ELO / 等级 / 成就 / 每日任务 / PWA / Docker，git 干净），再加玩法边际价值低。真正的留存硬伤：所有成长资产都挂在一个 localStorage 里的游客 token 上，清缓存或换设备即归零。
+
+### 核心设计：账号 token = 绑定到持久身份的游客凭证
+- 注册时携带当前游客 token → 把该 identityId **原地升级**为账号。战绩 / ELO / 等级 / 成就 / 每日进度全以 identityId 为键，因此一条不丢、零数据迁移。
+- 登录签发指向同一 id 的新 token，换设备登录即拿回资产。
+- `GameServerHandler` 与 `/api/me/*` 只调用 `guests.resolve(token)`，账号凭证写进同一张表 → **下游协议零改动**。
+
+### 改动
+- `GuestIdentityService.issueForId(id)`：为已有身份签发凭证（新增方法，未改原注释）。
+- 新 `AccountService.java`：账号持久化 `data/accounts.json`（原子写），只存盐 + 哈希；SHA-256 加盐 12000 轮迭代 + `MessageDigest.isEqual` 恒定时间比对；用户名大小写不敏感、3–20 位。
+  - 注：原计划用 PBKDF2WithHmacSHA256，但本机编译环境缺 `javax.crypto.PBEKeySpec`，改用纯 MessageDigest 迭代哈希（GuestIdentityService 已用同类 API，兼容）。
+- 新 `AccountController.java`：`POST /api/account/register|login|password`、`GET /api/account/me`，业务错误带机器可读 code，全 no-store。
+- 前端：登录页新增「游客 / 登录 / 注册」三态切换；注册即升级、登录跨设备找回、退出账号；`restoreAccount()` 恢复登录态；缓存版本 v51→v52。
+- 测试：新 `AccountServiceTest`（10 例，覆盖升级身份延续/密码哈希/重名/改密/重启恢复/身份独占）、`smoke-account.mjs`（REST 真实链路）。
+- 文档：README 补持久账号说明。
+
+### 验证（真实链路）
+- 账号单测 14 例（AccountServiceTest 10 + GuestIdentityTest 4）全绿；全量 `test` 301 例中 299 通过。
+- 2 个 error 在 `RoomLifecycleTest`：JUnit `@TempDir` 清理时 `Failed to delete temp directory`（后台 AI 线程持有临时文件句柄，Windows 无法删）；隔离重跑同样复现，与账号改动无关（forkCount=0 模式特有，正常 fork 会随 JVM 退出回收）。
+- `mvn package` 成功（jar 25.6MB）；真实启动 jar（HTTP 19000 + WS 19001）时发现并修复了 Spring 构造器注入坑（两个构造器未标注 `@Autowired` → `No default constructor found`，单测发现不了）。
+- `smoke-account.mjs`（REST 真实链路）**13/13 PASS**：游客升级身份延续、注册/登录/改密、重名 409、错密码 401、游客访问 401。
+- `smoke-ui-account.mjs`（真实浏览器 CDP）**11/11 PASS**：三态切换、注册、刷新恢复登录态、退出、重新登录。截图确认布局正常。
+- 截图暴露并修复真实 bug：注册成功后仍停留注册 tab，再点「注册并进入」会重复注册报 409 卡死 → 成功后自动切回游客态，并补了回归断言。
+
+### 下一轮可做
+1. 留存引擎：每日签到日历 + 连续登录奖励 + 回归礼包。
+2. 把账号昵称同步进对局与排行榜展示（当前对局仍用登录时输入的昵称）。
+3. 账号安全：密码强度提示、登录失败限流、可选邮箱找回。
+
+---
+
 # 进度记录 · 2026-11-16（第二十八轮）
 
 > 本轮任务：在骰子竞速之后继续新增非 UNO 多人玩法「宝石拍卖」，补齐引擎、AI、前端与测试链路。
+
+## ✅ 关闭标签页后恢复对局
+
+- 页面卸载时将当前会话备份到 localStorage（10 分钟有效，与服务端会话/席位保留时间对齐）。
+- 下次打开页面自动尝试用备份会话 RECONNECT，登录页提示可恢复座位；服务端拒绝后清理备份。
+- 主动离开房间不再保留备份；多标签场景以“最后关闭的标签”为准，避免抢席位混乱。
 
 ## ✅ PWA 可安装与离线外壳
 
