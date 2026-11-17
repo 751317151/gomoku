@@ -1253,6 +1253,7 @@ async function restoreAccount() {
     document.getElementById('player-name').value = accountInfo.nickname || accountInfo.username;
     document.getElementById('account-state').textContent = '已登录：' + (accountInfo.nickname || accountInfo.username);
     document.getElementById('account-logout').hidden = false;
+    document.getElementById('player-name').readOnly = true;
     switchAuthTab('guest');
     setAccountHint('账号已登录，直接进入即可延续战绩。');
   } catch (_) { /* 网络异常时仍可按游客进入 */ }
@@ -1285,6 +1286,7 @@ async function authenticateAccount() {
     document.getElementById('player-name').value = data.nickname || data.username;
     document.getElementById('account-state').textContent = '已登录：' + (data.nickname || data.username);
     document.getElementById('account-logout').hidden = false;
+    document.getElementById('player-name').readOnly = true;
     const successMessage = authMode === 'register' ? '注册成功，战绩已保留' : '登录成功';
     // 凭证已落 localStorage，切回游客态：否则按钮仍是「注册并进入」，再点会重复注册报 409。
     switchAuthTab('guest');
@@ -1302,6 +1304,7 @@ async function accountLogout() {
   try { localStorage.removeItem('gomoku_guest'); } catch (_) {}
   document.getElementById('account-state').textContent = '当前：游客身份（战绩仅存在本浏览器）';
   document.getElementById('account-logout').hidden = true;
+  document.getElementById('player-name').readOnly = false;
   switchAuthTab('guest');
   setAccountHint('已退出账号，接下来为游客身份。');
 }
@@ -3590,7 +3593,23 @@ function renderSeasonLeaderboard() {
         banner.innerHTML = '<div class="season-name">' + escHtml(s.label || '赛季') + '</div>'
           + '<div class="season-sub">剩余 ' + (s.daysLeft || 0) + ' 天 · 我：'
           + escHtml(me.tier || '青铜') + ' ' + (me.points || 0) + ' 分</div>'
-          + '<div class="season-bar"><div class="season-bar-fill" style="width:' + (me.tierProgress || 0) + '%"></div></div>';
+          + '<div class="season-bar"><div class="season-bar-fill" style="width:' + (me.tierProgress || 0) + '%"></div></div>'
+          + '<div class="season-titles" id="season-titles"></div>';
+      }
+      // 月度结算固化的称号：长期收藏品，激励玩家每个赛季都回来打
+      if (guestToken) {
+        fetch('/api/season/history?limit=6', { headers })
+          .then(r => r.ok ? r.json() : Promise.reject(new Error('unauthorized')))
+          .then(data => {
+            const box = document.getElementById('season-titles');
+            if (!box) return;
+            const list = data.history || [];
+            if (list.length === 0) { box.innerHTML = '<span class="season-title-empty">赢下赛季，解锁专属称号</span>'; return; }
+            box.innerHTML = '<span class="season-title-label">赛季称号</span>' + list.map(h =>
+              '<span class="season-title-chip">' + escHtml(h.tier || '青铜') + ' · ' + escHtml(h.seasonId || '') + '</span>'
+            ).join('');
+          })
+          .catch(() => {});
       }
       const el = document.getElementById('leaderboard-list');
       if (!el) return;

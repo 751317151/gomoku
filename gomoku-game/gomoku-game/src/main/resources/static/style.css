@@ -765,6 +765,10 @@
   .lb-tier { color: var(--accent); font-size: 0.72rem; margin-left: 4px; }
 
   /* 赛季横幅：赛季名、剩余天数、我的段位与进度 */
+  .season-titles { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; align-items: center; }
+  .season-title-label { font-size: 0.65rem; color: var(--text-dim); }
+  .season-title-chip { padding: 2px 8px; border: 1px solid var(--accent); border-radius: 999px; color: var(--accent); font: 0.65rem 'JetBrains Mono', monospace; }
+  .season-title-empty { font-size: 0.65rem; color: var(--text-dim); }
   .season-banner {
     margin: 8px 8px 4px;
     padding: 10px 12px;

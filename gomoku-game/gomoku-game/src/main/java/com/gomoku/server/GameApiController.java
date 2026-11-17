@@ -79,6 +79,22 @@ public class GameApiController {
         return seasonService.current(identityId, clamp(limit));
     }
 
+    /**
+     * 赛季称号历史：月切换后固化的段位快照，按赛季倒序。
+     * 未登录时返回空列表（匿名用户没有可归属的持久身份）。
+     */
+    @GetMapping("/api/season/history")
+    public ResponseEntity<Map<String, Object>> getSeasonHistory(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestParam(required = false, defaultValue = "10") int limit) {
+        String identityId = guests.resolve(token(authorization));
+        List<Map<String, Object>> history = seasonService.settlementHistory(identityId);
+        if (limit > 0 && history.size() > limit) history = history.subList(0, limit);
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("history", history);
+        return ResponseEntity.ok().cacheControl(org.springframework.http.CacheControl.noStore()).body(result);
+    }
+
     private static String token(String header) {
         return header != null && header.startsWith("Bearer ") ? header.substring(7) : null;
     }

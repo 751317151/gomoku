@@ -31,6 +31,9 @@ class RoomLifecycleTest {
     @AfterEach void close() {
         manager.notifyAllShutdown();
         for (EmbeddedChannel channel : channels) channel.finishAndReleaseAll();
+        // 异步写盘线程可能在 JUnit 删除 @TempDir 之后重建 games/ 目录，
+        // 导致 Windows 上删除失败。先等待所有待写任务落盘再交还临时目录。
+        records.flushForTest();
     }
 
     private EmbeddedChannel channel() {

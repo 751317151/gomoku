@@ -133,4 +133,63 @@ class SeasonServiceTest {
         assertEquals(before, elo.getRating("u1", GameType.GOMOKU), "赛季查询不能改动 ELO");
         assertEquals(1200, before);
     }
+
+    /** 固定「今天」为 2026-02-05：上一赛季即 2026-01，用于结算测试 */
+    private static class SettleSeason extends SeasonService {
+        SettleSeason(GameRecordService records, java.nio.file.Path path) { super(records, path); }
+        @Override protected LocalDate today() { return LocalDate.of(2026, 2, 5); }
+    }
+
+    @Test
+    void monthChangeSettlesPreviousSeasonWithTiers() throws Exception {
+        java.nio.file.Path path = Files.createTempFile("season-settle", ".json");
+        Files.deleteIfExists(path);
+        GameRecordService records = newRecords();
+        // 上赛季（2026-01）：u1 四胜 12 分（白银）、u2 一平 1 分（青铜）、AI 不入结算
+        records.saveAsync(game("s1", at(2026, 1, 5), "u1", "WIN"));
+        records.saveAsync(game("s2", at(2026, 1, 6), "u1", "WIN"));
+        records.saveAsync(game("s3", at(2026, 1, 7), "u1", "WIN"));
+        records.saveAsync(game("s4", at(2026, 1, 8), "u1", "WIN"));
+        records.saveAsync(game("s5", at(2026, 1, 9), "u2", "DRAW"));
+        records.saveAsync(aiGame("s6", at(2026, 1, 10), "ai-ghost"));
+        records.flushForTest();
+
+        SeasonService season = new SettleSeason(records, path);
+        season.current("u1", 10); // 查询触发结算
+
+        List<Map<String, Object>> u1 = season.settlementHistory("u1");
+        assertEquals(1, u1.size(), "只结算上一赛季");
+        assertEquals("2026-01", u1.get(0).get("seasonId"));
+        assertEquals(12, u1.get(0).get("points"));
+        assertEquals("白银", u1.get(0).get("tier"));
+
+        List<Map<String, Object>> u2 = season.settlementHistory("u2");
+        assertEquals("青铜", u2.get(0).get("tier"));
+        assertNull(season.settlementHistory("ai-ghost").isEmpty() ? null : null, "AI 不应获得称号");
+        assertEquals(0, season.settlementHistory("ai-ghost").size());
+
+        // 同月再次查询：幂等，不重复结算
+        season.current("u1", 10);
+        assertEquals(1, season.settlementHistory("u1").size());
+    }
+
+    @Test
+    void settlementSurvivesRestartAndDoesNotResettle() throws Exception {
+        java.nio.file.Path dir = Files.createTempDirectory("season-settle-disk");
+        java.nio.file.Path path = dir.resolve("seasons.json");
+        GameRecordService records = new GameRecordService(dir);
+        records.saveAsync(game("r1", at(2026, 1, 20), "u1", "WIN"));
+        records.flushForTest();
+
+        SeasonService first = new SettleSeason(records, path);
+        first.current("u1", 10);
+        assertEquals(1, first.settlementHistory("u1").size());
+
+        // 重启：读回结算文件，且不重复结算（same lastSettled marker）
+        SeasonService second = new SettleSeason(records, path);
+        second.init();
+        second.current("u1", 10);
+        assertEquals(1, second.settlementHistory("u1").size());
+        assertEquals("2026-01", second.settlementHistory("u1").get(0).get("seasonId"));
+    }
 }
