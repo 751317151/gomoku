@@ -103,10 +103,19 @@ public class AccountService {
     /** 登录：校验密码后签发指向同一身份的新 token。 */
     public synchronized Map<String, String> login(String username, String password) {
         String key = username == null ? "" : normalize(username);
+        long now = clock();
+        pruneLoginFailures(key, now);
+        // 连续失败限流：同一用户名 10 分钟内错 5 次直接拒绝（含正确密码），
+        // 抬高在线暴力破解成本；窗口过后自动解锁。
+        if (failureCount(key, now) >= MAX_LOGIN_FAILURES) {
+            throw new AccountException("TOO_MANY_ATTEMPTS", "登录尝试过于频繁，请 10 分钟后再试");
+        }
         Account account = accounts.get(key);
         if (account == null || password == null || !matches(password, account)) {
+            recordLoginFailure(key, now);
             throw new AccountException("UNAUTHORIZED", "用户名或密码错误");
         }
+        loginFailures.remove(key);
         Map<String, String> result = new LinkedHashMap<>();
         result.put("token", guests.issueForId(account.identityId));
         result.put("id", account.identityId);
@@ -147,6 +156,42 @@ public class AccountService {
 
     /** 账号总数，供健康检查与运营观察 */
     public synchronized int size() { return accounts.size(); }
+
+    /** 当前时间（package-private，测试可覆盖以模拟时间流逝） */
+    long clock() { return System.currentTimeMillis(); }
+
+    // ============ 登录限流 ============
+
+    /** 同一用户名窗口内允许的最大失败次数 */
+    static final int MAX_LOGIN_FAILURES = 5;
+    /** 失败记录窗口 */
+    static final long LOGIN_FAILURE_WINDOW_MS = 10 * 60 * 1000L;
+
+    private final Map<String, java.util.ArrayDeque<Long>> loginFailures = new HashMap<>();
+
+    /** 记录一次失败尝试（package-private，供测试注入时间） */
+    void recordLoginFailure(String username, long now) {
+        String key = username == null ? "" : normalize(username);
+        java.util.ArrayDeque<Long> queue = loginFailures.computeIfAbsent(key, k -> new java.util.ArrayDeque<>());
+        queue.addLast(now);
+        pruneLoginFailures(key, now);
+    }
+
+    /** 窗口内的失败次数（package-private，供测试断言） */
+    int failureCount(String username, long now) {
+        String key = username == null ? "" : normalize(username);
+        pruneLoginFailures(key, now);
+        java.util.ArrayDeque<Long> queue = loginFailures.get(key);
+        return queue == null ? 0 : queue.size();
+    }
+
+    private void pruneLoginFailures(String key, long now) {
+        java.util.ArrayDeque<Long> queue = loginFailures.get(key);
+        if (queue == null) return;
+        long cutoff = now - LOGIN_FAILURE_WINDOW_MS;
+        while (!queue.isEmpty() && queue.peekFirst() < cutoff) queue.removeFirst();
+        if (queue.isEmpty()) loginFailures.remove(key);
+    }
 
     private void persistOrRollback(String key, String identityId) {
         try {

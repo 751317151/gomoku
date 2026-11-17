@@ -72,6 +72,7 @@ public class AccountController {
             case "CONFLICT": return HttpStatus.CONFLICT.value();
             case "UNAUTHORIZED": return HttpStatus.UNAUTHORIZED.value();
             case "INVALID": return HttpStatus.BAD_REQUEST.value();
+            case "TOO_MANY_ATTEMPTS": return HttpStatus.TOO_MANY_REQUESTS.value();
             default: return HttpStatus.BAD_REQUEST.value();
         }
     }

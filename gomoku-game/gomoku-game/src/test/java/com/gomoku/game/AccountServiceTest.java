@@ -130,4 +130,61 @@ class AccountServiceTest {
         Map<String, String> second = accounts.register("judy", "secret123", null, guest.get("token"));
         assertNotEquals(guest.get("id"), second.get("id"), "一个身份不能同时属于两个账号");
     }
+
+    @Test
+    void loginLocksOutAfterFiveFailuresAndUnlocksAfterWindow() throws Exception {
+        AccountService svc = new AccountService(dir.resolve("accounts-throttle.json"), newGuests()) {
+            private long fake = 1_000_000L;
+            @Override long clock() { return fake; }
+        };
+        svc.init();
+        svc.register("throttleuser", "Correct@123", "节流玩家", null);
+
+        long t0 = 1_000_000L;
+        for (int i = 0; i < AccountService.MAX_LOGIN_FAILURES; i++) {
+            svc.recordLoginFailure("ThrottleUser", t0);
+        }
+        assertEquals(AccountService.MAX_LOGIN_FAILURES, svc.failureCount("throttleuser", t0));
+
+        // 达到阈值后，即使密码正确也必须拒绝，避免在线暴力破解
+        AccountService.AccountException locked = assertThrows(AccountService.AccountException.class,
+                () -> svc.login("throttleuser", "Correct@123"));
+        assertEquals("TOO_MANY_ATTEMPTS", locked.getCode());
+
+        // 时间前进 11 分钟：失败记录全部过期，解锁后正确密码可登录
+        // fake clock 在子类闭包中推进（这里通过 record+login 的组合验证）
+        // 由于 Java 匿名类捕获的是 final，改用「先记 5 次旧失败，再断言可登录」的等效路径：
+        AccountService unlocked = new AccountService(dir.resolve("accounts-throttle2.json"), newGuests()) {
+            private long fake = 1_000_000L;
+            @Override long clock() { return fake; }
+        };
+        unlocked.init();
+        unlocked.register("throttleuser", "Correct@123", "节流玩家", null);
+        long stale = 1_000_000L - 11 * 60 * 1000L;
+        for (int i = 0; i < AccountService.MAX_LOGIN_FAILURES; i++) {
+            unlocked.recordLoginFailure("ThrottleUser", stale);
+        }
+        Map<String, String> result = unlocked.login("throttleuser", "Correct@123");
+        assertEquals("节流玩家", result.get("nickname"));
+    }
+
+    private GuestIdentityService newGuests() {
+        GuestIdentityService guests = new GuestIdentityService(dir.resolve("guests.json"));
+        guests.init();
+        return guests;
+    }
+
+    @Test
+    void successfulLoginClearsFailureCounter() {
+        AccountService svc = newAccounts();
+        svc.register("resetuser", "Correct@123", "重置玩家", null);
+
+        long now = System.currentTimeMillis();
+        svc.recordLoginFailure("resetuser", now);
+        svc.recordLoginFailure("resetuser", now);
+        assertEquals(2, svc.failureCount("resetuser", now));
+
+        svc.login("resetuser", "Correct@123");
+        assertEquals(0, svc.failureCount("resetuser", now));
+    }
 }
