@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import java.nio.file.Files;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -45,7 +46,7 @@ class AiLeaderboardIsolationTest {
         room.surrender(room.getPlayers().get(0));
 
         List<Map<String, Object>> board = elo.getLeaderboard(GameType.GOMOKU, 20);
-        List<String> names = board.stream().map(m -> (String) m.get("name")).toList();
+        List<String> names = board.stream().map(m -> (String) m.get("name")).collect(Collectors.toList());
 
         assertFalse(names.contains("电脑"), "AI 不应出现在排行榜里，实际: " + names);
         assertTrue(names.contains("真人乙"), "真人应出现在排行榜里，实际: " + names);
@@ -78,7 +79,7 @@ class AiLeaderboardIsolationTest {
                 GameType.GOMOKU);
 
         List<String> names = elo.getLeaderboard(GameType.GOMOKU, 20).stream()
-                .map(m -> (String) m.get("name")).toList();
+                .map(m -> (String) m.get("name")).collect(Collectors.toList());
         assertFalse(names.contains("电脑"), "残留的 AI 条目也应被排行榜过滤，实际: " + names);
     }
 }

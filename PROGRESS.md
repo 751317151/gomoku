@@ -1852,3 +1852,8 @@ export PATH="/usr/bin:/bin:/e/JAVA/apache-maven-3.9.11/bin:/e/JAVA/jdk/jdk-21.0.
 - 真实浏览器实测（v62）：对方脚本 HALL_BIND 上线并申请 → REST 同意 → 我方弹窗未开时收到「💬 私聊对手乙：你好，我是乙！」toast + 未读徽标 1；点 💬 打开弹窗看到消息 → 输入回复 → 对方脚本确认收到并回信 → 弹窗就地渲染第三条气泡（截图确认）。全链路：申请→同意→上线提醒→未读→开窗→往返对话。
 - 全量回归 353 项测试（新增 1 例 areFriends）0 失败；smoke-friends 51/51。
 - 生产 Dockerfile：Docker Desktop 守护进程本轮拉起成功（docker info 29.9.3 正常），`docker build` 已启动并进入基础镜像拉取阶段，但 docker.io 下载带宽极低（maven:3.9.11-eclipse-temurin-11 约 50KB/s，10 分钟仅 31/145MB），与 2026-11-14 记录的历史瓶颈一致；构建转后台继续，如完成另行记录，否则下一轮换国内镜像源重试。
+
+## 2026-11-18（补充）：修复生产镜像构建暴露的 Java 11 兼容问题
+
+- 首次真正跑通到编译阶段的生产 Dockerfile 构建暴露一个潜伏 bug：AiLeaderboardIsolationTest 用了 Stream.toList()（Java 16+），而 pom 目标 Java 11；本地 Java 21 一直掩盖（历史上构建从未走到过这一步）。改回 collect(Collectors.toList()) 并补 import。
+- 第二次容器内构建确认主代码在 Java 11 下编译通过（失败点只剩测试编译），修复后第三次构建进行中。
