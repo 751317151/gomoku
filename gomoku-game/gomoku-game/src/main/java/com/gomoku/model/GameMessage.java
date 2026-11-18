@@ -17,6 +17,7 @@ public class GameMessage {
         END_TURN,       // 结束回合（一回合多行动的玩法，如卡牌）
         CHAT,           // 聊天
         DIRECT_MSG,     // 好友私聊（客户端→服务端：data=对方身份，message=文本；服务端→客户端：playerId/playerName=发送者）
+        REPORT,         // 举报（客户端→服务端：data=被举报身份，action=原因码，message=补充说明）
         RESTART,        // 请求重新开始
         LEAVE,          // 离开房间/大厅
         RECONNECT,      // 断线重连

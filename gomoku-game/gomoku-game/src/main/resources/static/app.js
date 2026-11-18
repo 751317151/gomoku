@@ -2264,6 +2264,16 @@ function handleMessage(msg) {
         setStatusMsg(msg.message, 'error');
         break;
       }
+      // 举报相关错误：回填到举报弹窗里，方便直接改了再提交
+      if (msg.message && /举报|电脑玩家|被封禁|禁言/.test(msg.message)) {
+        const hint = document.getElementById('report-hint');
+        if (hint && document.getElementById('report-modal').classList.contains('show')) {
+          hint.textContent = msg.message;
+        } else {
+          setStatusMsg(msg.message, 'error');
+        }
+        break;
+      }
       // 落子被拒：用服务端回传的真实手数校准本地 moveSeq
       // （否则本地序号一旦超前，后续每一步都会被服务端判为 seq 不匹配而永久失败）
       if (msg.message === '无效落子' && msg.data !== null && msg.data !== undefined) {
@@ -2731,6 +2741,8 @@ function handleGameOver(msg) {
 }
 
 function handleGameChat(msg) {
+  // 举报确认走的是房间内 GAME_CHAT 通道，先让举报弹窗给出反馈
+  if (/举报/.test(msg.message || '')) handleReportFeedback(msg);
   const isMe = msg.playerId === myId;
   addChat(msg.message, isMe ? 'me' : 'other', msg.playerName, isMe);
 }
@@ -3433,6 +3445,157 @@ function handleDirectMsg(msg) {
     loadFriends();
     setStatusMsg('💬 ' + (msg.playerName || '好友') + '：' + text.slice(0, 40), 'waiting');
   }
+}
+
+// ============ 运营治理：举报与管理处置 ============
+
+/** 打开举报弹窗：列出同房间的其他真人玩家 */
+function openReport() {
+  const targetSel = document.getElementById('report-target');
+  if (!targetSel) return;
+  const others = Object.values(players).filter(p => p.id !== myId && !p.ai);
+  if (!others.length) {
+    setStatusMsg('房间里没有可举报的其他玩家', 'waiting');
+    return;
+  }
+  targetSel.innerHTML = others.map(p =>
+    '<option value="' + escHtml(p.id) + '">' + escHtml(p.name || '玩家') + '</option>').join('');
+  document.getElementById('report-detail').value = '';
+  document.getElementById('report-hint').textContent = '恶意举报会被记录，请如实填写。';
+  document.getElementById('report-modal').classList.add('show');
+}
+
+function closeReport() {
+  document.getElementById('report-modal').classList.remove('show');
+}
+
+function submitReport() {
+  const targetSel = document.getElementById('report-target');
+  const reasonSel = document.getElementById('report-reason');
+  const detail = document.getElementById('report-detail');
+  if (!targetSel || !targetSel.value) return;
+  const hint = document.getElementById('report-hint');
+  send({
+    type: 'REPORT',
+    data: targetSel.value,
+    action: Number(reasonSel ? reasonSel.value : 4),
+    message: detail ? detail.value.trim().slice(0, 300) : ''
+  });
+  if (hint) hint.textContent = '已提交，正在等待服务端确认…';
+}
+
+/** 服务端举报结果的两种形态：房间内确认（GAME_CHAT）或错误提示 */
+function handleReportFeedback(msg) {
+  const hint = document.getElementById('report-hint');
+  const text = msg.message || '';
+  if (hint && /举报/.test(text)) hint.textContent = text;
+  if (/举报已提交/.test(text)) {
+    setTimeout(closeReport, 1200);
+  }
+}
+
+// ============ 管理后台（?admin=1 + X-Admin-Token） ============
+
+let adminToken = null;
+
+if (new URLSearchParams(location.search).get('admin') === '1') {
+  // 令牌不入 URL（会被日志/分享泄露），首次进入用 prompt 输入并只放内存
+  adminToken = window.prompt('请输入管理令牌（ADMIN_TOKEN）', '') || null;
+  if (adminToken) {
+    const entry = document.getElementById('admin-entry');
+    if (entry) entry.style.display = 'inline-block';
+  }
+}
+
+function openAdmin() {
+  if (!adminToken) { setStatusMsg('未提供管理令牌', 'error'); return; }
+  document.getElementById('admin-modal').classList.add('show');
+  loadAdmin();
+}
+
+function closeAdmin() {
+  document.getElementById('admin-modal').classList.remove('show');
+}
+
+function adminFetch(path, options) {
+  const opts = Object.assign({}, options || {});
+  opts.headers = Object.assign({ 'X-Admin-Token': adminToken || '' }, opts.headers || {});
+  return fetch(path, opts).then(async r => {
+    let body = null;
+    try { body = await r.json(); } catch (_) {}
+    return { ok: r.ok, status: r.status, body };
+  });
+}
+
+function loadAdmin() {
+  const statusEl = document.getElementById('admin-status');
+  const listEl = document.getElementById('admin-reports');
+  if (!listEl) return;
+  adminFetch('/api/admin/moderation?limit=100').then(({ ok, status, body }) => {
+    if (!ok) {
+      statusEl.textContent = (body && body.message) || ('管理接口不可用（' + status + '）');
+      listEl.innerHTML = '';
+      return;
+    }
+    const pending = (body.reports || []).filter(r => !r.handled).length;
+    statusEl.textContent = '待处理举报 ' + pending + ' 条 · 共 ' + (body.reports || []).length + ' 条记录';
+    listEl.innerHTML = (body.reports || []).map(r => {
+      const reasonText = ({ abuse: '辱骂', spam: '刷屏', cheating: '作弊', afk: '挂机', other: '其他' })[r.reason] || r.reason;
+      const when = new Date(r.createdAt).toLocaleString();
+      const actions = r.handled
+        ? '<span class="admin-done">已处理：' + escHtml(r.handledNote || '-') + '</span>'
+        : '<div class="admin-actions">'
+          + '<button class="btn-outline friend-mini" onclick="adminSanction(\'' + r.id + '\',\'mute\')">禁言 24h</button>'
+          + '<button class="btn-outline friend-mini" onclick="adminSanction(\'' + r.id + '\',\'ban\')">封禁 7d</button>'
+          + '<button class="leave-btn friend-mini" onclick="adminDismiss(\'' + r.id + '\')">忽略</button>'
+          + '</div>';
+      return '<div class="admin-row ' + (r.handled ? 'handled' : '') + '">'
+        + '<div class="admin-row-head"><b>' + escHtml(r.reporterName || '举报人') + '</b> 举报 <b>' + escHtml(r.targetName || '被举报人') + '</b>'
+        + '<span class="admin-tag">' + escHtml(reasonText) + '</span><span class="admin-time">' + escHtml(when) + '</span></div>'
+        + (r.detail ? '<div class="admin-detail">' + escHtml(r.detail) + '</div>' : '')
+        + '<div class="admin-meta">' + escHtml(r.gameType || '') + ' · ' + escHtml(r.roomId || '') + ' · ' + escHtml(r.id) + '</div>'
+        + actions + '</div>';
+    }).join('') || '<div class="friends-empty">暂无举报记录。</div>';
+
+    const sanctionEl = document.getElementById('admin-sanctions');
+    sanctionEl.innerHTML = (body.sanctions || []).map(s => {
+      const active = s.active ? '<span class="admin-tag active">生效中</span>' : '<span class="admin-tag">已过期</span>';
+      const action = s.action === 'ban' ? '封禁' : '禁言';
+      return '<div class="admin-row compact"><div class="admin-row-head"><b>' + escHtml(s.id) + '</b> ' + action + active
+        + '<button class="leave-btn friend-mini" onclick="adminLift(\'' + escHtml(s.id) + '\')">撤销</button></div>'
+        + (s.reason ? '<div class="admin-detail">' + escHtml(s.reason) + '</div>' : '') + '</div>';
+    }).join('') || '<div class="friends-empty">暂无处置记录。</div>';
+  });
+}
+
+function adminSanction(reportId, action) {
+  adminFetch('/api/admin/moderation/reports/' + encodeURIComponent(reportId) + '/sanction', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, duration: action === 'ban' ? '7d' : '24h', reason: '举报核实' })
+  }).then(({ ok, body }) => {
+    if (!ok) { setStatusMsg((body && body.message) || '处置失败', 'error'); return; }
+    loadAdmin();
+  });
+}
+
+function adminDismiss(reportId) {
+  adminFetch('/api/admin/moderation/reports/' + encodeURIComponent(reportId) + '/dismiss', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: '证据不足' })
+  }).then(({ ok, body }) => {
+    if (!ok) { setStatusMsg((body && body.message) || '操作失败', 'error'); return; }
+    loadAdmin();
+  });
+}
+
+function adminLift(identityId) {
+  adminFetch('/api/admin/moderation/sanctions/' + encodeURIComponent(identityId), { method: 'DELETE' })
+    .then(({ ok, body }) => {
+      if (!ok) { setStatusMsg((body && body.message) || '撤销失败', 'error'); return; }
+      loadAdmin();
+    });
 }
 
 function renderBlackjackPanel() {

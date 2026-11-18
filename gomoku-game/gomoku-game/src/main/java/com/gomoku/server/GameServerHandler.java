@@ -45,6 +45,7 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
     private final RoomManager roomManager;
     @Autowired private com.gomoku.game.GuestIdentityService guests;
     @Autowired private com.gomoku.game.FriendService friends;
+    @Autowired private com.gomoku.game.ModerationService moderation;
 
     private final EnumMap<GameMessage.Type, BiConsumer<Channel, GameMessage>> handlers = new EnumMap<>(GameMessage.Type.class);
 
@@ -65,6 +66,7 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
         handlers.put(GameMessage.Type.END_TURN, this::handleEndTurn);
         handlers.put(GameMessage.Type.CHAT, this::handleChat);
         handlers.put(GameMessage.Type.DIRECT_MSG, this::handleDirectMsg);
+        handlers.put(GameMessage.Type.REPORT, this::handleReport);
         handlers.put(GameMessage.Type.RESTART, (conn, msg) -> handleRestart(conn));
         handlers.put(GameMessage.Type.LEAVE, (conn, msg) -> handleLeave(conn));
         handlers.put(GameMessage.Type.RECONNECT, this::handleReconnect);
@@ -214,6 +216,11 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
             sendError(conn, "游客凭证无效，请重新进入大厅");
             return;
         }
+        // 封禁拦截：被封禁身份连大厅都不让进，避免换个房间继续骚扰
+        if (moderation.isBanned(identityId)) {
+            sendError(conn, "账号已被封禁，如有疑问请联系管理员");
+            return;
+        }
         String playerName = NameSanitizer.sanitize(msg.getPlayerName());
         if (!roomManager.bindIdentity(conn, playerName, identityId)) {
             sendError(conn, "游客凭证无效，请重新进入大厅");
@@ -225,7 +232,13 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
         if (existing != null && !existing.canPerformAction()) return;
 
         String playerName = NameSanitizer.sanitize(msg.getPlayerName());
-        if (msg.getGuestToken() != null && !roomManager.bindIdentity(conn, playerName, guests.resolve(msg.getGuestToken()))) {
+        // 封禁拦截（旧客户端不发 HALL_BIND 时也会走到这里）
+        String resolvedIdentity = guests.resolve(msg.getGuestToken());
+        if (resolvedIdentity != null && moderation.isBanned(resolvedIdentity)) {
+            sendError(conn, "账号已被封禁，如有疑问请联系管理员");
+            return;
+        }
+        if (msg.getGuestToken() != null && !roomManager.bindIdentity(conn, playerName, resolvedIdentity)) {
             sendError(conn, "游客凭证无效，请重新进入大厅"); return;
         }
         GameType gameType = GameType.fromString(msg.getGameType());
@@ -370,7 +383,79 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
         if (room == null) return;
         String text = NameSanitizer.sanitizeChat(msg.getMessage());
         if (text == null) return;
+        // 禁言：仍可继续对局，只是发不出消息（含房间聊天与好友私聊）
+        if (moderation.isMuted(player.getIdentityId())) {
+            sendError(conn, "你已被禁言，暂时不能聊天");
+            return;
+        }
         room.handleChat(player, text);
+    }
+
+    /**
+     * 举报：把当前房间里的某位玩家连同证据快照交给治理服务。
+     * 只要求「在同一房间里」——被举报人不需要在线（掉线挂机同样可举报）。
+     */
+    private void handleReport(Channel conn, GameMessage msg) {
+        Player reporter = roomManager.getPlayer(conn);
+        if (reporter == null || reporter.getIdentityId() == null) {
+            sendError(conn, "请先进入房间再举报");
+            return;
+        }
+        GameRoom room = roomManager.getRoomByPlayer(reporter);
+        if (room == null) {
+            sendError(conn, "请先进入房间再举报");
+            return;
+        }
+        String targetId = msg.getData();
+        if (targetId == null || targetId.isEmpty()) {
+            sendError(conn, "请选择要举报的玩家");
+            return;
+        }
+        Player target = null;
+        for (Player p : room.getPlayers()) {
+            if (targetId.equals(p.getId())) target = p;
+        }
+        if (target == null) {
+            sendError(conn, "只能举报同一房间里的玩家");
+            return;
+        }
+        if (target.isAi()) {
+            sendError(conn, "电脑玩家无需举报");
+            return;
+        }
+        String reason = reasonCode(msg.getAction());
+        try {
+            com.gomoku.game.ModerationService.Report saved = moderation.report(
+                    reporter.getIdentityId(), reporter.getName(),
+                    target.getIdentityId(), target.getName(),
+                    room.getRoomId(), room.getGameType().name(),
+                    reason, msg.getMessage());
+            if (saved == null) {
+                sendError(conn, "已收到你的举报，请勿重复提交");
+                return;
+            }
+            logger.info("[AUDIT] report {} by {} on {} in {}",
+                    saved.id, saved.reporterId, saved.targetId, saved.roomId);
+            GameMessage ok = new GameMessage(GameMessage.Type.GAME_CHAT);
+            ok.setRoomId(room.getRoomId());
+            // 系统消息也要带发送者名，否则前端聊天会渲染成「undefined：…」
+            ok.setPlayerName("系统");
+            ok.setMessage("举报已提交，运营会尽快核实处理");
+            reporter.sendMessage(gson.toJson(ok));
+        } catch (IllegalArgumentException e) {
+            sendError(conn, e.getMessage());
+        }
+    }
+
+    /** 举报原因码：action 字段复用作原因下标（0=辱骂 1=刷屏 2=作弊 3=挂机 4=其他） */
+    private static String reasonCode(int action) {
+        switch (action) {
+            case 0: return "abuse";
+            case 1: return "spam";
+            case 2: return "cheating";
+            case 3: return "afk";
+            default: return "other";
+        }
     }
 
     /**
@@ -388,6 +473,10 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
         String target = msg.getData();
         String text = NameSanitizer.sanitizeChat(msg.getMessage());
         if (target == null || target.isEmpty() || text == null) return;
+        if (moderation.isMuted(sender.getIdentityId())) {
+            sendError(conn, "你已被禁言，暂时不能私聊");
+            return;
+        }
         if (!friends.areFriends(sender.getIdentityId(), target)) {
             sendError(conn, "只能给好友发私聊");
             return;

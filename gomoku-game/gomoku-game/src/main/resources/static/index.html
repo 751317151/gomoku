@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="棋战大厅">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="style.css?v=62">
+<link rel="stylesheet" href="style.css?v=63">
 </head>
 <body>
 
@@ -162,6 +162,7 @@
       <button class="btn-outline" onclick="refreshRooms()">刷新列表</button>
       <button class="btn-solo-top" onclick="startSoloQuick()">▶ 人机对战</button>
       <button class="btn-outline" onclick="showOnboarding()">新手指南</button>
+      <button class="btn-outline" id="admin-entry" style="display:none" onclick="openAdmin()">治理后台</button>
       <button class="btn-outline" id="pwa-install" style="display:none" onclick="installPwa()">安装应用</button>
     </div>
   </div>
@@ -299,6 +300,55 @@
   </div>
 </div>
 
+<!-- 举报弹窗：选玩家 + 原因，提交给运营核实 -->
+<div class="dm-modal" id="report-modal">
+  <div class="dm-box">
+    <div class="dm-head">
+      <div class="dm-title">举报玩家</div>
+      <button class="leave-btn" onclick="closeReport()">关闭</button>
+    </div>
+    <div class="report-body">
+      <label class="report-label">举报对象
+        <select id="report-target"></select>
+      </label>
+      <label class="report-label">违规类型
+        <select id="report-reason">
+          <option value="0">辱骂/人身攻击</option>
+          <option value="1">刷屏/广告</option>
+          <option value="2">作弊/使用外挂</option>
+          <option value="3">挂机/恶意拖延</option>
+          <option value="4">其他</option>
+        </select>
+      </label>
+      <label class="report-label">补充说明（可选）
+        <textarea id="report-detail" maxlength="300" rows="3" placeholder="发生了什么？例如「第 3 回合开始持续辱骂」"></textarea>
+      </label>
+      <p class="report-hint" id="report-hint">恶意举报会被记录，请如实填写。</p>
+    </div>
+    <div class="dm-input-row">
+      <button class="btn-outline" style="flex:1" onclick="submitReport()">提交举报</button>
+    </div>
+  </div>
+</div>
+
+<!-- 管理后台（仅在 URL 带 ?admin=1 且配置了 ADMIN_TOKEN 时可用） -->
+<div class="dm-modal" id="admin-modal">
+  <div class="admin-box">
+    <div class="dm-head">
+      <div class="dm-title">运营治理 · 举报处理</div>
+      <button class="leave-btn" onclick="closeAdmin()">关闭</button>
+    </div>
+    <div class="admin-body">
+      <div id="admin-status" class="report-hint">加载中…</div>
+      <div id="admin-reports" class="admin-list"></div>
+      <div class="expiry-note">
+        <div class="expiry-note-title">已有处置</div>
+        <div id="admin-sanctions" class="admin-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <main id="game-screen" style="display:none;">
 
   <!-- LEFT: PLAYERS -->
@@ -335,7 +385,8 @@
       <div class="status-area waiting" id="status-msg">等待连接...</div>
       <div style="padding:4px 16px 8px;display:none" id="surrender-row">
         <button class="leave-btn" id="pass-btn" onclick="sendPass()" style="display:none;width:100%;margin-bottom:6px;border-color:var(--accent2);color:var(--accent2)">停一手</button>
-        <button class="leave-btn" id="surrender-btn" onclick="surrender()" style="width:100%;border-color:var(--accent);color:var(--accent)">认输</button>
+        <button class="leave-btn" id="surrender-btn" onclick="surrender()" style="width:100%;margin-bottom:6px;border-color:var(--accent);color:var(--accent)">认输</button>
+        <button class="leave-btn" id="report-btn" onclick="openReport()" style="width:100%;border-color:var(--border);color:var(--text-dim)">举报玩家</button>
       </div>
     </div>
   </div>
@@ -487,8 +538,8 @@
 
 </main>
 
-<script src="js/games.js?v=62"></script>
-<script src="app.js?v=62"></script>
+<script src="js/games.js?v=63"></script>
+<script src="app.js?v=63"></script>
 </body>
 </html>
 

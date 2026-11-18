@@ -26,3 +26,7 @@ coach:
   endpoint: ${COACH_ENDPOINT:https://api.openai.com/v1/chat/completions}
   api-key: ${COACH_API_KEY:}
   model: ${COACH_MODEL:}
+
+# 运营治理：管理接口令牌；留空则管理接口整体关闭（安全默认）。
+admin:
+  token: ${ADMIN_TOKEN:}

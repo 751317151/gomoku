@@ -1863,3 +1863,27 @@ export PATH="/usr/bin:/bin:/e/JAVA/apache-maven-3.9.11/bin:/e/JAVA/jdk/jdk-21.0.
 - Java 11 兼容修复后，生产镜像构建成功（gomoku-game:prod-verify，291MB，多阶段 maven:3.9.11-temurin-11 → temurin-11-jre-jammy）。
 - 用生产镜像真实起容器端到端验证：actuator/health UP；HTTP API（/api/stats、/api/guest 签发）正常；Netty 9001 WS 握手 101 Switching Protocols；容器内 whoami=gomoku（非 root）；数据卷 /app/data 归属 gomoku 且 guests.json 正常落盘。验证后容器/卷/镜像已清理。
 - 至此「生产 Dockerfile 完整构建」从挂账清单移除；剩余：公网域名 HTTPS/WSS 证书签发需部署者真实域名与 80/443 可达，无法在开发机代替验证。
+
+## 2026-11-19：运营治理闭环（举报 → 处置 → 生效）
+
+- 判断：项目已有陌生人房间、公开聊天与好友私聊，但**没有任何处置手段**——出现辱骂/刷屏/挂机骚扰时运营只能重启服务。这是「能线上持续运营」最硬的缺口，优先于继续加玩法。
+- 新增 ModerationService（data/moderation.json，单文件存 reports + sanctions）：
+  - 举报带取证快照：举报人/被举报人身份与昵称、房间号、玩法、原因码（abuse/spam/cheating/afk/other）、补充说明（300 字截断）、时间。
+  - 同一举报人 10 分钟内重复举报同一人自动去重（返回 null，客户端提示「请勿重复提交」），队列上限 500 条防止文件无限增长。
+  - 处置两档：mute（禁言，仍可游玩）与 ban（封禁，拒绝进入），时长 1h/24h/7d/30d/forever（0=永久）；查询时惰性判定到期，不删记录便于审计；`remainingSeconds` 永久返回 -1。
+  - 变更即原子落盘（同款 tmp + ATOMIC_MOVE）。
+- WS 接入拦截（GameServerHandler）：
+  - HALL_BIND 与 JOIN 都做封禁拦截（旧客户端不发 HALL_BIND 也覆盖），返回「账号已被封禁，如有疑问请联系管理员」。
+  - CHAT 与 DIRECT_MSG 都做禁言拦截（禁言仍可继续对局，只是发不出消息），错误文案明确。
+  - 新增 REPORT 消息：只能举报同房间的真人（电脑不可举报、不能举报自己），成功后走房间内系统消息回执；原因码用 action 下标（0–4）。
+- 新增 ModerationController：
+  - 玩家侧：`GET /api/moderation/me`（banned/muted/remainingSeconds 实时状态）、`GET /api/moderation/reports/mine`（自己的举报历史，**不返回对方身份 ID**）。
+  - 管理侧（请求头 X-Admin-Token，与 .env 的 ADMIN_TOKEN 恒定时间比对；未配置时管理接口整体 503 关闭，避免裸奔默认口令）：举报队列 + 处置表总览、按举报处置（自动标记已处理）、忽略举报、按身份直接处置、撤销处置。
+- 配置：application.yml 增 `admin.token: ${ADMIN_TOKEN:}`；.env.example 与 docker-compose.yml 同步该变量（留空即关闭）。
+- 前端（缓存 v62→v63）：
+  - 房间「认输」下方新增「举报玩家」→ 举报弹窗（对象下拉只列同房间真人、5 类原因、300 字补充说明），提交后弹窗内即时反馈并写房间聊天。
+  - 管理后台：`?admin=1` 时 prompt 输入令牌（令牌不入 URL，避免日志/分享泄露），大厅出现「治理后台」入口；面板展示待处理举报（举报人/被举报人/原因标签/时间/玩法/房号/编号）、一键「禁言 24h」「封禁 7d」「忽略」，以及处置表（生效中/已过期 + 撤销）。
+- 测试：新增 ModerationServiceTest 12 例（取证字段、去重窗口、自己/未知原因、封禁到期、禁言不含封禁、永久处置、非法时长、撤销、重启保留、已处置过滤、队列上限、最新在前与 limit）；全量 **365 项 0 失败**。
+- 新增 smoke-moderation.mjs 20 项（真实 WS + REST）：无令牌拒绝、举报确认、重复举报去重、举报自己被拒、管理端取证字段与时长下发、禁言后聊天被拦截、封禁后重连被拒绝、撤销后恢复、待处理过滤、玩家视图不泄露身份 ID。
+- 真实浏览器实测（v63）：进入房间点「举报玩家」→ 弹窗只列对手 → 提交后聊天出现「举报已提交」；开治理后台看到「待处理 1 条」及完整取证行 → 点「封禁 7d」→ 击杀后待处理归零、处置表显示「封禁 生效中」；被封禁者用同一 token 重连立即收到「账号已被封禁」错误（截图确认）。过程中发现并修复：举报回执因缺 playerName 在聊天里显示成「undefined：」，已补「系统」发送者名。
+- 回归：smoke-friends 51/51、smoke-account 13/13、smoke-checkin 17/17 均通过（治理改动未影响既有链路）。

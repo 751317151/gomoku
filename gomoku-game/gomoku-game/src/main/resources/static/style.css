@@ -2406,3 +2406,26 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 .dm-input-row { display: flex; gap: 8px; margin-top: 10px; }
 .dm-input-row input { flex: 1; min-width: 0; }
 .dm-badge { display: inline-block; min-width: 18px; padding: 1px 5px; border-radius: 9px; background: #c0392b; color: #fff; font-size: .7rem; text-align: center; }
+
+/* ============ 举报 / 运营治理后台 ============ */
+.report-body { display: flex; flex-direction: column; gap: 10px; }
+.report-label { display: flex; flex-direction: column; gap: 4px; font-size: .82rem; color: var(--text-dim); }
+.report-label select, .report-label textarea { background: rgba(255,255,255,.05); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px; font-size: .86rem; font-family: inherit; resize: vertical; }
+.report-hint { margin: 0; font-size: .78rem; color: var(--text-dim); line-height: 1.5; }
+.admin-box { width: min(720px, calc(100vw - 24px)); max-height: 82vh; display: flex; flex-direction: column; background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 14px; box-sizing: border-box; }
+.admin-body { overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.admin-list { display: flex; flex-direction: column; gap: 8px; }
+.admin-row { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: .82rem; background: rgba(255,255,255,.03); }
+.admin-row.handled { opacity: .6; }
+.admin-row.compact { padding: 6px 10px; }
+.admin-row-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.admin-row-head b { color: var(--text); }
+.admin-tag { font-size: .7rem; padding: 1px 6px; border-radius: 8px; background: rgba(212,168,67,.18); color: var(--accent); }
+.admin-tag.active { background: rgba(192,57,43,.25); color: #ff8f80; }
+.admin-time { margin-left: auto; color: var(--text-dim); font-size: .72rem; }
+.admin-detail { margin-top: 4px; color: var(--text-dim); overflow-wrap: anywhere; }
+.admin-meta { margin-top: 4px; color: #666; font-size: .7rem; overflow-wrap: anywhere; }
+.admin-actions { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.admin-done { color: #4caf6d; font-size: .75rem; }
+.expiry-note { border-top: 1px solid var(--border); padding-top: 10px; }
+.expiry-note-title { color: var(--accent); font-size: .84rem; margin-bottom: 6px; }
