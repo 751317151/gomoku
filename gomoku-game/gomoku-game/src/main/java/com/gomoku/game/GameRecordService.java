@@ -498,6 +498,16 @@ public class GameRecordService {
     }
 
     /**
+     * 运营指标用的全量摘要快照（最新在前）。
+     *
+     * 返回的是内存索引里的同一批对象，调用方只读不写。
+     * 抽这个方法而不是把字段暴露出去，是为了让 OpsMetricsService 不必知道 recent 的锁细节。
+     */
+    public synchronized List<GameRecord> snapshotRecentRecords() {
+        return new ArrayList<>(recent);
+    }
+
+    /**
      * 某持久身份最近一次真人对局使用的昵称（好友列表离线展示用）。
      * 摘要索引最新的在前，找到即返回；该身份没有真人记录返回 null。
      */

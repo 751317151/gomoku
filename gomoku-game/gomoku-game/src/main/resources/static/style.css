@@ -2429,3 +2429,22 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 .admin-done { color: #4caf6d; font-size: .75rem; }
 .expiry-note { border-top: 1px solid var(--border); padding-top: 10px; }
 .expiry-note-title { color: var(--accent); font-size: .84rem; margin-bottom: 6px; }
+
+/* ============ 运营数据看板 ============ */
+.admin-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 10px; }
+.admin-tabs .account-tab { flex: 1; }
+#admin-pane-reports, #admin-pane-ops { flex-direction: column; }
+.ops-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.ops-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: rgba(255,255,255,.03); text-align: center; }
+.ops-card-value { font-size: 1.3rem; font-weight: 700; color: var(--accent); }
+.ops-card-value small { font-size: .7rem; color: var(--text-dim); margin-left: 2px; }
+.ops-card-label { margin-top: 4px; font-size: .74rem; color: var(--text-dim); }
+.ops-bars { display: flex; flex-direction: column; gap: 5px; }
+.ops-bar-row { display: flex; align-items: center; gap: 8px; font-size: .76rem; }
+.ops-bar-label { flex: 0 0 88px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ops-bar-track { flex: 1; height: 10px; background: rgba(255,255,255,.06); border-radius: 5px; overflow: hidden; }
+.ops-bar-fill { display: block; height: 100%; background: linear-gradient(90deg, rgba(212,168,67,.5), var(--accent)); border-radius: 5px; }
+.ops-bar-value { flex: 0 0 76px; text-align: right; color: var(--text); }
+.ops-bar-value small { color: var(--text-dim); }
+.ops-definitions { font-size: .74rem; color: var(--text-dim); line-height: 1.7; }
+@media (max-width: 600px) { .ops-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ops-bar-label { flex-basis: 66px; } }

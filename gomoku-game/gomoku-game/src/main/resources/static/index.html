@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="棋战大厅">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="style.css?v=63">
+<link rel="stylesheet" href="style.css?v=64">
 </head>
 <body>
 
@@ -338,12 +338,36 @@
       <div class="dm-title">运营治理 · 举报处理</div>
       <button class="leave-btn" onclick="closeAdmin()">关闭</button>
     </div>
-    <div class="admin-body">
+    <div class="admin-tabs">
+      <button class="account-tab active" id="admin-tab-reports" onclick="switchAdminTab('reports')">举报处理</button>
+      <button class="account-tab" id="admin-tab-ops" onclick="switchAdminTab('ops')">运营数据</button>
+    </div>
+    <div class="admin-body" id="admin-pane-reports">
       <div id="admin-status" class="report-hint">加载中…</div>
       <div id="admin-reports" class="admin-list"></div>
       <div class="expiry-note">
         <div class="expiry-note-title">已有处置</div>
         <div id="admin-sanctions" class="admin-list"></div>
+      </div>
+    </div>
+    <div class="admin-body" id="admin-pane-ops" style="display:none">
+      <div id="ops-status" class="report-hint">加载中…</div>
+      <div id="ops-cards" class="ops-cards"></div>
+      <div class="expiry-note">
+        <div class="expiry-note-title">日活趋势（近 14 天）</div>
+        <div id="ops-trend" class="ops-bars"></div>
+      </div>
+      <div class="expiry-note">
+        <div class="expiry-note-title">玩法热度</div>
+        <div id="ops-games" class="ops-bars"></div>
+      </div>
+      <div class="expiry-note">
+        <div class="expiry-note-title">时段分布</div>
+        <div id="ops-hours" class="ops-bars"></div>
+      </div>
+      <div class="expiry-note">
+        <div class="expiry-note-title">口径说明</div>
+        <div id="ops-definitions" class="ops-definitions"></div>
       </div>
     </div>
   </div>
@@ -538,8 +562,8 @@
 
 </main>
 
-<script src="js/games.js?v=63"></script>
-<script src="app.js?v=63"></script>
+<script src="js/games.js?v=64"></script>
+<script src="app.js?v=64"></script>
 </body>
 </html>
 

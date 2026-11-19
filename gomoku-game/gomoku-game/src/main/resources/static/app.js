@@ -3598,6 +3598,79 @@ function adminLift(identityId) {
     });
 }
 
+// ============ 运营数据看板（管理员） ============
+
+let opsLoaded = false;
+
+function switchAdminTab(tab) {
+  const reportsTab = document.getElementById('admin-tab-reports');
+  const opsTab = document.getElementById('admin-tab-ops');
+  const reportsPane = document.getElementById('admin-pane-reports');
+  const opsPane = document.getElementById('admin-pane-ops');
+  const isOps = tab === 'ops';
+  reportsTab.classList.toggle('active', !isOps);
+  opsTab.classList.toggle('active', isOps);
+  reportsPane.style.display = isOps ? 'none' : 'flex';
+  opsPane.style.display = isOps ? 'flex' : 'none';
+  if (isOps && !opsLoaded) loadOps();
+}
+
+function loadOps() {
+  const statusEl = document.getElementById('ops-status');
+  adminFetch('/api/admin/ops?days=14').then(({ ok, status, body }) => {
+    if (!ok) {
+      statusEl.textContent = (body && body.message) || ('运营数据不可用（' + status + '）');
+      return;
+    }
+    opsLoaded = true;
+    const metrics = body.metrics || {};
+    const realtime = body.realtime || {};
+    const expiry = metrics.retention || {};
+    const realtimeText = '此刻在线 ' + (realtime.totalPlayers || 0) + ' 人 · 房间 ' + (realtime.totalRooms || 0)
+      + '（对局中 ' + (realtime.playingRooms || 0) + '）';
+    const d1 = expiry.d1 == null ? '—' : expiry.d1 + '%';
+    const d7 = expiry.d7 == null ? '—' : expiry.d7 + '%';
+    statusEl.textContent = realtimeText + ' · 统计窗口 ' + (metrics.from || '') + ' ~ ' + (metrics.to || '');
+
+    document.getElementById('ops-cards').innerHTML = [
+      ['今日活跃', metrics.todayActive || 0, '人'],
+      ['窗口活跃', metrics.activeUsers || 0, '人'],
+      ['真人对局', metrics.totalGames || 0, '局'],
+      ['计分局', metrics.rankedGames || 0, '局'],
+      ['次日留存', d1, ''],
+      ['7 日留存', d7, '']
+    ].map(([label, value, unit]) =>
+      '<div class="ops-card"><div class="ops-card-value">' + escHtml(String(value)) + '<small>' + unit + '</small></div>'
+      + '<div class="ops-card-label">' + escHtml(label) + '</div></div>').join('');
+
+    renderOpsBars('ops-trend', (metrics.trend || []).map(r => ({
+      label: String(r.date || '').slice(5), value: r.users || 0, note: (r.games || 0) + ' 局'
+    })));
+    renderOpsBars('ops-games', (metrics.gameTypes || []).map(r => ({
+      label: r.gameType, value: r.games, note: (r.share || 0) + '%'
+    })));
+    renderOpsBars('ops-hours', (metrics.hourly || []).map(r => ({
+      label: r.slot, value: r.games
+    })));
+    document.getElementById('ops-definitions').innerHTML = (metrics.definitions || [])
+      .map(d => '<div class="ops-definition">· ' + escHtml(d) + '</div>').join('');
+  });
+}
+
+/** 横向条形图：纯 DOM，不引图表库（看板只给管理员看，够用即可） */
+function renderOpsBars(containerId, rows) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  if (!rows.length) { el.innerHTML = '<div class="friends-empty">暂无数据</div>'; return; }
+  const max = Math.max.apply(null, rows.map(r => r.value).concat([1]));
+  el.innerHTML = rows.map(r => {
+    const pct = Math.round((r.value / max) * 100);
+    return '<div class="ops-bar-row"><span class="ops-bar-label">' + escHtml(String(r.label)) + '</span>'
+      + '<span class="ops-bar-track"><span class="ops-bar-fill" style="width:' + pct + '%"></span></span>'
+      + '<span class="ops-bar-value">' + r.value + (r.note ? ' <small>' + escHtml(r.note) + '</small>' : '') + '</span></div>';
+  }).join('');
+}
+
 function renderBlackjackPanel() {
   const status = document.getElementById('bj-status');
   const dealer = document.getElementById('bj-dealer');

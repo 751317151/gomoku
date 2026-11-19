@@ -2,7 +2,6 @@ package com.gomoku.server;
 
 import com.gomoku.game.GuestIdentityService;
 import com.gomoku.game.ModerationService;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
 
@@ -22,13 +21,13 @@ public class ModerationController {
 
     private final ModerationService moderation;
     private final GuestIdentityService guests;
-    private final String adminToken;
+    private final AdminGuard adminGuard;
 
     public ModerationController(ModerationService moderation, GuestIdentityService guests,
-                                @Value("${admin.token:}") String adminToken) {
+                                AdminGuard adminGuard) {
         this.moderation = moderation;
         this.guests = guests;
-        this.adminToken = adminToken == null ? "" : adminToken.trim();
+        this.adminGuard = adminGuard;
     }
 
     /** 我当前的处置状态：被封禁/禁言时前端可提前提示 */
@@ -71,7 +70,7 @@ public class ModerationController {
             @RequestHeader(value = "X-Admin-Token", required = false) String token,
             @RequestParam(required = false, defaultValue = "false") boolean onlyPending,
             @RequestParam(required = false, defaultValue = "100") int limit) {
-        ResponseEntity<Map<String, Object>> denied = requireAdmin(token);
+        ResponseEntity<Map<String, Object>> denied = adminGuard.check(token);
         if (denied != null) return denied;
         List<Map<String, Object>> reports = new ArrayList<>();
         for (ModerationService.Report report : moderation.reports(onlyPending, Math.min(limit, 200))) {
@@ -90,7 +89,7 @@ public class ModerationController {
             @PathVariable String reportId,
             @RequestHeader(value = "X-Admin-Token", required = false) String token,
             @RequestBody Map<String, String> body) {
-        ResponseEntity<Map<String, Object>> denied = requireAdmin(token);
+        ResponseEntity<Map<String, Object>> denied = adminGuard.check(token);
         if (denied != null) return denied;
         ModerationService.Report target = null;
         for (ModerationService.Report report : moderation.reports(false, 0)) {
@@ -115,7 +114,7 @@ public class ModerationController {
             @PathVariable String reportId,
             @RequestHeader(value = "X-Admin-Token", required = false) String token,
             @RequestBody(required = false) Map<String, String> body) {
-        ResponseEntity<Map<String, Object>> denied = requireAdmin(token);
+        ResponseEntity<Map<String, Object>> denied = adminGuard.check(token);
         if (denied != null) return denied;
         String note = body == null ? null : body.get("note");
         if (!moderation.markHandled(reportId, note == null ? "dismissed" : note)) {
@@ -131,7 +130,7 @@ public class ModerationController {
     public ResponseEntity<Map<String, Object>> sanctionIdentity(
             @RequestHeader(value = "X-Admin-Token", required = false) String token,
             @RequestBody Map<String, String> body) {
-        ResponseEntity<Map<String, Object>> denied = requireAdmin(token);
+        ResponseEntity<Map<String, Object>> denied = adminGuard.check(token);
         if (denied != null) return denied;
         try {
             ModerationService.Sanction sanction = moderation.sanction(
@@ -149,7 +148,7 @@ public class ModerationController {
     public ResponseEntity<Map<String, Object>> lift(
             @PathVariable String identityId,
             @RequestHeader(value = "X-Admin-Token", required = false) String token) {
-        ResponseEntity<Map<String, Object>> denied = requireAdmin(token);
+        ResponseEntity<Map<String, Object>> denied = adminGuard.check(token);
         if (denied != null) return denied;
         if (!moderation.lift(identityId)) return error(404, "该身份没有处置记录");
         Map<String, Object> result = new LinkedHashMap<>();
@@ -158,22 +157,6 @@ public class ModerationController {
     }
 
     // ============ 内部 ============
-
-    /** 管理端鉴权：未配置令牌 → 关闭；令牌不符 → 403 */
-    private ResponseEntity<Map<String, Object>> requireAdmin(String provided) {
-        if (adminToken.isEmpty()) return error(503, "管理接口未启用（未配置 ADMIN_TOKEN）");
-        if (provided == null || !constantTimeEquals(provided.trim(), adminToken)) {
-            return error(403, "管理令牌无效");
-        }
-        return null;
-    }
-
-    /** 恒定时间比较，避免通过响应耗时探测令牌 */
-    private static boolean constantTimeEquals(String a, String b) {
-        byte[] x = a.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        byte[] y = b.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        return java.security.MessageDigest.isEqual(x, y);
-    }
 
     /** 举报视图：对玩家隐藏对方身份（只给自己的举报看对方昵称） */
     private static Map<String, Object> reportView(ModerationService.Report report, boolean admin) {
