@@ -96,6 +96,26 @@ class PlayerProgressServiceTest {
     }
 
     @Test
+    void eventBonusComesFromTheRecordAndDoesNotLeakToLaterGames() throws Exception {
+        GameRecordService records = newRecords();
+        PlayerProgressService service = new PlayerProgressService(records);
+        String me = "guest-event-bonus";
+
+        GameRecord withEvent = game("E1", "GOMOKU", 1000L, 2000L, me, "WIN", 2);
+        withEvent.setEventId("EVT-1");
+        withEvent.setEventTitle("周末加成");
+        withEvent.setEventXpPercent(50);
+        records.saveAsync(withEvent);
+
+        // 基础 20 + 胜利 30 + 新玩法 25 = 75；活动再 +50% = 38（四舍五入）
+        assertEquals(113, service.getProgress(me).get("xp"));
+
+        // 次日活动已结束：新对局没有刻活动，只拿 20 基础经验，历史加成不缩水
+        records.saveAsync(game("E2", "GOMOKU", 3000L, 4000L, me, "LOSE", 2));
+        assertEquals(133, service.getProgress(me).get("xp"));
+    }
+
+    @Test
     void threeWinsUnlockStreakAndVarietyTracksGameTypes() throws Exception {
         GameRecordService records = newRecords();
         PlayerProgressService service = new PlayerProgressService(records);
@@ -121,7 +141,8 @@ class PlayerProgressServiceTest {
         assertEquals(1, p.get("level"));
         assertEquals(0, p.get("totalGames"));
         assertEquals(0, p.get("achievementsUnlocked"));
-        assertEquals(11, p.get("achievementsTotal"));
+        assertEquals(12 + GameType.values().length, p.get("achievementsTotal"),
+                "基础 11 项 + 全模式制霸 + 每种玩法一个首胜");
         assertEquals("新手", p.get("title"));
     }
 
@@ -158,12 +179,55 @@ class PlayerProgressServiceTest {
         assertEquals(plain.get("achievementsUnlocked"), withBonus.get("achievementsUnlocked"));
     }
 
+    @Test
+    void modeFirstWinAchievementsTrackEachGameType() throws Exception {
+        GameRecordService records = newRecords();
+        PlayerProgressService service = new PlayerProgressService(records);
+        String me = "guest-modes";
+
+        records.saveAsync(game("G1", "GOMOKU", 1000L, 2000L, me, "WIN", 2));
+        records.saveAsync(game("U1", "UNO", 3000L, 4000L, me, "WIN", 4));
+        records.saveAsync(game("R1", "REVERSI", 5000L, 6000L, me, "LOSE", 2));
+        Map<String, Object> p = service.getProgress(me);
+
+        assertTrue(unlocked(p, "mode-win-gomoku"));
+        assertTrue(unlocked(p, "mode-win-uno"));
+        assertFalse(unlocked(p, "mode-win-reversi"), "只体验未获胜不应解锁该玩法首胜");
+        assertEquals(2, achievement(p, "all-modes").get("progress"), "胜场玩法数应累计");
+        assertEquals(GameType.values().length, achievement(p, "all-modes").get("goal"));
+        assertFalse(unlocked(p, "all-modes"));
+    }
+
+    @Test
+    void winningEveryGameTypeUnlocksAllModes() throws Exception {
+        GameRecordService records = newRecords();
+        PlayerProgressService service = new PlayerProgressService(records);
+        String me = "guest-all-modes";
+
+        long t = 1000L;
+        for (GameType type : GameType.values()) {
+            records.saveAsync(game("ALL-" + type.name(), type.name(), t, t + 1000L, me, "WIN", 2));
+            t += 2000L;
+        }
+        Map<String, Object> p = service.getProgress(me);
+
+        for (GameType type : GameType.values()) {
+            assertTrue(unlocked(p, "mode-win-" + type.name().toLowerCase()), "每种玩法首胜都应解锁：" + type);
+        }
+        assertTrue(unlocked(p, "all-modes"));
+        assertEquals(GameType.values().length, p.get("gameTypes"));
+    }
+
     @SuppressWarnings("unchecked")
-    private static boolean unlocked(Map<String, Object> progress, String id) {
+    private static Map<String, Object> achievement(Map<String, Object> progress, String id) {
         for (Map<String, Object> a : (List<Map<String, Object>>) progress.get("achievements")) {
-            if (id.equals(a.get("id"))) return Boolean.TRUE.equals(a.get("unlocked"));
+            if (id.equals(a.get("id"))) return a;
         }
         fail("未找到成就：" + id);
-        return false;
+        return null;
+    }
+
+    private static boolean unlocked(Map<String, Object> progress, String id) {
+        return Boolean.TRUE.equals(achievement(progress, id).get("unlocked"));
     }
 }

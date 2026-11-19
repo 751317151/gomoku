@@ -19,7 +19,8 @@ import java.util.Set;
  *   若单独存一份进度，就必须处理与记录不一致的修复逻辑，这里直接不引入第二份真相。
  * - 覆盖全部玩法（含 2–8 人休闲局）。ELO 只服务双人竞技，多人玩法此前没有成长反馈，
  *   这正是「打完一局没有下一步」的留存缺口。
- * - 只认持久身份（identityId），AI 局不计经验，避免刷人机升级。
+ * - 只认持久身份（identityId）；人机局也计经验（单人模式同样需要成长），
+ *   但 ELO 与竞技战绩仍只认真人对局，互不影响。
  */
 @Service
 public class PlayerProgressService {
@@ -83,6 +84,7 @@ public class PlayerProgressService {
         int multiplayerGames = 0;
         int maxWinStreak = 0, currentStreak = 0;
         Set<String> types = new HashSet<>();
+        Set<String> wonTypes = new HashSet<>();
         boolean nightOwl = false;
         boolean speedrun = false;
         ZoneId zone = ZoneId.systemDefault();
@@ -100,18 +102,24 @@ public class PlayerProgressService {
             boolean isDraw = !isWin && !"LOSE".equals(me.getResult());
 
             xp += XP_PER_GAME;
-            if (isWin) { xp += XP_PER_WIN; wins++; }
-            else if (isDraw) { xp += XP_PER_DRAW; draws++; }
+            int gameXp = XP_PER_GAME;
+            if (isWin) { xp += XP_PER_WIN; gameXp += XP_PER_WIN; wins++; }
+            else if (isDraw) { xp += XP_PER_DRAW; gameXp += XP_PER_DRAW; draws++; }
             else losses++;
 
             int humanPlayers = 0;
             for (GameRecord.Participant p : record.getParticipants()) {
                 if (!p.isAi()) humanPlayers++;
             }
-            if (humanPlayers > 2) { multiplayerGames++; xp += XP_MULTIPLAYER_BONUS; }
+            if (humanPlayers > 2) { multiplayerGames++; xp += XP_MULTIPLAYER_BONUS; gameXp += XP_MULTIPLAYER_BONUS; }
 
             String type = record.getGameType();
-            if (type != null && types.add(type)) xp += XP_NEW_GAME_TYPE;
+            if (type != null && types.add(type)) { xp += XP_NEW_GAME_TYPE; gameXp += XP_NEW_GAME_TYPE; }
+            // 限时活动：倍率在结算时已刻进记录，活动结束后历史经验不缩水
+            if (record.getEventXpPercent() > 0) {
+                xp += Math.round(gameXp * record.getEventXpPercent() / 100f);
+            }
+            if (isWin && type != null) wonTypes.add(type.toUpperCase());
 
             if (isWin) {
                 currentStreak++;
@@ -164,6 +172,20 @@ public class PlayerProgressService {
         achievements.add(achievement("multiplayer-5", "组局达人", "完成 5 局 3 人以上对局", multiplayerGames, 5, multiplayerGames >= 5));
         achievements.add(achievement("night-owl", "夜猫子", "在凌晨 0–5 点完成一局", nightOwl ? 1 : 0, 1, nightOwl));
         achievements.add(achievement("speedrun", "闪电战", "2 分钟内结束一局", speedrun ? 1 : 0, 1, speedrun));
+
+        // 各玩法的首胜目标：给 14 种玩法各自一个可收集成就，引导玩家探索全部模式
+        GameType[] allTypes = GameType.values();
+        for (GameType type : allTypes) {
+            boolean won = wonTypes.contains(type.name());
+            achievements.add(achievement("mode-win-" + type.name().toLowerCase(),
+                    type.getDisplayName() + "·首胜",
+                    "在" + type.getDisplayName() + "中赢下第一局",
+                    won ? 1 : 0, 1, won));
+        }
+        achievements.add(achievement("all-modes", "全模式制霸",
+                "在全部 " + allTypes.length + " 种玩法中都取得过胜利",
+                wonTypes.size(), allTypes.length, wonTypes.size() >= allTypes.length));
+
         result.put("achievements", achievements);
 
         int unlocked = 0;

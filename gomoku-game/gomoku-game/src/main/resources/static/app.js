@@ -80,6 +80,12 @@ let lastMove = null;
 let winLine = null; // 获胜连线坐标 [[row,col],...]
 let players = {};
 let myWins = 0, myLosses = 0;
+// 匹配体验：等待计时、同玩法等待提示与大厅玩法卡的人气标识
+let latestMatchOverview = null;
+let matchWaitStartedAt = 0;
+let matchWaitTimer = null;
+let matchRoomIsPublic = false;
+let matchOverviewDebounce = null;
 // ============ 会话持久化：标签页内 + 关闭后恢复 ============
 // sessionStorage 只覆盖当前标签页；关闭再打开时用它 + localStorage 备份找回座位。
 // 服务端会话与席位保留 10 分钟，备份超过这个窗口就不值得再试。
@@ -1435,6 +1441,7 @@ function showLobby() {
   document.getElementById('lobby-screen').style.display = 'block';
   document.getElementById('game-screen').style.display = 'none';
   gameState = 'LOBBY';
+  stopMatchWait(true);
   // 回到大厅时立刻刷新战绩（刚打完的那局应该马上出现在列表里）
   loadMyStats();
   loadDailyProgress();
@@ -1443,6 +1450,9 @@ function showLobby() {
   loadRecentGames();
   loadLeaderboard();
   loadFriends();
+  loadMatchOverview();
+  loadAnnouncements();
+  loadEvents();
 }
 
 function showGame() {
@@ -1464,6 +1474,107 @@ function refreshRooms() {
     .catch(() => {
       send({ type: 'GET_ROOMS' });
     });
+}
+
+// ============ 运营公告（大厅横幅） ============
+
+const ANNOUNCE_DISMISS_KEY = 'gomokuDismissedAnnouncements';
+let lastActiveAnnouncements = [];
+
+function dismissedAnnouncementIds() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(ANNOUNCE_DISMISS_KEY) || '[]');
+    return Array.isArray(raw) ? raw : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function announceLevelMeta(level) {
+  return ({
+    important: { label: '重要', cls: 'important' },
+    maintenance: { label: '维护', cls: 'maintenance' }
+  })[level] || { label: '公告', cls: 'info' };
+}
+
+function loadAnnouncements() {
+  fetch('/api/announcements')
+    .then(r => r.ok ? r.json() : null)
+    .then(body => { if (body) renderAnnouncements(body.announcements || []); })
+    .catch(() => { /* 公告加载失败不阻塞大厅 */ });
+}
+
+function renderAnnouncements(list) {
+  lastActiveAnnouncements = list;
+  const board = document.getElementById('announce-board');
+  if (!board) return;
+  const dismissed = dismissedAnnouncementIds();
+  const visible = list.filter(a => dismissed.indexOf(a.id) === -1);
+  if (!visible.length) {
+    board.style.display = 'none';
+    board.innerHTML = '';
+    return;
+  }
+  board.style.display = 'flex';
+  board.innerHTML = visible.map(a => {
+    const meta = announceLevelMeta(a.level);
+    return '<div class="announce-item announce-' + meta.cls + '" data-announce-id="' + escHtml(a.id) + '">'
+      + '<span class="announce-level">' + meta.label + '</span>'
+      + '<div class="announce-content">'
+      + '<div class="announce-title">' + escHtml(a.title) + '</div>'
+      + '<div class="announce-body">' + escHtml(a.body) + '</div>'
+      + '</div>'
+      + '<button class="announce-close" title="关闭公告" aria-label="关闭公告"'
+      + ' onclick="dismissAnnouncement(\'' + escHtml(a.id) + '\')">×</button>'
+      + '</div>';
+  }).join('');
+}
+
+/** 关闭公告：按 id 记住，刷新页面也不再骚扰；之后管理员重新上线的同 id 公告仍保持关闭 */
+function dismissAnnouncement(id) {
+  const ids = dismissedAnnouncementIds().filter(x => x !== id);
+  ids.push(id);
+  try { localStorage.setItem(ANNOUNCE_DISMISS_KEY, JSON.stringify(ids.slice(-100))); } catch (_) {}
+  renderAnnouncements(lastActiveAnnouncements);
+}
+
+// ============ 限时活动（大厅加成提示） ============
+
+let lastActiveEvents = [];
+
+function loadEvents() {
+  fetch('/api/events')
+    .then(r => r.ok ? r.json() : null)
+    .then(body => { if (body) renderEvents(body.events || [], body.serverTime || Date.now()); })
+    .catch(() => { /* 活动加载失败不阻塞大厅 */ });
+}
+
+/** 用服务端时间算剩余时长，避免各端时钟不一致把「还剩 2 天」显示成「已结束」 */
+function eventRemainingText(endsAt, serverTime) {
+  const ms = endsAt - serverTime;
+  if (ms <= 0) return '即将结束';
+  const minutes = Math.floor(ms / 60000);
+  if (minutes < 60) return '剩 ' + Math.max(1, minutes) + ' 分钟';
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return '剩 ' + hours + ' 小时';
+  return '剩 ' + Math.floor(hours / 24) + ' 天';
+}
+
+function renderEvents(list, serverTime) {
+  lastActiveEvents = list;
+  const strip = document.getElementById('event-strip');
+  if (!strip) return;
+  if (!list.length) {
+    strip.style.display = 'none';
+    strip.innerHTML = '';
+    return;
+  }
+  strip.style.display = 'flex';
+  strip.innerHTML = list.map(e =>
+    '<span class="event-chip" data-event-id="' + escHtml(e.id) + '">'
+    + '⚡ ' + escHtml(e.gameLabel || '全部玩法') + ' 经验 +' + (e.xpPercent || 0) + '%'
+    + '<small>' + escHtml(eventRemainingText(e.endsAt, serverTime)) + '</small></span>'
+  ).join('');
 }
 
 /**
@@ -1525,6 +1636,7 @@ function maybeShowOnboarding() {
 }
 
 function quickMatch() {
+  matchRoomIsPublic = true;
   send({ type: 'JOIN', playerName: myName, gameType: selectedGameType, createRoom: false, playerCount: selectedPlayerCount() });
   initGameModule(selectedGameType);
   showGame();
@@ -1534,9 +1646,122 @@ function quickMatch() {
 function createRoom() {
   // createRoom=true：强制新建私有房间，不把我匹配进别人的等待房间。
   // 之前这里只是普通 JOIN，点「创建房间」有可能直接坐进陌生人的房间。
+  matchRoomIsPublic = false;
   send({ type: 'JOIN', playerName: myName, gameType: selectedGameType, createRoom: true, playerCount: selectedPlayerCount() });
   initGameModule(selectedGameType);
   showGame();
+}
+
+/**
+ * 匹配总览：大厅玩法卡显示「N 人等待 / N 桌进行中」的数据来源。
+ * 只读接口，不维护排队状态；快速匹配仍由服务端 JOIN 原子完成。
+ */
+function loadMatchOverview() {
+  fetch('/api/match/overview')
+    .then(r => r.json())
+    .then(o => {
+      latestMatchOverview = o;
+      updateGameActivityBadges();
+    })
+    .catch(() => {});
+}
+
+function scheduleMatchOverview() {
+  if (matchOverviewDebounce) return;
+  matchOverviewDebounce = setTimeout(function () {
+    matchOverviewDebounce = null;
+    loadMatchOverview();
+  }, 250);
+}
+
+function gameActivityText(type) {
+  const g = latestMatchOverview && (latestMatchOverview.games || [])
+    .find(x => x.gameType === type);
+  if (!g) return '';
+  if ((g.waitingPlayers || 0) > 0) return '⚡ ' + g.waitingPlayers + ' 人等待';
+  if ((g.playingRooms || 0) > 0) return '▶ ' + g.playingRooms + ' 桌进行中';
+  return '';
+}
+
+function updateGameActivityBadges() {
+  document.querySelectorAll('#game-selector [data-activity]').forEach(el => {
+    const text = gameActivityText(el.dataset.activity);
+    el.textContent = text;
+    el.style.display = text ? '' : 'none';
+  });
+  renderMatchWaitHint();
+}
+
+/** 进入等待房后启动助手：已等待时长 + 同玩法等待提示 + 补电脑/邀请/返回 */
+function startMatchWait() {
+  stopMatchWait(true);
+  matchWaitStartedAt = Date.now();
+  const bar = document.getElementById('match-helper');
+  if (bar) bar.style.display = '';
+  renderMatchWait();
+  matchWaitTimer = setInterval(renderMatchWait, 1000);
+  loadMatchOverview();
+}
+
+function stopMatchWait(hide) {
+  if (matchWaitTimer) {
+    clearInterval(matchWaitTimer);
+    matchWaitTimer = null;
+  }
+  matchWaitStartedAt = 0;
+  if (hide) {
+    const bar = document.getElementById('match-helper');
+    if (bar) bar.style.display = 'none';
+  }
+}
+
+function renderMatchWait() {
+  if (gameState !== 'WAITING' || myId === 'SPECTATOR' || !matchWaitStartedAt) {
+    stopMatchWait(true);
+    return;
+  }
+  const elapsed = Math.max(0, Math.floor((Date.now() - matchWaitStartedAt) / 1000));
+  const el = document.getElementById('match-elapsed');
+  if (el) {
+    el.textContent = '匹配中 · 已等待 ' + Math.floor(elapsed / 60) + ':'
+      + String(elapsed % 60).padStart(2, '0');
+  }
+  renderMatchWaitHint();
+}
+
+function renderMatchWaitHint() {
+  const hint = document.getElementById('match-hint');
+  if (!hint || gameState !== 'WAITING') return;
+  if (!matchRoomIsPublic) {
+    hint.textContent = '私人房间等待中 · 把房号发给好友，或补齐电脑立即开局';
+    return;
+  }
+  const g = latestMatchOverview && (latestMatchOverview.games || [])
+    .find(x => x.gameType === currentGameType);
+  if (!g) {
+    hint.textContent = '正在寻找同玩法的在线玩家…';
+    return;
+  }
+  // 总览包含自己所在的公开房，展示「还有别人」时先减掉自己这一份
+  const humans = Math.max(0, (g.waitingPlayers || 0) - 1);
+  const rooms = Math.max(0, (g.waitingRooms || 0) - 1);
+  if (humans <= 0) {
+    hint.textContent = '暂时没有别人在等这个玩法 · 邀请好友，或补齐电脑立即开局';
+  } else {
+    hint.textContent = '大厅还有 ' + rooms + ' 间等待房 · ' + humans + ' 人同玩法在等';
+  }
+}
+
+/** 等待房里一键补齐空座：让任何玩法都能在没人时立刻开打 */
+function fillSeatsWithAI() {
+  if (gameState !== 'WAITING' || myId === 'SPECTATOR') return;
+  const empty = Math.max(0, (targetPlayers || 2) - Object.keys(players).length);
+  if (empty <= 0) return;
+  for (let i = 0; i < empty; i++) {
+    setTimeout(function () { send({ type: 'ADD_AI', data: '4' }); }, i * 300);
+  }
+  setStatusMsg('正在补入 ' + empty + ' 个电脑…', 'waiting');
+  addChat('补入 ' + empty + ' 个电脑开局', 'system');
 }
 
 /** 房号归一化：允许「1cbf9a」「ROOM-1cbf9a」「 1CBF9A 」 */
@@ -1559,6 +1784,7 @@ function joinByCode() {
 
 /** 按归一化后的房号加入（邀请链接也会走这里） */
 function doJoinByCode(code) {
+  matchRoomIsPublic = false;
   send({ type: 'JOIN', playerName: myName, gameType: selectedGameType, roomId: code });
   initGameModule(selectedGameType);
   showGame();
@@ -1592,6 +1818,7 @@ function fallbackCopy(text) {
 }
 
 function joinSpecificRoom(id, gameType) {
+  matchRoomIsPublic = false;
   send({ type: 'JOIN', playerName: myName, roomId: id, gameType: gameType || selectedGameType });
   initGameModule(gameType || selectedGameType);
   showGame();
@@ -1604,6 +1831,7 @@ function spectateRoom(id, gameType) {
 }
 
 function leaveRoom() {
+  stopMatchWait(true);
   if (replayMode) exitReplay();
   send({ type: 'LEAVE' });
   clearSessionBackup();
@@ -1798,12 +2026,14 @@ function buildGameSelector() {
     const selected = type === selectedGameType;
     const card = document.createElement('div');
     card.className = 'game-card' + (selected ? ' selected' : '');
-    // 选中的卡片里直接放「人机对战」按钮 —— 这是单机模式的唯一入口。
+    card.dataset.gameType = type;
+    // 选中卡片直接放「人机对战」按钮 —— 这是单机模式的唯一入口。
     // 之前只能先「快速开始」进房间、再等对手、再找「添加电脑」按钮，
     // 而那个按钮因为渲染 bug 从来没出现过，等于一个人完全没法开局。
     card.innerHTML = `<div class="game-card-icon">${m.icon}</div>
       <div class="game-card-name">${m.name}</div>
       <div class="game-card-desc">${m.footer}</div>
+      <span class="game-card-activity" data-activity="${type}" style="display:none"></span>
       ${selected ? `<button class="btn-solo" data-solo="${type}">▶ 人机对战</button>` : ''}`;
     card.onclick = function (e) {
       const soloBtn = e.target.closest ? e.target.closest('[data-solo]') : null;
@@ -1819,6 +2049,7 @@ function buildGameSelector() {
     };
     container.appendChild(card);
   });
+  updateGameActivityBadges();
 }
 
 /**
@@ -1836,6 +2067,7 @@ function startSoloGame(type) {
   // 先用界面内弹层选「难度」（卡牌再选套牌），再开局。
   askSoloDifficulty(type, function (difficulty, deck, deckCards) {
     selectedGameType = type;
+    matchRoomIsPublic = false;
     initGameModule(type);
     showGame();
     setStatusMsg('正在准备人机对战…', 'waiting');
@@ -2332,6 +2564,8 @@ function handleWaiting(msg) {
   addChat(wMsg, 'system');
   updatePlayerPanel();
   drawBoard();
+  if (myId === 'SPECTATOR') stopMatchWait(true);
+  else startMatchWait();
 }
 
 function handleRoomInfo(msg) {
@@ -2360,6 +2594,7 @@ function handleRoomInfo(msg) {
 }
 
 function handleRoomList(msg) {
+  if (gameState === 'LOBBY') scheduleMatchOverview();
   const container = document.getElementById('room-list-container');
   try {
     const list = JSON.parse(msg.data);
@@ -2375,6 +2610,7 @@ function handleRoomList(msg) {
     }
 
     filtered.forEach(r => {
+      const isWaiting = r.state === 'WAITING';
       const isPlaying = r.state === 'PLAYING';
       const isFinished = r.state === 'FINISHED';
       const isFull = r.playerCount >= (r.targetPlayers || 2);
@@ -2401,6 +2637,15 @@ function handleRoomList(msg) {
       header.appendChild(idSpan);
       header.appendChild(stateSpan);
 
+      // 队伍徽标：只显示队伍短码，不暴露成员身份或其它队伍信息
+      if (Array.isArray(r.partyIds) && r.partyIds.length) {
+        const partySpan = document.createElement('span');
+        partySpan.className = 'room-card-party';
+        partySpan.textContent = '队伍 ' + r.partyIds
+          .map(id => String(id).replace(/^PTY-/, '')).join(' / ');
+        header.appendChild(partySpan);
+      }
+
       const info = document.createElement('div');
       info.className = 'room-card-info';
 
@@ -2419,7 +2664,8 @@ function handleRoomList(msg) {
       const actions = document.createElement('div');
       actions.className = 'room-card-actions';
 
-      if (!isFull && !isPlaying) {
+      // 只有真正的等待房能加入：FINISHED 也不可（服务端会拒绝，按钮不该先撒谎）
+      if (isWaiting && !isFull) {
         const joinBtn = document.createElement('button');
         joinBtn.className = 'btn-outline';
         joinBtn.textContent = '加入';
@@ -2539,6 +2785,8 @@ function handleGameStart(msg) {
   if (inviteBtnStart) inviteBtnStart.style.display = 'none';
   if (msg.gameType) initGameModule(msg.gameType); else initGameModule(currentGameType);
   gameState = 'PLAYING';
+  lastGameOverEvent = null;
+  stopMatchWait(true);
   currentTurn = 1; // 先手方（黑）
   moveCount = 0;
   moveSeq = 0;
@@ -2643,6 +2891,9 @@ function handleGameMove(msg) {
   if (r !== -2) playStoneSound();
 }
 
+/** 本局结算时生效的限时活动（由 GAME_OVER 下发，用于在结算页解释额外经验） */
+let lastGameOverEvent = null;
+
 function handleGameOver(msg) {
   gameState = 'OVER';
   showSurrenderBtn();
@@ -2657,6 +2908,7 @@ function handleGameOver(msg) {
 
   const isSpectator = myId === 'SPECTATOR';
   const overData = JSON.parse(msg.data || '{}');
+  lastGameOverEvent = overData.event || null;
   const winningSides = overData.winningSides || [];
   const drawingSides = overData.drawingSides || [];
   const isPush = drawingSides.includes(myStone);
@@ -2739,8 +2991,63 @@ function handleGameOver(msg) {
   if (mod().html) drawBoard();
 
   overlay.classList.add('show');
-  loadDailyProgress();
-  loadPlayerProgress();
+
+  // 结算成长反馈：先记下终局前的快照，等成长与任务都刷新后再对比，
+  // 让玩家在结算页直接看到「这一局得到了什么」，而不是自己去翻面板。
+  const beforeProgress = progressSnapshot;
+  const beforeQuests = lastQuestStatus ? questDigest(lastQuestStatus) : null;
+  Promise.all([loadDailyProgress(), refreshProgressForRewards(beforeProgress, 2)]).then(function () {
+    renderGameoverRewards(beforeProgress, beforeQuests);
+  });
+}
+
+/** 终局查询可能早于存档索引（服务端已先存档再广播，这里再兜一层），没看到经验就短暂重试 */
+function refreshProgressForRewards(before, attemptsLeft) {
+  return loadPlayerProgress().then(function () {
+    const gained = before && progressSnapshot && progressSnapshot.xp > before.xp;
+    if (!gained && before && attemptsLeft > 0) {
+      return new Promise(function (resolve) { setTimeout(resolve, 250); })
+        .then(function () { return refreshProgressForRewards(before, attemptsLeft - 1); });
+    }
+  });
+}
+
+function renderGameoverRewards(beforeProgress, beforeQuests) {
+  const box = document.getElementById('gameover-rewards');
+  if (!box) return;
+  box.innerHTML = '';
+  if (!guestToken || myId === 'SPECTATOR') return;
+
+  const chips = [];
+  const after = progressSnapshot;
+  if (beforeProgress && after && after.xp > beforeProgress.xp) {
+    chips.push('<span class="reward-chip">本局 +' + (after.xp - beforeProgress.xp) + ' 经验</span>');
+    if (lastGameOverEvent && lastGameOverEvent.xpPercent > 0) {
+      chips.push('<span class="reward-chip reward-event">活动「' + escHtml(lastGameOverEvent.title || '限时活动')
+        + '」+' + lastGameOverEvent.xpPercent + '% 经验</span>');
+    }
+    if (after.level > beforeProgress.level) {
+      chips.push('<span class="reward-chip reward-levelup">升级 Lv.' + after.level + ' · ' + escHtml(after.title) + '</span>');
+    }
+    const beforeIds = {};
+    beforeProgress.unlocked.forEach(a => { beforeIds[a.id] = true; });
+    const fresh = after.unlocked.filter(a => !beforeIds[a.id]);
+    fresh.slice(0, 2).forEach(a => chips.push(
+      '<span class="reward-chip reward-achievement">解锁成就「' + escHtml(a.name) + '」</span>'));
+    if (fresh.length > 2) {
+      chips.push('<span class="reward-chip reward-achievement">另有 ' + (fresh.length - 2) + ' 项成就达成</span>');
+    }
+  }
+  const quests = lastQuestStatus;
+  if (beforeQuests && quests) {
+    if ((quests.claimableXp || 0) > beforeQuests.claimableXp) {
+      chips.push('<span class="reward-chip reward-quest">每日任务可领取 +'
+        + ((quests.claimableXp || 0) - beforeQuests.claimableXp) + ' 经验</span>');
+    } else if ((quests.todayGames || 0) > beforeQuests.todayGames) {
+      chips.push('<span class="reward-chip reward-quest">每日任务 ' + Math.min(quests.todayGames, 3) + '/3 局</span>');
+    }
+  }
+  box.innerHTML = chips.join('');
 }
 
 function handleGameChat(msg) {
@@ -2770,10 +3077,14 @@ function updatePlayerPanel() {
     const label = (mod().sides || [])[side - 1]?.label || '座位 ' + side;
     if (player) {
       const total = timerData.seatTotals?.[side - 1] ?? mod().totalTime;
+      // 队伍徽标：同队队员显示同一个 PTY 短码，一眼看出谁是一起来的
+      const partyChip = player.partyId
+        ? '<span class="seat-party" title="队伍 ' + escHtml(player.partyId) + '">' + escHtml(String(player.partyId).replace(/^PTY-/, '队 ')) + '</span>'
+        : '';
       slot.innerHTML = `<div class="player-card"><div class="player-card-top">
         <span class="seat-number">${side}</span><div class="player-name ${player.id === myId ? 'you' : ''}">${escHtml(player.name)}${player.id === myId ? '（你）' : ''}</div>
         <span class="timer-display" id="timer-${side}">${formatTime(total)}</span></div>
-        <div class="player-stats">${escHtml(label)} · 胜 ${player.wins || 0}${player.tier ? ' · <span class="seat-tier">' + escHtml(player.tier) + '</span>' : ''}${targetPlayers === 2 ? ' · ELO ' + (player.elo || 1200) : ''}</div>
+        <div class="player-stats">${partyChip}${escHtml(label)} · 胜 ${player.wins || 0}${player.tier ? ' · <span class="seat-tier">' + escHtml(player.tier) + '</span>' : ''}${targetPlayers === 2 ? ' · ELO ' + (player.elo || 1200) : ''}</div>
         <div id="turn-${side}" style="display:none"><span class="turn-badge">● 行动中</span><span id="step-timer-${side}" class="timer-display">${timerData.stepTime}s</span></div></div>`;
     } else {
       slot.innerHTML = `<div class="waiting-slot">${escHtml(label)} · 等待玩家</div>`;
@@ -3186,22 +3497,75 @@ function doCheckIn() {
     });
 }
 
+// 终局结算反馈用的快照：只记录展示所需的最小字段，避免把整份进度留在内存里
+let progressSnapshot = null;
+let lastQuestStatus = null;
+let lastProgress = null;
+let achievementFilter = 'all';
+
+function progressDigest(p) {
+  return {
+    xp: p.xp || 0,
+    level: p.level || 1,
+    title: p.title || '',
+    unlocked: (p.achievements || []).filter(a => a.unlocked).map(a => ({ id: a.id, name: a.name }))
+  };
+}
+
+function questDigest(s) {
+  return { claimableXp: s.claimableXp || 0, todayGames: s.todayGames || 0 };
+}
+
 function loadDailyProgress() {
   loadCheckInStatus();
   const box = document.getElementById('daily-progress');
-  const streakEl = document.getElementById('daily-streak');
-  if (!box || !guestToken) return;
-  fetch('/api/me/daily-progress', { headers: { Authorization: 'Bearer ' + guestToken } })
+  if (!box || !guestToken) return Promise.resolve();
+  return fetch('/api/quests', { headers: { Authorization: 'Bearer ' + guestToken } })
     .then(r => r.ok ? r.json() : Promise.reject(new Error('unauthorized')))
-    .then(p => {
-      if (streakEl) streakEl.textContent = '连续 ' + (p.streakDays || 0) + ' 天';
-      const item = (icon, label, value, goal, done) => '<div class="daily-item ' + (done ? 'done' : '') + '"><span class="daily-icon">' + icon + '</span><span class="daily-label">' + label + '</span><strong>' + Math.min(value || 0, goal) + '/' + goal + '</strong></div>';
-      box.innerHTML = item('🎮', '完成 3 局', p.todayGames, p.gamesGoal || 3, p.gamesDone)
-        + item('🏆', '赢 1 局', p.todayWins, p.winsGoal || 1, p.winsDone)
-        + item('🧩', '体验 2 种玩法', p.todayGameTypes, p.gameTypesGoal || 2, p.gameTypesDone)
-        + item('🔥', '连续活跃 3 天', p.streakDays, p.streakGoal || 3, p.streakDone);
+    .then(s => { renderDailyQuests(s); return s; })
+    .catch(() => { box.textContent = '任务加载失败，稍后重试'; });
+}
+
+/** 渲染每日任务：进行中显示进度，完成后出现领取按钮，领取后变「已领取」 */
+function renderDailyQuests(s) {
+  lastQuestStatus = s;
+  const box = document.getElementById('daily-progress');
+  const streakEl = document.getElementById('daily-streak');
+  if (!box) return;
+  if (streakEl) streakEl.textContent = '连续 ' + (s.streakDays || 0) + ' 天';
+  box.innerHTML = (s.quests || []).map(q => {
+    const reward = q.rewardXp || 0;
+    let action;
+    if (q.claimed) action = '<span class="quest-claimed">已领取</span>';
+    else if (q.claimable) action = '<button class="quest-claim" onclick="claimQuest(\'' + escHtml(q.id) + '\')">领取</button>';
+    else action = '<strong>' + Math.min(q.progress || 0, q.goal || 1) + '/' + (q.goal || 1) + '</strong>';
+    return '<div class="daily-item ' + (q.claimed || q.claimable ? 'done' : '') + '" title="' + escHtml(q.desc || '') + '">'
+      + '<span class="daily-icon">' + escHtml(q.icon || '🎯') + '</span>'
+      + '<span class="daily-label">' + escHtml(q.name || '') + ' <em class="quest-xp">+' + reward + ' XP</em></span>'
+      + action + '</div>';
+  }).join('');
+}
+
+function claimQuest(id) {
+  if (!guestToken) return;
+  document.querySelectorAll('.quest-claim').forEach(btn => { btn.disabled = true; });
+  fetch('/api/quests/' + encodeURIComponent(id) + '/claim', {
+    method: 'POST', headers: { Authorization: 'Bearer ' + guestToken }
+  })
+    .then(async r => {
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.message || '领取失败');
+      return body;
     })
-    .catch(() => { box.textContent = '游客身份准备中…'; });
+    .then(res => {
+      if (res.status) renderDailyQuests(res.status);
+      if (typeof setStatusMsg === 'function') setStatusMsg('任务奖励已领取，+' + (res.rewardXp || 0) + ' 经验', 'win');
+      loadPlayerProgress();
+    })
+    .catch(e => {
+      if (typeof setStatusMsg === 'function') setStatusMsg(e.message || '领取失败，请稍后重试', 'error');
+      loadDailyProgress();
+    });
 }
 
 // ============ 好友：好友码互加 · 在线状态 · 一键加入好友房间 ============
@@ -3213,10 +3577,157 @@ let lastFriendsData = null;
 function loadFriends() {
   const listEl = document.getElementById('friends-list');
   if (!listEl || !guestToken) return;
+  loadParty();
   fetch('/api/friends', { headers: { Authorization: 'Bearer ' + guestToken } })
     .then(r => r.ok ? r.json() : Promise.reject(new Error('unauthorized')))
     .then(data => renderFriends(data))
     .catch(() => { if (!friendsLoadedOnce) listEl.textContent = '好友服务暂不可用'; });
+}
+
+// ============ 队伍（在线好友组队：队长选玩法，全队由服务端一次安排进同一房间） ============
+
+let partyData = null;
+
+/** 拉取我的队伍与邀请（与好友列表同频刷新，面板一起更新） */
+function loadParty() {
+  if (!guestToken) return;
+  fetch('/api/party', { headers: { Authorization: 'Bearer ' + guestToken } })
+    .then(r => r.ok ? r.json() : Promise.reject(new Error('unauthorized')))
+    .then(data => {
+      partyData = data;
+      renderParty();
+      // 同队标记要出现在好友行上，队伍变化后顺手重绘一次
+      if (lastFriendsData) renderFriends(lastFriendsData);
+    })
+    .catch(() => {});
+}
+
+/** 队伍面板：成员状态 + 队长的玩法选择与开局入口，邀请即时处理。 */
+function renderParty() {
+  const box = document.getElementById('party-panel');
+  if (!box) return;
+  const data = partyData || {};
+  const party = data.party;
+  const invites = data.invites || [];
+  if (!party && !invites.length) { box.hidden = true; box.innerHTML = ''; return; }
+  box.hidden = false;
+
+  const parts = [];
+  if (party) {
+    const members = (party.members || []).map(m =>
+      '<span class="party-member ' + (m.online ? 'online' : 'offline') + '">'
+      + (m.leader ? '👑 ' : '') + escHtml(m.name || '玩家')
+      + (m.online ? '' : '（离线）') + '</span>').join('');
+    parts.push('<div class="party-head"><span class="party-code">队伍 ' + escHtml(String(party.id).replace(/^PTY-/, ''))
+      + '</span><span class="party-count">' + (party.members || []).length + '/' + (data.maxMembers || 8)
+      + '</span><button class="leave-btn friend-mini" onclick="leaveParty()">退出队伍</button></div>'
+      + '<div class="party-members">' + members + '</div>');
+    if (party.isLeader) {
+      const options = Object.keys(GameModules).map(type => {
+        const module = GameModules[type];
+        const enough = party.members.length >= (module.minPlayers || 2)
+          && party.members.length <= (module.maxPlayers || 2);
+        return '<option value="' + type + '"' + (type === selectedGameType ? ' selected' : '')
+          + (enough ? '' : ' disabled') + '>' + escHtml(module.name)
+          + '（' + (module.minPlayers === module.maxPlayers ? module.maxPlayers
+            : (module.minPlayers || 2) + '-' + (module.maxPlayers || 2)) + ' 人）</option>';
+      }).join('');
+      const ready = (party.members || []).every(m => m.online) && (party.members || []).length >= 2;
+      parts.push('<label class="party-pick">全队玩：<select id="party-game" onchange="partyGameChanged()">' + options + '</select></label>'
+        + '<button class="btn-match party-start"' + (ready ? '' : ' disabled')
+        + ' onclick="startPartyGame()">▶ 带全队开局（' + party.members.length + ' 人）</button>'
+        + '<div class="party-hint" id="party-hint">'
+        + (ready ? '开局后全队进入同一房间；人数与玩法不符时无法开局。'
+                 : '需要至少 2 名在线队员；有人离线时暂时无法开局。')
+        + '</div>');
+    } else {
+      parts.push('<div class="party-hint">队长选择玩法并开局后，你会自动进入同一间房。</div>');
+    }
+  }
+  if (invites.length) {
+    parts.push(invites.map(i =>
+      '<div class="party-invite"><span>' + escHtml(i.fromName || '好友') + ' 邀请你组队</span>'
+      + '<span class="friend-request-actions">'
+      + '<button class="btn-outline friend-mini" onclick="respondPartyInvite(\'' + i.id + '\',\'accept\')">加入</button>'
+      + '<button class="leave-btn friend-mini" onclick="respondPartyInvite(\'' + i.id + '\',\'decline\')">拒绝</button>'
+      + '</span></div>').join(''));
+  }
+  const picker = document.getElementById('party-game');
+  if (picker) picker.value = selectedGameType;
+  box.innerHTML = parts.join('');
+}
+
+/** 队长切换全队玩法：同步大厅玩法选择，人数选择器与会话目标保持一致。 */
+function partyGameChanged() {
+  const picker = document.getElementById('party-game');
+  if (!picker || !picker.value) return;
+  selectedGameType = picker.value;
+  buildGameSelector();
+  updatePlayerCountSelector();
+  refreshRooms();
+  renderParty();
+}
+
+/** 邀请好友组队（好友行 👥；仅在线好友可邀请，服务端同样校验） */
+function inviteToParty(friendId) {
+  if (!guestToken) return;
+  fetch('/api/party/invite', {
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, { Authorization: 'Bearer ' + guestToken }),
+    body: JSON.stringify({ target: friendId })
+  }).then(async r => {
+    const body = await r.json().catch(() => null);
+    if (!r.ok) throw new Error((body && body.message) || '邀请失败');
+    setStatusMsg('组队邀请已发送', 'waiting');
+    loadParty();
+  }).catch(e => setStatusMsg(e.message || '邀请失败', 'error'));
+}
+
+function respondPartyInvite(inviteId, action) {
+  if (!guestToken) return;
+  fetch('/api/party/invites/' + encodeURIComponent(inviteId) + '/' + action, {
+    method: 'POST', headers: { Authorization: 'Bearer ' + guestToken }
+  }).then(async r => {
+    const body = await r.json().catch(() => null);
+    if (!r.ok) throw new Error((body && body.message) || '操作失败');
+    setStatusMsg(body.message || '已处理', 'win');
+    loadParty();
+  }).catch(e => setStatusMsg(e.message || '操作失败', 'error'));
+}
+
+function leaveParty() {
+  if (!guestToken) return;
+  fetch('/api/party/members', { method: 'DELETE', headers: { Authorization: 'Bearer ' + guestToken } })
+    .then(async r => {
+      const body = await r.json().catch(() => null);
+      if (!r.ok) throw new Error((body && body.message) || '退出失败');
+      setStatusMsg(body.message || '已退出队伍', 'waiting');
+      loadParty();
+    }).catch(e => setStatusMsg(e.message || '退出失败', 'error'));
+}
+
+/**
+ * 队长带全队开局：只提交玩法，房号/座位/实际人数由服务端一次安排。
+ * 任一队员离线、掉线或仍在房间中都不会占座，错误原样提示给队长。
+ */
+function startPartyGame() {
+  const picker = document.getElementById('party-game');
+  const type = (picker && picker.value) || selectedGameType;
+  const button = document.querySelector('.party-start');
+  if (button) { button.disabled = true; button.textContent = '正在开局…'; }
+  fetch('/api/party/start', {
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, { Authorization: 'Bearer ' + guestToken }),
+    body: JSON.stringify({ gameType: type })
+  }).then(async r => {
+    const body = await r.json().catch(() => null);
+    if (!r.ok) throw new Error((body && body.message) || '开局失败');
+    setStatusMsg('全队开局成功，正在进入房间…', 'waiting');
+    // 服务端已把所有人放进同一房间并各自下发 GAME_START；队长这里只等推送。
+  }).catch(e => {
+    setStatusMsg(e.message || '开局失败', 'error');
+    renderParty();
+  });
 }
 
 function renderFriends(data) {
@@ -3256,13 +3767,21 @@ function renderFriends(data) {
           ? '<button class="btn-outline friend-mini" onclick="joinFriendRoom(\'' + f.roomId + '\',\'' + (f.gameType || '') + '\')">▶ 加入 TA 的房间</button>'
           : '<span class="friend-room-label">房间 ' + escHtml(String(f.roomId).replace(/^ROOM-/, '')) + '（不可加入）</span>')
       : '';
+    const sameParty = partyData && partyData.party && (partyData.party.members || []).some(m => m.id === f.id);
+    const partyChip = sameParty ? '<span class="friend-party">同队</span>' : '';
     const unread = dmUnread[f.id];
     const badge = unread ? '<span class="dm-badge" title="未读私聊">' + unread + '</span>' : '';
+    // 邀请组队只对在线好友可用：离线时点击只会得到错误，直接把按钮收起来更清楚
+    const inviteBtn = (f.online && !sameParty)
+      ? '<button class="btn-outline friend-mini" title="邀请组队" onclick="inviteToParty(\'' + f.id + '\')">👥</button>'
+      : '';
     return '<div class="friend-row">'
       + '<span class="friend-dot ' + (f.online ? 'online' : 'offline') + '"></span>'
-      + '<span class="friend-name" title="' + escHtml(f.id) + '">' + escHtml(f.name || '玩家') + '</span>' + badge
+      + '<span class="friend-name" title="' + escHtml(f.id) + '">' + escHtml(f.name || '玩家') + '</span>'
+      + partyChip + badge
       + '<span class="friend-room">' + roomLabel + '</span>'
       + '<button class="btn-outline friend-mini" title="私聊" onclick="openFriendChat(\'' + f.id + '\')">💬</button>'
+      + inviteBtn
       + '<button class="leave-btn friend-mini" onclick="removeFriendById(\'' + f.id + '\')">✕</button>'
       + '</div>';
   }).join('');
@@ -3374,6 +3893,23 @@ function handleFriendEvent(msg) {
   let payload = null;
   try { payload = JSON.parse(msg.data); } catch (_) { return; }
   if (!payload || !payload.kind) return;
+  if (payload.kind.startsWith('party_')) {
+    // 队伍事件只驱动面板与提示：开局由服务端直接给全队下发 GAME_START，客户端不自行进房。
+    loadParty();
+    if (payload.kind === 'party_invite') {
+      const inviter = payload.name || '好友';
+      setStatusMsg('👥 ' + inviter + ' 邀请你组队', 'waiting');
+    } else if (payload.kind === 'party_joined') {
+      setStatusMsg('👥 ' + (payload.name || '好友') + ' 加入了队伍', 'waiting');
+    } else if (payload.kind === 'party_left') {
+      setStatusMsg('👥 ' + (payload.name || '好友') + ' 离开了队伍', 'waiting');
+    } else if (payload.kind === 'party_left_self') {
+      setStatusMsg('已退出队伍', 'waiting');
+    } else if (payload.kind === 'party_disbanded') {
+      setStatusMsg('队伍已解散', 'waiting');
+    }
+    return;
+  }
   // 面板立即刷新；人在对局中也不打断（面板在大厅，回大厅自然看到新状态）
   loadFriends();
   const who = payload.name || '好友';
@@ -3605,18 +4141,19 @@ function adminLift(identityId) {
 // ============ 运营数据看板（管理员） ============
 
 let opsLoaded = false;
+let announceAdminLoaded = false;
+let eventsAdminLoaded = false;
 
 function switchAdminTab(tab) {
-  const reportsTab = document.getElementById('admin-tab-reports');
-  const opsTab = document.getElementById('admin-tab-ops');
-  const reportsPane = document.getElementById('admin-pane-reports');
-  const opsPane = document.getElementById('admin-pane-ops');
-  const isOps = tab === 'ops';
-  reportsTab.classList.toggle('active', !isOps);
-  opsTab.classList.toggle('active', isOps);
-  reportsPane.style.display = isOps ? 'none' : 'flex';
-  opsPane.style.display = isOps ? 'flex' : 'none';
-  if (isOps && !opsLoaded) loadOps();
+  const tabs = { reports: 'admin-tab-reports', ops: 'admin-tab-ops', announce: 'admin-tab-announce', events: 'admin-tab-events' };
+  const panes = { reports: 'admin-pane-reports', ops: 'admin-pane-ops', announce: 'admin-pane-announce', events: 'admin-pane-events' };
+  Object.keys(tabs).forEach(key => {
+    document.getElementById(tabs[key]).classList.toggle('active', key === tab);
+    document.getElementById(panes[key]).style.display = key === tab ? 'flex' : 'none';
+  });
+  if (tab === 'ops' && !opsLoaded) loadOps();
+  if (tab === 'announce' && !announceAdminLoaded) loadAdminAnnouncements();
+  if (tab === 'events' && !eventsAdminLoaded) loadAdminEvents();
 }
 
 function loadOps() {
@@ -3675,6 +4212,174 @@ function renderOpsBars(containerId, rows) {
   }).join('');
 }
 
+// ============ 运营公告管理（管理员） ============
+
+function announceExpiryText(item) {
+  return item.expiresAt > 0 ? '至 ' + new Date(item.expiresAt).toLocaleString() : '永久';
+}
+
+function loadAdminAnnouncements() {
+  const statusEl = document.getElementById('announce-status');
+  adminFetch('/api/admin/announcements').then(({ ok, status, body }) => {
+    if (!ok) {
+      statusEl.textContent = (body && body.message) || ('公告接口不可用（' + status + '）');
+      return;
+    }
+    announceAdminLoaded = true;
+    const list = body.announcements || [];
+    const live = list.filter(a => a.active && !a.expired).length;
+    statusEl.textContent = '生效中 ' + live + ' 条 · 共 ' + list.length + ' 条记录';
+    document.getElementById('admin-announcements').innerHTML = list.map(a => {
+      const level = announceLevelMeta(a.level);
+      const state = a.expired ? '<span class="admin-tag">已过期</span>'
+        : (a.active ? '<span class="admin-tag active">生效中</span>' : '<span class="admin-tag">已下线</span>');
+      const toggle = a.active
+        ? '<button class="leave-btn friend-mini" onclick="adminToggleAnnouncement(\'' + escHtml(a.id) + '\',false)">下线</button>'
+        : '<button class="btn-outline friend-mini" onclick="adminToggleAnnouncement(\'' + escHtml(a.id) + '\',true)">上线</button>';
+      return '<div class="admin-row ' + (a.active && !a.expired ? '' : 'handled') + '"'
+        + ' data-announce-admin-id="' + escHtml(a.id) + '">'
+        + '<div class="admin-row-head"><span class="announce-level">' + level.label + '</span>'
+        + '<b>' + escHtml(a.title) + '</b>' + state
+        + '<span class="admin-time">' + new Date(a.createdAt).toLocaleString() + '</span></div>'
+        + '<div class="admin-detail">' + escHtml(a.body) + '</div>'
+        + '<div class="admin-meta">有效期 ' + escHtml(announceExpiryText(a)) + ' · ' + escHtml(a.id) + '</div>'
+        + '<div class="admin-actions">' + toggle
+        + '<button class="leave-btn friend-mini" onclick="adminDeleteAnnouncement(\'' + escHtml(a.id) + '\')">删除</button>'
+        + '</div></div>';
+    }).join('') || '<div class="friends-empty">还没有发布过公告。</div>';
+  });
+}
+
+function publishAnnouncement() {
+  const title = document.getElementById('announce-title').value.trim();
+  const content = document.getElementById('announce-body').value.trim();
+  if (!title || !content) { setStatusMsg('公告标题和内容都不能为空', 'error'); return; }
+  adminFetch('/api/admin/announcements', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title: title,
+      body: content,
+      level: document.getElementById('announce-level').value,
+      ttl: document.getElementById('announce-ttl').value
+    })
+  }).then(({ ok, body }) => {
+    if (!ok) { setStatusMsg((body && body.message) || '发布失败', 'error'); return; }
+    document.getElementById('announce-title').value = '';
+    document.getElementById('announce-body').value = '';
+    loadAdminAnnouncements();
+    loadAnnouncements();
+    setStatusMsg('公告已发布', 'waiting');
+  });
+}
+
+function adminToggleAnnouncement(id, active) {
+  adminFetch('/api/admin/announcements/' + encodeURIComponent(id), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ active: active })
+  }).then(({ ok, body }) => {
+    if (!ok) { setStatusMsg((body && body.message) || '操作失败', 'error'); return; }
+    loadAdminAnnouncements();
+    loadAnnouncements();
+  });
+}
+
+function adminDeleteAnnouncement(id) {
+  if (!window.confirm('删除后不可恢复，确认删除这条公告？')) return;
+  adminFetch('/api/admin/announcements/' + encodeURIComponent(id), { method: 'DELETE' })
+    .then(({ ok, body }) => {
+      if (!ok) { setStatusMsg((body && body.message) || '删除失败', 'error'); return; }
+      loadAdminAnnouncements();
+      loadAnnouncements();
+    });
+}
+
+// ============ 限时活动管理（管理员） ============
+
+function loadAdminEvents() {
+  const statusEl = document.getElementById('event-admin-status');
+  adminFetch('/api/admin/events').then(({ ok, status, body }) => {
+    if (!ok) {
+      statusEl.textContent = (body && body.message) || ('活动接口不可用（' + status + '）');
+      return;
+    }
+    eventsAdminLoaded = true;
+    const list = body.events || [];
+    const live = list.filter(e => e.live).length;
+    statusEl.textContent = '生效中 ' + live + ' 个 · 共 ' + list.length + ' 个活动';
+
+    const select = document.getElementById('event-game');
+    if (select && body.gameTypes && !select.dataset.loaded) {
+      const current = select.value || 'ALL';
+      select.innerHTML = body.gameTypes.map(t =>
+        '<option value="' + escHtml(t.value) + '">' + escHtml(t.label) + '</option>').join('');
+      select.value = current;
+      select.dataset.loaded = '1';
+    }
+
+    document.getElementById('admin-events').innerHTML = list.map(e => {
+      const state = e.live ? '<span class="admin-tag active">生效中</span>'
+        : (e.ended ? '<span class="admin-tag">已结束</span>' : '<span class="admin-tag">已暂停</span>');
+      const toggle = e.ended ? ''
+        : (e.active
+          ? '<button class="leave-btn friend-mini" onclick="adminToggleEvent(\'' + escHtml(e.id) + '\',false)">暂停</button>'
+          : '<button class="btn-outline friend-mini" onclick="adminToggleEvent(\'' + escHtml(e.id) + '\',true)">恢复</button>');
+      return '<div class="admin-row ' + (e.live ? '' : 'handled') + '" data-event-admin-id="' + escHtml(e.id) + '">'
+        + '<div class="admin-row-head"><b>' + escHtml(e.title) + '</b>' + state
+        + '<span class="admin-time">至 ' + escHtml(new Date(e.endsAt).toLocaleString()) + '</span></div>'
+        + '<div class="admin-meta">' + escHtml(e.gameLabel || e.gameType)
+        + ' · 经验 +' + (e.xpPercent || 0) + '% · ' + escHtml(e.id) + '</div>'
+        + '<div class="admin-actions">' + toggle
+        + '<button class="leave-btn friend-mini" onclick="adminDeleteEvent(\'' + escHtml(e.id) + '\')">删除</button>'
+        + '</div></div>';
+    }).join('') || '<div class="friends-empty">还没有创建过活动。</div>';
+  });
+}
+
+function publishEvent() {
+  const title = document.getElementById('event-title').value.trim();
+  if (!title) { setStatusMsg('活动标题不能为空', 'error'); return; }
+  adminFetch('/api/admin/events', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title: title,
+      gameType: document.getElementById('event-game').value,
+      xpPercent: Number(document.getElementById('event-percent').value),
+      duration: document.getElementById('event-duration').value
+    })
+  }).then(({ ok, body }) => {
+    if (!ok) { setStatusMsg((body && body.message) || '创建失败', 'error'); return; }
+    document.getElementById('event-title').value = '';
+    loadAdminEvents();
+    loadEvents();
+    setStatusMsg('活动已创建', 'waiting');
+  });
+}
+
+function adminToggleEvent(id, active) {
+  adminFetch('/api/admin/events/' + encodeURIComponent(id), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ active: active })
+  }).then(({ ok, body }) => {
+    if (!ok) { setStatusMsg((body && body.message) || '操作失败', 'error'); return; }
+    loadAdminEvents();
+    loadEvents();
+  });
+}
+
+function adminDeleteEvent(id) {
+  if (!window.confirm('删除后不可恢复，确认删除这个活动？')) return;
+  adminFetch('/api/admin/events/' + encodeURIComponent(id), { method: 'DELETE' })
+    .then(({ ok, body }) => {
+      if (!ok) { setStatusMsg((body && body.message) || '删除失败', 'error'); return; }
+      loadAdminEvents();
+      loadEvents();
+    });
+}
+
 function renderBlackjackPanel() {
   const status = document.getElementById('bj-status');
   const dealer = document.getElementById('bj-dealer');
@@ -3715,10 +4420,12 @@ function renderBlackjackPanel() {
 
 function loadPlayerProgress() {
   const grid = document.getElementById('achievement-grid');
-  if (!grid || !guestToken) return;
-  fetch('/api/me/progress', { headers: { Authorization: 'Bearer ' + guestToken } })
+  if (!grid || !guestToken) return Promise.resolve();
+  return fetch('/api/me/progress', { headers: { Authorization: 'Bearer ' + guestToken } })
     .then(r => r.ok ? r.json() : Promise.reject(new Error('unauthorized')))
     .then(p => {
+      progressSnapshot = progressDigest(p);
+      lastProgress = p;
       const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
       set('level-badge', 'Lv.' + p.level);
       set('level-title', p.title || '新手');
@@ -3727,14 +4434,74 @@ function loadPlayerProgress() {
         + ' · 对局 ' + (p.totalGames || 0) + ' · 玩法 ' + (p.gameTypes || 0));
       const fill = document.getElementById('level-bar-fill');
       if (fill) fill.style.width = Math.max(0, Math.min(100, p.levelProgress || 0)) + '%';
-      grid.innerHTML = (p.achievements || []).map(a =>
+      grid.innerHTML = (p.achievements || []).slice(0, 6).map(a =>
         '<div class="achievement ' + (a.unlocked ? 'unlocked' : '') + '" title="' + escHtml(a.desc || '') + '">'
         + '<span class="achievement-icon">' + (a.unlocked ? '★' : '☆') + '</span>'
         + '<span class="achievement-name">' + escHtml(a.name || '') + '</span>'
         + '<span class="achievement-progress">' + (a.progress || 0) + '/' + (a.goal || 1) + '</span></div>'
       ).join('');
+      const wall = document.getElementById('achv-modal');
+      if (wall && wall.classList.contains('show')) renderAchievementWall();
     })
     .catch(() => {});
+}
+
+function openAchievementWall() {
+  const modal = document.getElementById('achv-modal');
+  if (!modal) return;
+  modal.classList.add('show');
+  renderAchievementWall();
+  if (guestToken) loadPlayerProgress();
+}
+
+function closeAchievementWall() {
+  const modal = document.getElementById('achv-modal');
+  if (modal) modal.classList.remove('show');
+}
+
+function setAchievementFilter(filter) {
+  achievementFilter = filter;
+  document.querySelectorAll('.achv-tab').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-filter') === filter);
+  });
+  renderAchievementWall();
+}
+
+function renderAchievementWall() {
+  const wall = document.getElementById('achv-wall');
+  if (!wall) return;
+  const p = lastProgress;
+  if (!p) {
+    wall.innerHTML = '<div class="achv-empty">正在加载成就…</div>';
+    return;
+  }
+  const all = p.achievements || [];
+  const unlockedCount = all.filter(a => a.unlocked).length;
+  const sub = document.getElementById('achv-sub');
+  if (sub) {
+    sub.textContent = '已解锁 ' + unlockedCount + ' / ' + all.length
+      + ' · ' + (all.length ? Math.round(unlockedCount * 100 / all.length) : 0) + '%'
+      + ' · 每种玩法首胜都是一个收集目标';
+  }
+  const list = all.filter(a => achievementFilter === 'all'
+    || (achievementFilter === 'unlocked' ? !!a.unlocked : !a.unlocked));
+  if (!list.length) {
+    wall.innerHTML = '<div class="achv-empty">'
+      + (achievementFilter === 'unlocked' ? '还没有已解锁成就，先打一局吧' : '没有符合条件的成就')
+      + '</div>';
+    return;
+  }
+  wall.innerHTML = list.map(a => {
+    const goal = a.goal || 1;
+    const progress = a.progress || 0;
+    const pct = Math.max(0, Math.min(100, Math.round(progress * 100 / goal)));
+    return '<div class="achv-card ' + (a.unlocked ? 'unlocked' : '') + '">'
+      + '<div class="achv-card-head"><span class="achv-star">' + (a.unlocked ? '★' : '☆') + '</span>'
+      + '<span class="achv-card-name">' + escHtml(a.name || '') + '</span>'
+      + '<span class="achv-card-progress">' + progress + '/' + goal + '</span></div>'
+      + '<div class="achv-card-desc">' + escHtml(a.desc || '') + '</div>'
+      + '<div class="achv-bar"><div class="achv-bar-fill" style="width:' + pct + '%"></div></div></div>';
+  }).join('');
 }
 
 /** 套牌筛选只属于卡牌对战；切到其他页签时收起并复位，避免隐藏条件继续过滤 */
@@ -4202,12 +4969,24 @@ try {
 setInterval(loadLeaderboard, 30000); // 30 秒刷新
 setInterval(loadOnlineStats, 30000);
 setInterval(function () {
+  // 大厅看等待人数、等待房中看同玩法还有谁在等；对局中不必轮询
+  if (gameState === 'LOBBY' || gameState === 'WAITING') loadMatchOverview();
+}, 10000);
+setInterval(function () {
   // 大厅可见时才刷新战绩，避免在棋局中无谓请求
   if (gameState === 'LOBBY') {
     loadMyStats();
     loadRecentGames();
   }
 }, 30000);
+setInterval(function () {
+  // 公告变化不频繁，一分钟拉一次即可；局中不拉
+  if (gameState === 'LOBBY') loadAnnouncements();
+}, 60000);
+setInterval(function () {
+  // 活动可能被管理员随时暂停/结束，大厅保持一分钟内的同步
+  if (gameState === 'LOBBY') loadEvents();
+}, 60000);
 
 
 // 邀请链接：/?room=ABC123 → 预填房号，登录成功后自动进房

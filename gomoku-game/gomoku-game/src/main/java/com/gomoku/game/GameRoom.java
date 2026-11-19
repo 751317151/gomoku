@@ -114,6 +114,10 @@ public class GameRoom {
     private GameRecordService recordService;
     // 赛季段位（由 RoomManager 注入，为 null 时座位不显示段位徽章）
     private SeasonService seasonService;
+    // 限时活动（由 RoomManager 注入，为 null 时无加成）
+    private EventService eventService;
+    /** 队伍标识查询（座位徽标）；未注入时为 null，房间照常工作 */
+    private PartyService partyService;
     // 本局开局时间戳（用于对局记录的时长与排序）
     private volatile long gameStartedAt;
 
@@ -201,6 +205,14 @@ public class GameRoom {
         this.seasonService = seasonService;
     }
 
+    public void setEventService(EventService eventService) {
+        this.eventService = eventService;
+    }
+
+    public void setPartyService(PartyService partyService) {
+        this.partyService = partyService;
+    }
+
     private void touchActivity() {
         this.lastActivityTime = System.currentTimeMillis();
     }
@@ -250,20 +262,7 @@ public class GameRoom {
             }
 
             if (!canJoin()) return false;
-            spectators.remove(player);
-            player.setStone(players.size() + 1);
-            // 初始化 ELO（按本房间游戏类型）。AI 不参与 ELO，若在此处为它注册默认分，
-            // 「电脑」会凭空出现在排行榜里，所以直接跳过。
-            if (eloService != null && !player.isAi()) {
-                player.setElo(eloService.getRating(player, gameType));
-            }
-            players.add(player);
-            if (player.isConnected()) {
-                channelGroup.add(player.getConnection());
-            }
-            touchActivity();
-            logger.info("[AUDIT] player_join roomId={} gameType={} playerId={} playerName={}",
-                    roomId, gameType, player.getId(), player.getName());
+            seatPlayer(player);
 
             if (players.size() == targetPlayers) {
                 startGame();
@@ -280,6 +279,37 @@ public class GameRoom {
         } finally {
             lock.writeLock().unlock();
         }
+    }
+
+    /** 新队伍房间一次入座，不向任何队员发送临时 WAITING 状态。 */
+    void startWithParty(List<Player> roster) {
+        lock.writeLock().lock();
+        try {
+            if (state != State.WAITING || !players.isEmpty() || roster.size() != targetPlayers) {
+                throw new IllegalStateException("队伍只能在新建且人数匹配的房间开局");
+            }
+            for (Player member : roster) seatPlayer(member);
+            startGame();
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    private void seatPlayer(Player player) {
+        spectators.remove(player);
+        player.setStone(players.size() + 1);
+        // 初始化 ELO（按本房间游戏类型）。AI 不参与 ELO，若在此处为它注册默认分，
+        // 「电脑」会凭空出现在排行榜里，所以直接跳过。
+        if (eloService != null && !player.isAi()) {
+            player.setElo(eloService.getRating(player, gameType));
+        }
+        players.add(player);
+        if (player.isConnected()) {
+            channelGroup.add(player.getConnection());
+        }
+        touchActivity();
+        logger.info("[AUDIT] player_join roomId={} gameType={} playerId={} playerName={}",
+                roomId, gameType, player.getId(), player.getName());
     }
 
     public void addAI(int difficulty) {
@@ -948,14 +978,27 @@ public class GameRoom {
         // 对局记录（用于回放）
         dataMap.put("moveHistory", engine.getMoveHistory());
         dataMap.put("moveEffects", moveEffectsHistory);
+        // 结算时生效的限时活动：客户端据此在结算页解释多出来的经验
+        EventService.Event activeEvent = eventService == null
+                ? null : eventService.activeFor(gameType, System.currentTimeMillis());
+        if (activeEvent != null) {
+            Map<String, Object> eventData = new LinkedHashMap<>();
+            eventData.put("id", activeEvent.id);
+            eventData.put("title", activeEvent.title);
+            eventData.put("gameType", activeEvent.gameType);
+            eventData.put("xpPercent", activeEvent.xpPercent);
+            eventData.put("endsAt", activeEvent.endsAt);
+            dataMap.put("event", eventData);
+        }
         msg.setData(gson.toJson(dataMap));
         lastGameOverJson = gson.toJson(msg);
 
+        // 先写入内存索引再广播：客户端收到终局后会立刻查询成长/任务进度，
+        // 若先广播后存档，这次查询可能漏掉本局（磁盘仍是异步写，不阻塞广播）。
+        archiveGame(winnerPlayer, reason, eloBefore, activeEvent);
+
         broadcastMessage(lastGameOverJson);
         broadcastRoomInfo();
-
-        // 存档（异步落盘，不阻塞终局广播）
-        archiveGame(winnerPlayer, reason, eloBefore);
 
         // 存档后释放显式离场的历史席位，剩余玩家可补人再开局。
         for (Player p : new ArrayList<>(players)) {
@@ -969,7 +1012,8 @@ public class GameRoom {
     /**
      * 把本局写入对局记录（异步）。AI 局也会存档以便复盘，但标记 ranked=false 且不计 ELO。
      */
-    private void archiveGame(Player winnerPlayer, String reason, Map<String, Integer> eloBefore) {
+    private void archiveGame(Player winnerPlayer, String reason, Map<String, Integer> eloBefore,
+                             EventService.Event activeEvent) {
         if (recordService == null) return;
         try {
             GameRecord record = new GameRecord();
@@ -980,6 +1024,12 @@ public class GameRoom {
             record.setWinnerName(winnerPlayer != null ? winnerPlayer.getName() : null);
             record.setReason(reason);
             record.setMoveCount(engine.getMoveCount());
+            // 活动倍率刻进记录：历史经验必须稳定，活动结束后不回算
+            if (activeEvent != null) {
+                record.setEventId(activeEvent.id);
+                record.setEventTitle(activeEvent.title);
+                record.setEventXpPercent(activeEvent.xpPercent);
+            }
 
             // 计分局：双方都是真人。有 AI 或一方缺席都不算
             boolean hasAi = players.stream().anyMatch(Player::isAi);
@@ -1317,6 +1367,10 @@ public class GameRoom {
             if (seasonService != null && !p.isAi()) {
                 dto.setTier(seasonService.tierOf(p.getIdentityId()));
             }
+            // 队伍徽标：同一队伍的队员在座位上显示同一个短码，一眼看出谁是一起来的
+            if (partyService != null && !p.isAi() && p.getIdentityId() != null) {
+                dto.setPartyId(partyService.partyIdOf(p.getIdentityId()));
+            }
             playerDtos.add(dto);
         }
         data.setPlayers(playerDtos);
@@ -1386,6 +1440,12 @@ public class GameRoom {
         specMsg.setData(gson.toJson(buildRoomData(0)));
         String specJson = gson.toJson(specMsg);
         broadcastSpectators(specJson);
+    }
+
+    void refreshPartyBadges() {
+        lock.readLock().lock();
+        try { broadcastRoomInfo(); }
+        finally { lock.readLock().unlock(); }
     }
 
     public GameSyncDto buildSyncDataForReconnect(Player player) {

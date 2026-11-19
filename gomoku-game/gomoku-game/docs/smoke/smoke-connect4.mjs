@@ -40,6 +40,10 @@ ws.onmessage = (ev) => {
 
   switch (msg.type) {
     case 'WAITING':
+      // 建房时服务端会先发房间 WAITING，再补一条带 sessionId 的 WAITING（重连需要）；
+      // 脚本必须幂等，否则第二条 WAITING 会让 ADD_AI 在开局后再发一次并收到错误。
+      if (state.aiRequested) break;
+      state.aiRequested = true;
       log('房间已创建', msg.roomId, '→ 添加电脑');
       ws.send(JSON.stringify({ type: 'ADD_AI', data: '4' }));
       break;

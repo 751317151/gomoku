@@ -169,6 +169,9 @@ public class GameRecordService {
         copy.setReason(src.getReason());
         copy.setMoveCount(src.getMoveCount());
         copy.setRanked(src.isRanked());
+        copy.setEventId(src.getEventId());
+        copy.setEventTitle(src.getEventTitle());
+        copy.setEventXpPercent(src.getEventXpPercent());
         copy.setParticipants(src.getParticipants());
         return copy;
     }
@@ -317,7 +320,7 @@ public class GameRecordService {
 
     /**
      * 面向大厅的轻量运营进度：今日完成对局、今日胜场、今日体验过的玩法数、连续活跃天数。
-     * 只按持久身份统计，避免昵称重名互相污染；AI 局不算进每日任务。
+     * 只按持久身份统计，避免昵称重名互相污染。人机对局照常计入——单人玩家同样需要任务与成长。
      */
     public synchronized Map<String, Object> getIdentityDailyProgress(String identityId) {
         LocalDate today = LocalDate.now(ZoneId.systemDefault());
@@ -326,8 +329,8 @@ public class GameRecordService {
         java.util.Set<LocalDate> activeDays = new java.util.HashSet<>();
         for (GameRecord record : recent) {
             GameRecord.Participant participant = findParticipantByIdentity(record, identityId);
-            // 每日活跃统计的是所有真人对局（包括多人休闲房）；只有 AI 局不计入。
-            // ranked 只决定 ELO/竞技战绩，不能让多人玩法从运营任务里消失。
+            // 每日活跃统计身份参与的全部对局（含人机、多人休闲房）；这里排除的只是 AI 自己的身份。
+            // ranked 只决定 ELO/竞技战绩，不能让多人或人机玩法从运营任务里消失。
             if (participant == null || participant.isAi()) continue;
             LocalDate day = LocalDate.ofInstant(java.time.Instant.ofEpochMilli(record.getEndedAt()), ZoneId.systemDefault());
             activeDays.add(day);
@@ -481,11 +484,11 @@ public class GameRecordService {
     }
 
     /**
-     * 某个持久身份参与过的全部真人对局（最新的在前）。
+     * 某个持久身份参与过的全部对局（最新的在前，含人机局）。
      *
      * 成长体系（等级/成就）需要遍历历史，但只认稳定身份：
      * 昵称会重复，session 会过期，只有 identityId 能跨设备延续进度。
-     * AI 局不返回，避免刷人机刷经验。
+     * 人机局也计入经验（单人模式要能成长），这里排除的只是 AI 自己的身份。
      */
     public synchronized List<GameRecord> getIdentityRecords(String identityId) {
         List<GameRecord> result = new ArrayList<>();
@@ -586,6 +589,11 @@ public class GameRecordService {
             view.put("reason", r.getReason());
             view.put("moveCount", r.getMoveCount());
             view.put("ranked", r.isRanked());
+            if (r.getEventId() != null) {
+                view.put("eventId", r.getEventId());
+                view.put("eventTitle", r.getEventTitle());
+                view.put("eventXpPercent", r.getEventXpPercent());
+            }
             List<Map<String, Object>> ps = new ArrayList<>();
             for (GameRecord.Participant p : r.getParticipants()) {
                 Map<String, Object> pv = new LinkedHashMap<>();

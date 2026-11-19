@@ -49,7 +49,8 @@ class RoomFriendNotifyTest {
         friends = new FriendService(dir.resolve("friends.json"), accounts);
         friends.init();
         manager = new RoomManager(new SimpleMeterRegistry(), elo, records,
-                new SeasonService(records, dir.resolve("seasons.json")), friends);
+                new SeasonService(records, dir.resolve("seasons.json")), friends, new PartyService(),
+                new EventService(dir.resolve("events.json")));
     }
 
     /** 读出某连接当前积压的全部出站帧文本（TextWebSocketFrame 内容），清空出站队列 */

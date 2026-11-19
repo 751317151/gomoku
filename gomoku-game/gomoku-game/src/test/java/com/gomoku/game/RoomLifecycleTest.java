@@ -20,6 +20,7 @@ class RoomLifecycleTest {
     @TempDir Path dir;
     private RoomManager manager;
     private GameRecordService records;
+    private EventService events;
     private final List<EmbeddedChannel> channels = new ArrayList<>();
 
     @BeforeEach void setUp() {
@@ -31,9 +32,12 @@ class RoomLifecycleTest {
         accounts.init();
         FriendService friends = new FriendService(dir.resolve("friends.json"), accounts);
         friends.init();
+        events = new EventService(dir.resolve("events.json"));
+        events.init();
         manager = new RoomManager(new SimpleMeterRegistry(),
                 new EloService(dir.resolve("elo.properties"), dir.resolve("legacy.json")), records,
-                new SeasonService(records, dir.resolve("seasons.json")), friends);
+                new SeasonService(records, dir.resolve("seasons.json")), friends, new PartyService(),
+                events);
     }
 
     @AfterEach void close() {
@@ -148,6 +152,31 @@ class RoomLifecycleTest {
         assertNotNull(finished.getGameOver());
         assertEquals(2, finished.getMoveCount());
         assertTrue(JsonParser.parseString(finished.getGameOver().getData()).getAsJsonObject().has("winningSides"));
+    }
+
+    @Test void settlementStampsActiveEventIntoRecord() {
+        EventService.Event event = events.create("测试加成", "ALL", 50, "24h");
+        EmbeddedChannel first = channel(), second = channel();
+        GameRoom room = manager.joinGame(first, "甲", null, GameType.GOMOKU, null, null, true);
+        manager.joinGame(second, "乙", room.getRoomId(), GameType.GOMOKU);
+        room.surrender(manager.getPlayer(first));
+        records.flushForTest();
+
+        GameRecord archived = records.getRecentGames(1).get(0);
+        assertEquals(event.id, archived.getEventId());
+        assertEquals("测试加成", archived.getEventTitle());
+        assertEquals(50, archived.getEventXpPercent());
+
+        events.setActive(event.id, false);
+        EmbeddedChannel third = channel(), fourth = channel();
+        GameRoom later = manager.joinGame(third, "丙", null, GameType.GOMOKU, null, null, true);
+        manager.joinGame(fourth, "丁", later.getRoomId(), GameType.GOMOKU);
+        later.surrender(manager.getPlayer(third));
+        records.flushForTest();
+
+        GameRecord plain = records.getRecentGames(1).get(0);
+        assertNull(plain.getEventId(), "活动暂停后新终局不再刻活动");
+        assertEquals(0, plain.getEventXpPercent());
     }
 
     @Test void roomInfoShowsSeasonTierForPersistentIdentity() {

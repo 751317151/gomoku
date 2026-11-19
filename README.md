@@ -19,8 +19,8 @@ Java (Spring Boot + Netty WebSocket) 实现的多游戏在线对战平台，支�
 - **按玩法配置人数**：`GameType` 声明 `minPlayers / maxPlayers / defaultPlayers`，建房的 `playerCount` 由服务端校验。现有双人规则保持 2 人；比大小、21 点、UNO、骰子竞速和宝石拍卖支持 **2–8 人**，默认 4 人，满员开局。宝石拍卖每轮暗投 0–10 金币，最高价获得 3/5/7/9/12 分宝石，金币余额和出价按视角保护。大厅人数选择用于建房和匹配；好友按房号加入时沿用房间人数。
 - **PWA 安装**：提供 `manifest.json`、应用图标与 Service Worker，可安装到桌面/手机；静态资源支持离线外壳，API 与 WebSocket 不缓存。
 - **本周活跃榜**：`/api/leaderboard/weekly` 聚合最近 7 天全部真人对局（含 2–8 人休闲局），大厅可在 ELO 总榜与本周活跃榜之间切换。
-- **等级与成就**：`/api/me/progress` 从对局记录派生等级、段位与 11 项成就；经验覆盖全部玩法（含 2–8 人休闲局），多人局与新玩法额外加成，AI 局不计经验，无需额外存储即可跨设备延续。
-- **每日活跃目标**：游客身份下发每日完成 3 局、赢 1 局、体验 2 种玩法和连续活跃 3 天的进度，数据按稳定身份统计，AI 局不计入任务。
+- **等级与成就**：`/api/me/progress` 从对局记录派生等级、称号与 26 项成就（含 14 种玩法各自的首胜成就与「全模式制霸」）；大厅可打开成就墙按全部/已解锁/未解锁筛选，展示每项进度条。经验覆盖全部玩法（含 2–8 人休闲局），多人局与新玩法额外加成。人机局同样计入经验（单人也能成长），只是不计 ELO 与竞技战绩；无需额外存储即可跨设备延续。
+- **每日任务**：`/api/quests` 从对局记录实时派生 5 项每日任务（完成 3 局、赢 1 局、体验 2 种玩法、3 人以上真人对局、连续活跃 3 天）的进度与奖励状态，`POST /api/quests/{id}/claim` 领取经验（+30/+40/+35/+40/+50）。只有「领取」会落盘（`data/daily_quests.json`），进度不存第二份计数；任务经验计入等级、不写对局记录，因此不刷战绩/ELO。跨天进度重置，累计任务经验终身保留。人机局计入任务进度，方便单人玩家完成。
 - **每日签到与留存奖励**：`GET/POST /api/checkin`（status / 签到），签到记录独立存 `data/checkins.json`，不受对局记录 5000 条上限影响。每日基础 +15 经验，连续 3/7/14/30 天有里程碑奖励（+30/+80/+150/+400），断签 ≥3 天回归额外 +50。奖励只计入等级经验，不写成对局记录——因此对局数、胜率、ELO、排行榜都不受影响，不能靠签到刷竞技战绩。同一天重复签到不重复发奖。
 - **赛季称号**：月度结算固化历史段位快照（`data/seasons.json`），赛季横幅展示称号徽章，换设备登录后可查
 - **赛季段位**：`GET /api/season` 返回当前自然月赛季信息（剩余天数）、本人赛季数据与段位、赛季榜。赛季分从对局记录派生（胜 +3 / 平 +1 / 负 0，只认真人局），映射青铜→白银→黄金→铂金→钻石→王者六段位。**赛季不重置、不改写 ELO**——ELO 是长期累计资产，赛季只是「本窗口表现」的另一种视图，零迁移、零历史损失。大厅排行榜支持 ELO 总榜 / 本周活跃 / 赛季段位三态切换。
@@ -30,8 +30,12 @@ Java (Spring Boot + Netty WebSocket) 实现的多游戏在线对战平台，支�
 - **游客身份**：`POST /api/guest` 签发稳定随机 token，浏览器本地保存；服务器在 `data/guests.json` 中仅保存 token 哈希。携带 `guestToken` 的 JOIN 将新积分与战绩绑定游客身份，改昵称保留积分、重名互不合并；`GET /api/me/stats` 使用 `Authorization: Bearer <token>` 查询。旧昵称战绩不自动迁移给游客，避免冒领。旧协议客户端仍可不带 token 使用旧昵称统计。清理浏览器数据会丢失游客凭证。
 - **持久账号**：登录页可注册/登录账号（用户名 + 加盐哈希密码，`data/accounts.json` 只存盐与哈希）。**注册时携带当前游客 token 会把该身份原地升级为账号**，战绩、ELO、等级、成就、每日进度一条不丢；登录后签发指向同一身份的新 token，换设备也能找回资产。接口：`POST /api/account/register|login|password`、`GET /api/account/me`。密码用 SHA-256 加盐多轮迭代（12000 次）派生，`MessageDigest.isEqual` 恒定时间比对；用户名大小写不敏感。账号 token 与游客 token 走同一套解析链路，下游协议零改动。
 - **好友系统**：大厅「好友」面板支持互加好友——每个持久身份有 8 位好友码（去掉 I/O/0/1 的去混淆字符集），账号还可直接按用户名添加；申请需对方同意（可拒绝/撤回）。好友列表实时显示在线状态与所在房间，可 **一键加入好友的房间**（私有房也返回房号——房号对好友即邀请语义）。**WS 实时推送**：连接建立后前端发 `HALL_BIND` 绑定大厅身份（不进房也算在线），好友上线/下线/收到申请/申请通过都会即时推送 `FRIEND_EVENT` 弹提醒并刷新面板，15 秒轮询只作兜底。**好友私聊**：好友面板点 💬 与好友实时对话（`DIRECT_MSG`，仅好友之间、1 秒限流、200 字截断，弹窗关闭时累计未读徽标）。**对方不在线时自动转为离线留言**：暂存 `data/offline_messages.json`（每人最多 50 条、保留 7 天、超限丢最旧），对方下次进入大厅即刻补发并并入聊天历史，且只投递一次。关系按 identityId 存 `data/friends.json`（只存身份与关系，不存昵称），换设备登录不丢；好友上限 50、每方向待处理申请上限 20。展示名解析顺序：实时在线昵称 → 账号昵称 → 最近对局昵称。接口：`GET /api/friends`、`POST /api/friends/requests`、`POST /api/friends/requests/{id}/accept|decline`、`DELETE /api/friends/requests/{id}`、`DELETE /api/friends/{id}`。
+- **好友组队（Party）**：好友面板每位好友旁 👥 一键邀请在线好友组队，邀请人自动建队并成为队长；邀请 2 分钟有效、队伍上限 8 人、只有队长能邀请与开局。队长选好玩法后点「▶ 带全队开局」，**服务端一次性把全队放进同一间私房并同时下发开局**——不是各自 JOIN 再补通知，所以不会出现半队进房、人数与玩法错配，也不会把正在对局的好友拽出来。人数超限、有人离线/多标签页/被隔离在别的房间时整队拒绝并提示原因，不留空房间；断线重连留下的旧席位会在开局前自动释放。房间容量取队伍人数（3 人队伍可直接开 2–8 人玩法）。队长退出自动移交，最后一人退出即解散；组队房间是私房，不进大厅公共列表（房间卡只显示队伍短码），座位显示同一队伍徽标。队伍为纯内存状态（重启即散）；接口：`GET /api/party`、`POST /api/party/invite`、`POST /api/party/invites/{id}/accept|decline`、`DELETE /api/party/members`、`POST /api/party/start`。
+- **匹配体验**：大厅每个玩法卡实时显示「⚡ N 人等待 / ▶ N 桌进行中」，数据来自只读统计 `GET /api/match/overview`（与快速匹配同一口径：公开、未满、人类座位在线；**不维护第二份排队状态**）。进入等待房后出现匹配助手条：已等待时长每秒递增、同玩法等待人数提示，以及「补齐电脑开局 / 复制邀请 / 返回大厅」三个动作——任何玩法在无人可配时都能一键补满电脑立刻开打。**同时修复一条断流缺陷**：补了一部分电脑的多人等待房曾因「AI 没有连接」被误判为掉线幽灵房，永远不会被快速匹配到；现在只按人类座位是否在线判定，电脑占座不再阻止真人补位。
 - **运营治理（举报/禁言/封禁）**：房间内可举报同房间的其他真人（辱骂/刷屏/作弊/挂机/其他 + 补充说明），举报记录带房间号、玩法与双方身份快照并持久化 `data/moderation.json`；同一举报人 10 分钟内重复举报自动去重。管理员通过 `?admin=1` 输入令牌打开治理后台，可一键禁言/封禁（1h/24h/7d/30d/永久）、忽略举报或撤销处置。封禁身份连大厅都进不去，禁言身份仍可对局但发不出聊天与私聊。管理接口用 `X-Admin-Token`（`.env` 的 `ADMIN_TOKEN`，恒定时间比对；留空则整个管理接口返回 503，避免默认口令裸奔）。玩家侧接口：`GET /api/moderation/me`、`GET /api/moderation/reports/mine`。
 - **运营数据看板**：`?admin=1` 进入治理后台后可切到「运营数据」页签，查看今日/窗口活跃用户、真人对局与计分局数、逐日趋势、玩法热度排行（局数/占比/平均参与人数）、24 小时时段分布，以及 D1/D7 留存。全部指标从对局记录派生（零埋点、零迁移），**人机局不计入活跃**，避免刷人机刷高日活；口径说明随数据一起下发，避免误读。接口：`GET /api/admin/ops?days=14`（需 `X-Admin-Token`）。
+- **运营公告**：治理后台新增「公告管理」页签，可发布普通/重要/维护三档公告，选择 1 天/7 天/30 天或永久展示，并随时下线、重新上线或删除。大厅顶部横幅按新旧展示最多 3 条生效公告，级别用不同配色区分；每条公告可单独关闭，关闭记录按公告 id 存在本机，刷新不再打扰（其他玩家不受影响）。过期由服务端判定并自动隐藏，避免各端时钟差异。公告持久化 `data/announcements.json`（只保留最近 100 条，原子落盘）；玩家侧 `GET /api/announcements` 公开只读，管理侧 `GET/POST /api/admin/announcements`、`POST/DELETE /api/admin/announcements/{id}` 需 `X-Admin-Token`。新增公告不用发版、不用重启。
+- **限时活动加成**：治理后台新增「活动加成」页签，可按玩法（全部或单一玩法）发布经验加成活动，比例 25%/50%/100%、时长 24 小时到 30 天，并可暂停、恢复或删除。大厅顶部用金色胶囊展示生效中的活动与剩余时间，判活按服务端时间，避免各端时钟差异；终局结算浮层追加「活动「…」+N% 经验」徽标。加成在结算时连同活动 id/标题/比例**刻进对局记录**，因此活动暂停或结束后历史经验不会缩水；多个活动同时命中时取最高比例。活动定义持久化 `data/events.json`（只保留最近 100 条，原子落盘）；玩家侧 `GET /api/events` 公开只读，管理侧 `GET/POST /api/admin/events`、`POST/DELETE /api/admin/events/{id}` 需 `X-Admin-Token`。发布活动不用发版、不用重启。
 - **手机操作**：自适应大厅和座位区、触屏按钮、牌桌布局、减弱动画偏好、可持久化关闭音效。原有合成音效继续复用。
 - **可选 AI 导师**：配置 `.env` 的 `COACH_ENABLED / COACH_ENDPOINT / COACH_API_KEY / COACH_MODEL` 后启用。仅把当前请求者可见的同步快照交给管理员配置的 OpenAI 兼容 Chat Completions 服务；密钥留在服务端。默认关闭，限制并发和请求频率。模型建议不保证最优，也不会取代规则 AI。
 - **部署与健康**：沿用 Docker + Caddy HTTPS/WSS + 数据卷；新增 `deploy/start.ps1` 和 `deploy/start.sh` 一键检查、构建、等待健康。健康检查同时覆盖 HTTP 与 Netty WebSocket，WebSocket 监听失败会使启动失败。同一 IP 连接数上限调整为 16，可容纳 8 人同网对战和观战。
@@ -183,6 +187,17 @@ Actuator 仅暴露 `health,info,prometheus`（`metrics` 默认关闭），且 Ca
 | 端点 | 说明 |
 |------|------|
 | `GET /api/rooms` | 房间列表（含 gameType） |
+| `GET /api/match/overview` | 按玩法统计可匹配的公开等待房、等待人数与进行中对局（大厅徽标与等待提示） |
+| `GET /api/announcements` | 大厅可见公告（生效且未过期，公开只读） |
+| `GET /api/admin/announcements` | 全部公告及级别/有效期选项（需 `X-Admin-Token`） |
+| `POST /api/admin/announcements` | 发布公告（`title/body/level/ttl`，需 `X-Admin-Token`） |
+| `POST /api/admin/announcements/{id}` | 上线/下线公告（`{"active":true\|false}`，需 `X-Admin-Token`） |
+| `DELETE /api/admin/announcements/{id}` | 删除公告（需 `X-Admin-Token`） |
+| `GET /api/events` | 生效中的限时经验加成活动（公开只读，含游戏显示名与服务端时间） |
+| `GET /api/admin/events` | 全部活动及比例/时长/玩法选项（需 `X-Admin-Token`） |
+| `POST /api/admin/events` | 发布活动（`title/gameType/xpPercent/duration`，需 `X-Admin-Token`） |
+| `POST /api/admin/events/{id}` | 暂停/恢复活动（`{"active":true\|false}`，需 `X-Admin-Token`） |
+| `DELETE /api/admin/events/{id}` | 删除活动（需 `X-Admin-Token`） |
 | `GET /api/leaderboard?gameType=` | 分游戏 ELO 排行榜（已排除 AI） |
 | `GET /api/stats` | 在线人数 / 房间统计 |
 | `GET /api/games?limit=&gameType=&deck=` | 最近对局列表（不含棋谱，供大厅战绩页；`deck` 按实际生效套牌筛选） |
@@ -242,7 +257,7 @@ com.gomoku/
 ## 🧪 测试
 
 ```bash
-mvn test    # 261 个用例
+mvn test    # 440 个用例
 ```
 
 项目还提供统一验证脚本：
@@ -283,9 +298,13 @@ node docs/smoke/smoke-record.mjs          # 对局记录持久化 + 战绩查询
 node docs/smoke/smoke-record-deck.mjs     # 记录套牌信息 + deck 筛选
 node docs/smoke/smoke-room-invite.mjs     # 房号邀请（建房/加入/私有房）
 
-# 浏览器冒烟（2 个）：需先起 headless Chrome（见 docs/smoke/README.md）
+# 浏览器冒烟：需先起 headless Chrome（见 docs/smoke/README.md）
 node docs/smoke/smoke-ui-record.mjs       # 战绩面板与复盘弹窗
 node docs/smoke/smoke-ui-rpg.mjs          # RPG 面板与文字战报
+node docs/smoke/smoke-ui-match.mjs        # 大厅等待徽标 + 双真人匹配开局 + 等待房补电脑
+node docs/smoke/smoke-ui-announce.mjs     # 公告发布→大厅横幅→关闭记忆→后台下线/删除
+node docs/smoke/smoke-ui-rewards.mjs      # 结算浮层本局经验/成就/任务进度
+node docs/smoke/smoke-ui-events.mjs       # 活动发布→大厅胶囊→结算加成→暂停后历史不缩水
 ```
 
 ---

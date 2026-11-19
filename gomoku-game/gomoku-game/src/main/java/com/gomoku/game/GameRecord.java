@@ -35,6 +35,10 @@ public class GameRecord {
     private int moveCount;
     /** 是否计分局（双方真人） */
     private boolean ranked;
+    /** 结算时生效的限时活动；无活动为 null / 0。经验按此倍率追加，活动结束后不追溯 */
+    private String eventId;
+    private String eventTitle;
+    private int eventXpPercent;
 
     /** 参战方（真人 + AI），每方一条 */
     private List<Participant> participants = new ArrayList<>();
@@ -147,6 +151,15 @@ public class GameRecord {
 
     public boolean isRanked() { return ranked; }
     public void setRanked(boolean ranked) { this.ranked = ranked; }
+
+    public String getEventId() { return eventId; }
+    public void setEventId(String eventId) { this.eventId = eventId; }
+
+    public String getEventTitle() { return eventTitle; }
+    public void setEventTitle(String eventTitle) { this.eventTitle = eventTitle; }
+
+    public int getEventXpPercent() { return eventXpPercent; }
+    public void setEventXpPercent(int eventXpPercent) { this.eventXpPercent = eventXpPercent; }
 
     public List<Participant> getParticipants() { return participants; }
     public void setParticipants(List<Participant> participants) { this.participants = participants; }

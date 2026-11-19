@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="棋战大厅">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="style.css?v=66">
+<link rel="stylesheet" href="style.css?v=75">
 </head>
 <body>
 
@@ -167,6 +167,11 @@
     </div>
   </div>
 
+  <!-- 运营公告（活动 / 维护 / 版本说明），关闭状态按公告 id 记在本机 -->
+  <div class="announce-board" id="announce-board" style="display:none" aria-live="polite"></div>
+  <!-- 限时加成活动：由管理端配置，结算时按当时活动追加经验 -->
+  <div class="event-strip" id="event-strip" style="display:none" aria-live="polite"></div>
+
   <!-- 游戏类型选择 -->
   <div class="game-categories" id="game-categories" role="tablist" aria-label="玩法分类"></div>
   <div class="game-selector" id="game-selector"></div>
@@ -204,11 +209,12 @@
           <div class="level-bar"><div class="level-bar-fill" id="level-bar-fill"></div></div>
           <div class="level-meta" id="level-meta">成就 0 / 11</div>
           <div class="achievement-grid" id="achievement-grid"></div>
+          <button class="achv-open-btn" onclick="openAchievementWall()">查看成就墙 →</button>
         </div>
       </div>
 
       <div class="panel daily-panel">
-        <div class="panel-title"><span style="flex:1">今日目标</span><span class="daily-streak" id="daily-streak">连续 0 天</span></div>
+        <div class="panel-title"><span style="flex:1">今日任务</span><span class="daily-streak" id="daily-streak">连续 0 天</span></div>
         <div class="checkin-card" id="checkin-card">
           <div class="checkin-info">
             <div class="checkin-title" id="checkin-title">每日签到 · +15 经验</div>
@@ -233,6 +239,7 @@
           <button class="btn-outline" onclick="addFriend()">添加</button>
         </div>
         <div id="friend-requests" class="friend-requests" hidden></div>
+        <div id="party-panel" class="party-panel" hidden></div>
         <div id="friends-list" class="friends-list" aria-live="polite">加载中...</div>
       </div>
 
@@ -282,6 +289,25 @@
       <input type="range" id="rm-slider" min="0" max="0" value="0" oninput="rmSeek(this.value)">
       <span id="rm-step-text" class="replay-modal-step">0/0</span>
     </div>
+  </div>
+</div>
+
+<!-- 成就墙：完整成就 + 筛选；数据与成长面板同源（/api/me/progress 派生） -->
+<div class="achv-modal" id="achv-modal">
+  <div class="achv-box">
+    <div class="achv-head">
+      <div>
+        <div class="achv-title">成就墙</div>
+        <div class="achv-sub" id="achv-sub">—</div>
+      </div>
+      <button class="leave-btn" onclick="closeAchievementWall()">关闭</button>
+    </div>
+    <div class="achv-tabs" role="tablist" aria-label="成就筛选">
+      <button class="achv-tab active" data-filter="all" onclick="setAchievementFilter('all')">全部</button>
+      <button class="achv-tab" data-filter="unlocked" onclick="setAchievementFilter('unlocked')">已解锁</button>
+      <button class="achv-tab" data-filter="locked" onclick="setAchievementFilter('locked')">未解锁</button>
+    </div>
+    <div class="achv-wall" id="achv-wall" aria-live="polite"></div>
   </div>
 </div>
 
@@ -341,6 +367,8 @@
     <div class="admin-tabs">
       <button class="account-tab active" id="admin-tab-reports" onclick="switchAdminTab('reports')">举报处理</button>
       <button class="account-tab" id="admin-tab-ops" onclick="switchAdminTab('ops')">运营数据</button>
+      <button class="account-tab" id="admin-tab-announce" onclick="switchAdminTab('announce')">公告管理</button>
+      <button class="account-tab" id="admin-tab-events" onclick="switchAdminTab('events')">活动加成</button>
     </div>
     <div class="admin-body" id="admin-pane-reports">
       <div id="admin-status" class="report-hint">加载中…</div>
@@ -370,11 +398,79 @@
         <div id="ops-definitions" class="ops-definitions"></div>
       </div>
     </div>
+    <div class="admin-body" id="admin-pane-announce" style="display:none">
+      <div id="announce-status" class="report-hint">加载中…</div>
+      <div class="announce-form">
+        <label class="report-label">标题
+          <input id="announce-title" maxlength="40" placeholder="例如：周末双倍经验活动">
+        </label>
+        <div class="announce-form-row">
+          <label class="report-label">级别
+            <select id="announce-level">
+              <option value="info">普通</option>
+              <option value="important">重要</option>
+              <option value="maintenance">维护</option>
+            </select>
+          </label>
+          <label class="report-label">展示时长
+            <select id="announce-ttl">
+              <option value="24h">1 天</option>
+              <option value="7d" selected>7 天</option>
+              <option value="30d">30 天</option>
+              <option value="forever">永久（手动下线）</option>
+            </select>
+          </label>
+        </div>
+        <label class="report-label">内容
+          <textarea id="announce-body" maxlength="500" rows="3" placeholder="写清楚时间、玩法和奖励；发布后大厅所有玩家可见"></textarea>
+        </label>
+        <button class="btn-match" onclick="publishAnnouncement()">发布公告</button>
+      </div>
+      <div class="expiry-note">
+        <div class="expiry-note-title">全部公告</div>
+        <div id="admin-announcements" class="admin-list"></div>
+      </div>
+    </div>
+    <div class="admin-body" id="admin-pane-events" style="display:none">
+      <div id="event-admin-status" class="report-hint">加载中…</div>
+      <div class="announce-form">
+        <label class="report-label">活动标题
+          <input id="event-title" maxlength="40" placeholder="例如：周末五子棋 +50% 经验">
+        </label>
+        <div class="announce-form-row">
+          <label class="report-label">玩法
+            <select id="event-game">
+              <option value="ALL">全部玩法</option>
+            </select>
+          </label>
+          <label class="report-label">经验加成
+            <select id="event-percent">
+              <option value="25">+25%</option>
+              <option value="50" selected>+50%</option>
+              <option value="100">+100%</option>
+            </select>
+          </label>
+          <label class="report-label">持续
+            <select id="event-duration">
+              <option value="24h">1 天</option>
+              <option value="3d">3 天</option>
+              <option value="7d" selected>7 天</option>
+              <option value="14d">14 天</option>
+              <option value="30d">30 天</option>
+            </select>
+          </label>
+        </div>
+        <button class="btn-match" onclick="publishEvent()">创建活动</button>
+      </div>
+      <div class="expiry-note">
+        <div class="expiry-note-title">全部活动</div>
+        <div id="admin-events" class="admin-list"></div>
+      </div>
+    </div>
   </div>
 </div>
 
 <main id="game-screen" style="display:none;">
-
   <!-- LEFT: PLAYERS -->
   <div>
     <div class="panel" style="margin-bottom:16px">
@@ -407,6 +503,18 @@
         <p id="coach-answer" role="status"></p>
       </details>
       <div class="status-area waiting" id="status-msg">等待连接...</div>
+      <div class="match-helper" id="match-helper" style="display:none">
+        <div class="match-helper-head">
+          <span class="match-dot"></span>
+          <span id="match-elapsed">匹配中 · 已等待 0:00</span>
+        </div>
+        <div class="match-helper-hint" id="match-hint">正在寻找同玩法的在线玩家…</div>
+        <div class="match-helper-actions">
+          <button class="btn-outline" id="match-fill-ai" onclick="fillSeatsWithAI()">补齐电脑开局</button>
+          <button class="btn-outline" onclick="copyInvite()">复制邀请</button>
+          <button class="btn-outline" onclick="leaveRoom()">返回大厅</button>
+        </div>
+      </div>
       <div style="padding:4px 16px 8px;display:none" id="surrender-row">
         <button class="leave-btn" id="pass-btn" onclick="sendPass()" style="display:none;width:100%;margin-bottom:6px;border-color:var(--accent2);color:var(--accent2)">停一手</button>
         <button class="leave-btn" id="surrender-btn" onclick="surrender()" style="width:100%;margin-bottom:6px;border-color:var(--accent);color:var(--accent)">认输</button>
@@ -511,6 +619,7 @@
         <div class="gameover-result" id="gameover-result">胜利！</div>
         <div class="gameover-sub" id="gameover-sub"></div>
         <div class="gameover-scores" id="gameover-scores"></div>
+        <div class="gameover-rewards" id="gameover-rewards"></div>
         <div class="gameover-btns">
           <button class="btn-review" onclick="dismissOverlay()">查看棋盘</button>
           <button class="btn-review" id="btn-enter-replay" onclick="enterReplay()">复盘</button>
@@ -562,8 +671,8 @@
 
 </main>
 
-<script src="js/games.js?v=66"></script>
-<script src="app.js?v=66"></script>
+<script src="js/games.js?v=75"></script>
+<script src="app.js?v=75"></script>
 </body>
 </html>
 

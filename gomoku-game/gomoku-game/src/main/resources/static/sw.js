@@ -5,13 +5,13 @@
  * - 静态资源 stale-while-revalidate，弱网下秒开，同时后台更新；
  * - API 与 WebSocket 一律不缓存，避免把对局状态缓存成过期数据。
  */
-const CACHE_NAME = 'gomoku-shell-v1';
+const CACHE_NAME = 'gomoku-shell-v7';
 const SHELL = [
   '/',
   '/index.html',
-  '/style.css?v=66',
-  '/js/games.js?v=66',
-  '/app.js?v=66',
+  '/style.css?v=75',
+  '/js/games.js?v=75',
+  '/app.js?v=75',
   '/manifest.json',
   '/icons/icon-192.png',
   '/icons/icon-512.png'

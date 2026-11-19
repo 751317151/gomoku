@@ -12,6 +12,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 /**
@@ -61,14 +62,19 @@ public class RoomManager {
     private final GameRecordService recordService;
     private final SeasonService seasonService;
     private final FriendService friends;
+    private final PartyService parties;
+    private final EventService events;
 
     public RoomManager(MeterRegistry meterRegistry, EloService eloService,
                        GameRecordService recordService, SeasonService seasonService,
-                       FriendService friendService) {
+                       FriendService friendService, PartyService partyService,
+                       EventService eventService) {
         this.eloService = eloService;
         this.recordService = recordService;
         this.seasonService = seasonService;
         this.friends = friendService;
+        this.parties = partyService;
+        this.events = eventService;
         // 每 60 秒扫描一次僵尸房间/过期会话
         cleanupExecutor.scheduleAtFixedRate(this::cleanupIdleRooms, 60, 60, TimeUnit.SECONDS);
 
@@ -132,18 +138,27 @@ public class RoomManager {
             }
             disconnectedAt.remove(playerId);
         }
+        if (parties != null) {
+            Set<String> online = identityByConn.entrySet().stream().filter(e -> e.getKey().isActive())
+                    .map(Map.Entry::getValue).collect(Collectors.toSet());
+            parties.expireOfflineMembers(online);
+        }
     }
 
     /** 凭证仅改变持久身份；实时连接仍使用独立 playerId，重名不会合并席位。 */
     public synchronized boolean bindIdentity(Channel conn, String name, String identityId) {
         if (identityId == null) return false;
+        String bound = identityByConn.get(conn);
+        if (bound != null && !identityId.equals(bound)) return false;
+        Player existing = playerByConn.get(conn);
+        if (existing != null && existing.getIdentityId() != null && !identityId.equals(existing.getIdentityId())) return false;
         Player player = getOrCreatePlayer(conn, name);
-        if (player.getIdentityId() != null && !identityId.equals(player.getIdentityId())) return false;
         // 上线边缘触发：该身份此前没有任何活动连接才算「上线」，避免每次 JOIN/换房都打扰好友
         boolean wasOnline = identityByConn.containsValue(identityId);
         player.setIdentityId(identityId);
         identityByConn.put(conn, identityId);
         identityNames.put(identityId, player.getName());
+        if (parties != null) parties.memberConnected(identityId);
         if (!wasOnline) {
             pushFriendEvent("online", identityId, player.getName());
         }
@@ -152,7 +167,8 @@ public class RoomManager {
 
     /** 该身份当前是否在线（连接级判定，大厅绑定即在线）——私聊可达性检查用 */
     public boolean isIdentityOnline(String identityId) {
-        return identityId != null && identityByConn.containsValue(identityId);
+        return identityId != null && identityByConn.entrySet().stream()
+                .anyMatch(e -> identityId.equals(e.getValue()) && e.getKey().isActive());
     }
 
     /**
@@ -164,8 +180,8 @@ public class RoomManager {
         String json = gson.toJson(msg);
         for (Map.Entry<Channel, String> e : identityByConn.entrySet()) {
             if (!identityId.equals(e.getValue())) continue;
-            Player p = playerByConn.get(e.getKey());
-            if (p != null && p.isConnected()) p.sendMessage(json);
+            // LEAVE 已释放座位对象，但大厅连接仍绑定该身份。
+            Player.sendMessageTo(e.getKey(), json);
         }
     }
 
@@ -189,6 +205,22 @@ public class RoomManager {
         return msg;
     }
 
+    /**
+     * 构造队伍事件（复用 FRIEND_EVENT 通道，前端按 kind 前缀区分）。
+     * kind = party_invite / party_joined / party_left / party_ready / party_disbanded。
+     * payload 额外带 partyId 与操作者身份，前端据此刷新队伍面板。
+     */
+    public static GameMessage partyEvent(String kind, String aboutId, String aboutName, String partyId) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("kind", kind);
+        payload.put("id", aboutId);
+        payload.put("name", aboutName);
+        payload.put("partyId", partyId);
+        GameMessage msg = new GameMessage(GameMessage.Type.FRIEND_EVENT);
+        msg.setData(gson.toJson(payload));
+        return msg;
+    }
+
     public Player getPlayerBySession(String sessionId) {
         String id = sessionId == null ? null : sessionToPlayer.get(sessionId);
         return id == null ? null : playerById.get(id);
@@ -203,13 +235,12 @@ public class RoomManager {
         for (GameRoom room : rooms.values()) {
             // 私有房只对知道房号的人可见，不进公共列表
             if (room.isPrivateRoom()) continue;
-            List<String> playerNames = room.getPlayers().stream()
-                    .map(Player::getName)
-                    .collect(Collectors.toList());
+            List<Player> occupants = new ArrayList<>(room.getPlayers());
+            List<String> playerNames = occupants.stream().map(Player::getName).collect(Collectors.toList());
             RoomListItemDto item = new RoomListItemDto(
                     room.getRoomId(),
                     room.getState().name(),
-                    room.getPlayerCount(),
+                    occupants.size(),
                     room.getSpectatorCount(),
                     playerNames,
                     room.getGameType().name()
@@ -217,6 +248,10 @@ public class RoomManager {
             item.setMinPlayers(room.getGameType().getMinPlayers());
             item.setMaxPlayers(room.getGameType().getMaxPlayers());
             item.setTargetPlayers(room.getTargetPlayers());
+            if (parties != null) {
+                item.setPartyIds(occupants.stream().map(p -> parties.partyIdOf(p.getIdentityId()))
+                        .filter(Objects::nonNull).distinct().collect(Collectors.toList()));
+            }
             list.add(item);
         }
         return list;
@@ -290,13 +325,9 @@ public class RoomManager {
         }
 
         if (room == null) {
-            String roomId = "ROOM-" + UUID.randomUUID().toString().substring(0, 6).toUpperCase();
             // createRoom=true → 私有房：不进大厅列表、不参与匹配，只能凭房号加入
-            room = new GameRoom(roomId, gameType, createRoom, targetPlayers);
-            room.setEloService(eloService);
-            room.setRecordService(recordService);
-            if (seasonService != null) room.setSeasonService(seasonService);
-            rooms.put(roomId, room);
+            room = newRoom(gameType, createRoom, targetPlayers);
+            rooms.put(room.getRoomId(), room);
         }
 
         GameRoom previousRoom = getRoomByPlayer(player);
@@ -305,6 +336,88 @@ public class RoomManager {
         playerRoom.put(player.getId(), room.getRoomId());
 
         broadcastRoomsList();
+        return room;
+    }
+
+    /**
+     * 在同一个房间生命周期锁下验证整队并入座。只移动在大厅的连接，
+     * 因而拒绝时没有房间分配，也不会让任何队员误离开已有对局。
+     */
+    public synchronized GameRoom startPartyGame(PartyService.Party party, GameType type, Predicate<String> banned) {
+        int size = party.members.size();
+        if (size < type.getMinPlayers() || size > type.getMaxPlayers()) {
+            throw new PartyService.PartyException("INVALID", type.getDisplayName() + "支持 "
+                    + (type.getMinPlayers() == type.getMaxPlayers() ? String.valueOf(type.getMaxPlayers())
+                    : type.getMinPlayers() + "–" + type.getMaxPlayers()) + " 人，当前队伍有 " + size + " 人");
+        }
+
+        Set<String> memberIds = new HashSet<>(party.members);
+        Map<String, Channel> channels = new HashMap<>();
+        for (Map.Entry<Channel, String> entry : identityByConn.entrySet()) {
+            String id = entry.getValue();
+            Channel conn = entry.getKey();
+            if (!memberIds.contains(id) || !conn.isActive()) continue;
+            if (channels.putIfAbsent(id, conn) != null) {
+                throw partyUnavailable(id, "打开了多个游戏页面，请保留一个");
+            }
+        }
+        for (String id : party.members) {
+            if (!channels.containsKey(id)) throw partyUnavailable(id, "不在线");
+            if (banned.test(id)) throw partyUnavailable(id, "暂时无法参加对局");
+        }
+        // 同身份的保留席位分两种：
+        // - 连接仍活跃：玩家确实还在别处玩，拒绝（不能把人从进行中的棋局拽出来）；
+        // - 已断线（60 秒重连宽限期内）：玩家已经用新连接回到大厅并发起组队，
+        //   这里顺手释放旧席位，否则「网络抖一下」就会卡住整队开局。
+        List<Player> staleSeats = new ArrayList<>();
+        for (Player player : playerById.values()) {
+            if (!memberIds.contains(player.getIdentityId())) continue;
+            GameRoom occupied = getRoomByPlayer(player);
+            if (occupied == null) continue;
+            if (player.isConnected()) throw partyUnavailable(player.getIdentityId(), "仍在房间中，请先返回大厅");
+            staleSeats.add(player);
+        }
+        for (Player stale : staleSeats) forceLeave(stale);
+        for (String id : party.members) {
+            if (!channels.get(id).isActive()) throw partyUnavailable(id, "不在线");
+        }
+
+        GameRoom room = newRoom(type, true, size);
+        List<Player> roster = new ArrayList<>(size);
+        for (String id : party.members) {
+            Channel conn = channels.get(id);
+            Player player = playerByConn.get(conn);
+            if (player == null) player = getOrCreatePlayer(conn, identityNames.getOrDefault(id, "玩家"));
+            if (type == GameType.CARD) {
+                // 队员没有单独确认套牌的步骤，本次全队使用均衡预组。
+                player.setDeck("BALANCED");
+                player.setDeckCards(null);
+            }
+            roster.add(player);
+        }
+        rooms.put(room.getRoomId(), room);
+        // GAME_START 发出前所有座位都已可由对应的真实连接和重连会话寻址。
+        for (Player player : roster) playerRoom.put(player.getId(), room.getRoomId());
+        room.startWithParty(roster);
+        broadcastRoomsList();
+        return room;
+    }
+
+    private PartyService.PartyException partyUnavailable(String identityId, String reason) {
+        return new PartyService.PartyException("CONFLICT", identityNames.getOrDefault(identityId, "有队员") + reason);
+    }
+
+    private GameRoom newRoom(GameType type, boolean privateRoom, int size) {
+        String id;
+        do {
+            id = "ROOM-" + UUID.randomUUID().toString().substring(0, 6).toUpperCase(Locale.ROOT);
+        } while (rooms.containsKey(id));
+        GameRoom room = new GameRoom(id, type, privateRoom, size);
+        room.setEloService(eloService);
+        room.setRecordService(recordService);
+        if (seasonService != null) room.setSeasonService(seasonService);
+        if (parties != null) room.setPartyService(parties);
+        if (events != null) room.setEventService(events);
         return room;
     }
 
@@ -410,9 +523,12 @@ public class RoomManager {
     private Player getOrCreatePlayer(Channel conn, String playerName) {
         Player player = playerByConn.get(conn);
         if (player == null) {
-            String playerId = UUID.randomUUID().toString().substring(0, 8);
+            String playerId;
+            do { playerId = UUID.randomUUID().toString().substring(0, 8); }
+            while (playerById.containsKey(playerId));
             String sessionId = UUID.randomUUID().toString().replace("-", "");
             player = new Player(playerId, playerName, conn, sessionId);
+            player.setIdentityId(identityByConn.get(conn));
             playerByConn.put(conn, player);
             playerById.put(playerId, player);
             sessionToPlayer.put(sessionId, playerId);
@@ -433,6 +549,16 @@ public class RoomManager {
                 p.sendMessage(json);
             }
         }
+    }
+
+    /** 组队关系变化时，公开房卡和房间座位重新下发徽标；各自的局面视角不变。 */
+    public void refreshPartyBadges(String identityId) {
+        for (GameRoom room : rooms.values()) {
+            if (room.getPlayers().stream().anyMatch(p -> identityId.equals(p.getIdentityId()))) {
+                room.refreshPartyBadges();
+            }
+        }
+        broadcastRoomsList();
     }
 
     /**
@@ -544,11 +670,21 @@ public class RoomManager {
             // 掉线玩家仍有 60s 重连宽限，这期间座位必须给他留着；
             // 若此时把新人匹配进来，座位被占，原玩家重连回来就无处可坐，
             // 宽限期也就失去意义了。这类房间由 cleanupIdleRooms 之后回收。
-            boolean ghostRoom = room.getPlayers().stream().anyMatch(p -> !p.isConnected());
-            if (ghostRoom) continue;
+            //
+            // AI 座位没有连接，不能按掉线处理：之前把「补了一部分电脑」的多人等待房
+            // 误判成幽灵房，导致这类房间永远匹配不到真人。电脑占的是座位，不是人。
+            if (hasDisconnectedHuman(room)) continue;
             return room;
         }
         return null;
+    }
+
+    private static boolean hasDisconnectedHuman(GameRoom room) {
+        return room.getPlayers().stream().anyMatch(p -> !p.isAi() && !p.isConnected());
+    }
+
+    private static int connectedHumanCount(GameRoom room) {
+        return (int) room.getPlayers().stream().filter(p -> !p.isAi() && p.isConnected()).count();
     }
 
     public Map<String, Object> getStats() {
@@ -560,6 +696,59 @@ public class RoomManager {
         stats.put("waitingRooms", rooms.values().stream()
                 .filter(r -> r.getState() == GameRoom.State.WAITING).count());
         return stats;
+    }
+
+    /**
+     * 匹配总览：按玩法统计「可被快速匹配加入」的公开等待房，以及进行中的房间。
+     *
+     * 口径与 {@link #findWaitingRoom} 保持一致（公开、未满、人类座位全部在线），
+     * 大厅据此展示「N 人等待」，避免把掉线宽限期中的房间当成可加入。
+     * AI 座位既不算等待人数，也不阻止房间被匹配——补了电脑的房间仍欢迎真人补位。
+     *
+     * 这是只读统计，不产生排队状态：匹配仍由 JOIN(createRoom=false) 原子完成，
+     * 不引入第二份「谁在排队」的真相。
+     */
+    public Map<String, Object> getMatchOverview() {
+        Map<GameType, int[]> perType = new EnumMap<>(GameType.class);
+        for (GameType type : GameType.values()) perType.put(type, new int[3]);
+        int waitingRooms = 0;
+        int waitingPlayers = 0;
+        int playingRooms = 0;
+        for (GameRoom room : rooms.values()) {
+            if (room.isPrivateRoom()) continue;
+            int[] counts = perType.get(room.getGameType());
+            if (counts == null) continue;
+            if (room.getState() == GameRoom.State.WAITING) {
+                if (room.isFull() || hasDisconnectedHuman(room)) continue;
+                int humans = connectedHumanCount(room);
+                if (humans == 0) continue;
+                counts[0]++;
+                counts[1] += humans;
+                waitingRooms++;
+                waitingPlayers += humans;
+            } else if (room.getState() == GameRoom.State.PLAYING) {
+                counts[2]++;
+                playingRooms++;
+            }
+        }
+        List<Map<String, Object>> games = new ArrayList<>();
+        for (GameType type : GameType.values()) {
+            int[] c = perType.get(type);
+            Map<String, Object> game = new LinkedHashMap<>();
+            game.put("gameType", type.name());
+            game.put("name", type.getDisplayName());
+            game.put("waitingRooms", c[0]);
+            game.put("waitingPlayers", c[1]);
+            game.put("playingRooms", c[2]);
+            games.add(game);
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("onlinePlayers", playerByConn.size());
+        result.put("waitingRooms", waitingRooms);
+        result.put("waitingPlayers", waitingPlayers);
+        result.put("playingRooms", playingRooms);
+        result.put("games", games);
+        return result;
     }
 
     /**

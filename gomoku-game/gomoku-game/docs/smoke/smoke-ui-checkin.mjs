@@ -53,7 +53,11 @@ class Cdp {
   }
   async eval(expr) {
     const r = await this.send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
-    if (r.exceptionDetails) throw new Error('JS 异常: ' + (r.exceptionDetails.text || ''));
+    if (r.exceptionDetails) {
+      const ex = r.exceptionDetails.exception;
+      const detail = (ex && (ex.description || ex.value)) || r.exceptionDetails.text || '';
+      throw new Error('JS 异常: ' + detail);
+    }
     return r.result ? r.result.value : undefined;
   }
   async shot(file) {
@@ -79,8 +83,11 @@ class Cdp {
   await waitUntil(() => cdp.eval("typeof joinGame === 'function'"), '登录页就绪');
   // 清掉旧游客凭证并重载，让内存里的 guestToken 也回到 null，保证全新身份
   await cdp.eval("try{localStorage.removeItem('gomoku_guest');}catch(_){ }");
+  // Page.reload 立即返回，旧文档仍满足 typeof joinGame；用 timeOrigin 变化确认新文档已接管
+  const reloadOrigin = await cdp.eval("performance.timeOrigin");
   await cdp.send('Page.reload', { ignoreCache: true });
-  await waitUntil(() => cdp.eval("typeof joinGame === 'function'"), '重载后登录页');
+  await waitUntil(async () => (await cdp.eval("performance.timeOrigin")) !== reloadOrigin
+    && (await cdp.eval("typeof joinGame === 'function'")), '重载后登录页');
 
   // 以游客身份进入大厅
   await cdp.eval("document.getElementById('ws-url').value = " + JSON.stringify(WS_URL) + "; document.getElementById('player-name').value = '签到测试'; joinGame();");
@@ -109,9 +116,11 @@ class Cdp {
   check('签到后经验变化', xpAfter !== xpBefore, xpBefore + ' -> ' + xpAfter);
   await cdp.shot(OUT + '/checkin-after.png');
 
-  // 4. 刷新页面仍为已签到
+  // 4. 刷新页面仍为已签到（同样等 timeOrigin 变化，避免在旧文档上误判就绪）
+  const finalReloadOrigin = await cdp.eval("performance.timeOrigin");
   await cdp.send('Page.reload', { ignoreCache: true });
-  await waitUntil(() => cdp.eval("typeof joinGame === 'function'"), '刷新后登录页');
+  await waitUntil(async () => (await cdp.eval("performance.timeOrigin")) !== finalReloadOrigin
+    && (await cdp.eval("typeof joinGame === 'function'")), '刷新后登录页');
   await cdp.eval("document.getElementById('ws-url').value = " + JSON.stringify(WS_URL) + "; joinGame()");
   await waitUntil(() => cdp.eval("document.getElementById('lobby-screen').style.display === 'block'"), '刷新后进大厅');
   await waitUntil(() => cdp.eval("document.getElementById('checkin-btn').textContent === '已签到'"), '刷新后仍已签', 12000);
@@ -120,10 +129,10 @@ class Cdp {
   console.log(failed === 0
     ? '[ui-checkin] PASS (' + passed + '/' + passed + ')'
     : '[ui-checkin] FAIL (' + failed + ' failed, ' + passed + ' passed)');
-  process.exitCode = failed === 0 ? 0 : 1;
-  ws.close();
+  try { ws.close(); } catch (_) {}
+  process.exit(failed === 0 ? 0 : 1);
 })().catch((e) => {
   failed++;
   console.error('[ui-checkin] FAIL 异常 :: ' + (e && e.message));
-  process.exitCode = 1;
+  process.exit(1);
 });

@@ -15,6 +15,10 @@ public class RoomListItemDto {
     private int minPlayers;
     private int maxPlayers;
     private int targetPlayers;
+    /** 公开房间的队伍徽标，不包含成员身份或入队凭证。 */
+    private List<String> partyIds = List.of();
+    public List<String> getPartyIds() { return partyIds; }
+    public void setPartyIds(List<String> value) { partyIds = value; }
     public int getMinPlayers() { return minPlayers; }
     public void setMinPlayers(int value) { minPlayers = value; }
     public int getMaxPlayers() { return maxPlayers; }

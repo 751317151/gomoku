@@ -11,6 +11,8 @@ public class PlayerInfoDto {
     private int elo;
     /** 当前赛季段位（青铜…王者）；0 分或游客可能为 null */
     private String tier;
+    /** 队伍标识（PTY-XXXX）；不在队伍时为 null。同一队伍的队员在座位上显示同一徽标 */
+    private String partyId;
 
     public PlayerInfoDto() {}
 
@@ -40,4 +42,7 @@ public class PlayerInfoDto {
 
     public String getTier() { return tier; }
     public void setTier(String tier) { this.tier = tier; }
+
+    public String getPartyId() { return partyId; }
+    public void setPartyId(String partyId) { this.partyId = partyId; }
 }

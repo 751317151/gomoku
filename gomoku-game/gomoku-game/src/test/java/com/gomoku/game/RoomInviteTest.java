@@ -34,7 +34,8 @@ class RoomInviteTest {
         FriendService friends = new FriendService(dir.resolve("friends.json"), accounts);
         friends.init();
         manager = new RoomManager(new SimpleMeterRegistry(), elo, records,
-                new SeasonService(records, dir.resolve("seasons.json")), friends);
+                new SeasonService(records, dir.resolve("seasons.json")), friends, new PartyService(),
+                new EventService(dir.resolve("events.json")));
     }
 
     @Test

@@ -34,7 +34,8 @@ class FriendPresenceTest {
         FriendService friends = new FriendService(dir.resolve("friends.json"), accounts);
         friends.init();
         manager = new RoomManager(new SimpleMeterRegistry(), elo, records,
-                new SeasonService(records, dir.resolve("seasons.json")), friends);
+                new SeasonService(records, dir.resolve("seasons.json")), friends, new PartyService(),
+                new EventService(dir.resolve("events.json")));
     }
 
     /** 让一个连接以指定持久身份进入大厅 */

@@ -49,6 +49,15 @@ public class GameApiController {
     }
 
     /**
+     * 匹配总览：按玩法统计可被快速匹配加入的公开等待房与等待人数。
+     * 大厅玩法卡与等待房助手据此展示「哪里有人」。
+     */
+    @GetMapping("/api/match/overview")
+    public Map<String, Object> getMatchOverview() {
+        return roomManager.getMatchOverview();
+    }
+
+    /**
      * 获取 ELO 排行榜（HTTP GET，按游戏类型）
      * @param gameType GOMOKU / REVERSI / GO9，默认五子棋
      */

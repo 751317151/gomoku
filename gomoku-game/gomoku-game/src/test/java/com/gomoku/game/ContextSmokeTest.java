@@ -38,6 +38,9 @@ class ContextSmokeTest {
         assertNotNull(context.getBean(PlayerProgressService.class));
         assertNotNull(context.getBean(EloService.class));
         assertNotNull(context.getBean(RoomManager.class));
+        // 组队：服务与 REST 入口都要能装配（RoomManager 依赖 PartyService）
+        assertNotNull(context.getBean(PartyService.class));
+        assertNotNull(context.getBean(com.gomoku.server.PartyController.class));
 
         // 控制器层：REST 入口真实存在且依赖注入成功
         assertNotNull(context.getBean(GameApiController.class));
