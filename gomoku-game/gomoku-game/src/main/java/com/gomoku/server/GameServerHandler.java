@@ -46,6 +46,7 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
     @Autowired private com.gomoku.game.GuestIdentityService guests;
     @Autowired private com.gomoku.game.FriendService friends;
     @Autowired private com.gomoku.game.ModerationService moderation;
+    @Autowired private com.gomoku.game.OfflineMessageService offlineMessages;
 
     private final EnumMap<GameMessage.Type, BiConsumer<Channel, GameMessage>> handlers = new EnumMap<>(GameMessage.Type.class);
 
@@ -224,7 +225,28 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
         String playerName = NameSanitizer.sanitize(msg.getPlayerName());
         if (!roomManager.bindIdentity(conn, playerName, identityId)) {
             sendError(conn, "游客凭证无效，请重新进入大厅");
+            return;
         }
+        // 上线投递离线私聊：先绑定身份再投递，保证人确实在线才收
+        deliverOfflineMessages(conn, identityId);
+    }
+
+    /**
+     * 把暂存的离线私聊逐条投递给刚上线的连接。
+     * 每条都复用 DIRECT_MSG 的线上格式，前端无需区分「实时」与「补发」。
+     */
+    private void deliverOfflineMessages(Channel conn, String identityId) {
+        java.util.List<com.gomoku.game.OfflineMessageService.Message> pending =
+                offlineMessages.drain(identityId);
+        if (pending.isEmpty()) return;
+        for (com.gomoku.game.OfflineMessageService.Message m : pending) {
+            GameMessage out = new GameMessage(GameMessage.Type.DIRECT_MSG);
+            out.setPlayerId(m.fromId);
+            out.setPlayerName(m.fromName);
+            out.setMessage(m.text);
+            Player.sendMessageTo(conn, gson.toJson(out));
+        }
+        logger.info("[AUDIT] offline_dm_delivered to={} count={}", identityId, pending.size());
     }
 
     private void handleJoin(Channel conn, GameMessage msg) {
@@ -482,7 +504,15 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
             return;
         }
         if (!roomManager.isIdentityOnline(target)) {
-            sendError(conn, "对方当前不在线，私聊未送达");
+            // 离线：暂存为留言，对方下次上大厅时投递（仍是好友准入之后才走到这里）
+            int pending = offlineMessages.store(target, sender.getIdentityId(), sender.getName(), text);
+            GameMessage saved = new GameMessage(GameMessage.Type.GAME_CHAT);
+            saved.setRoomId(msg.getRoomId());
+            saved.setPlayerName("系统");
+            saved.setMessage("对方不在线，已保存为离线消息（上线后送达）");
+            sender.sendMessage(gson.toJson(saved));
+            logger.info("[AUDIT] offline_dm to={} from={} pending={}",
+                    target, sender.getIdentityId(), pending);
             return;
         }
         GameMessage out = new GameMessage(GameMessage.Type.DIRECT_MSG);

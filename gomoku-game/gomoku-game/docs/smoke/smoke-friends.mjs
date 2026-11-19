@@ -66,7 +66,7 @@ function wsJoin(name, token, { create = false, roomId = null, gameType = 'GOMOKU
 function hallClient(name, token) {
   return new Promise((resolve) => {
     const ws = new WebSocket(WS_URL);
-    const st = { ws, name, events: [], dms: [], errs: [], bound: false };
+    const st = { ws, name, events: [], dms: [], dmsSaved: [], errs: [], bound: false };
     ws.onopen = () => {
       // 绑定后立即 GET_ROOMS：服务端直接回一条 ROOM_LIST 作为「绑定成功」的确认信号
       ws.send(JSON.stringify({ type: 'HALL_BIND', playerName: name, guestToken: token }));
@@ -80,6 +80,7 @@ function hallClient(name, token) {
         if (payload) st.events.push(payload);
       }
       if (m.type === 'DIRECT_MSG') st.dms.push({ from: m.playerId, name: m.playerName, text: m.message });
+      if (m.type === 'GAME_CHAT' && /离线消息/.test(m.message || '')) st.dmsSaved.push(m.message);
       if (m.type === 'ROOM_LIST' && !st.bound) { st.bound = true; resolve(st); }
       if (m.type === 'ERROR') { st.errs.push(m.message); }
     };
@@ -345,13 +346,37 @@ try {
     JSON.stringify(hallC.errs));
   check('非好友私信不送达', hallA.dms.length === aDmCountBefore);
 
-  // 离线好友私聊明确报错：甲先 REST 同意丁的申请成为好友（丁仅 REST 身份、无 WS 连接）
+  // 离线好友私聊：丁只有 REST 身份、没有 WS 连接 → 消息暂存，丁上线后投递
   await request('/api/friends/requests/' + h4.id + '/accept', { method: 'POST', ...auth(h1.token) });
   await new Promise(r => setTimeout(r, 1100)); // 过限流窗口
   hallA.ws.send(JSON.stringify({ type: 'DIRECT_MSG', data: h4.id, message: '丁在线吗？' }));
-  await new Promise(r => setTimeout(r, 600));
-  check('离线好友私聊明确报错', hallA.errs.some(e => e.includes('对方当前不在线')),
-    JSON.stringify(hallA.errs));
+  await new Promise(r => setTimeout(r, 700));
+  check('离线私聊提示已保存', hallA.dmsSaved.some(t => t.includes('离线消息')),
+    JSON.stringify(hallA.dmsSaved));
+
+  // 丁上线（HALL_BIND）→ 立刻收到那条离线留言
+  const hallD = await hallClient('大厅丁', h4.token);
+  const offlineDm = await (async () => {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      const hit = hallD.dms.find(d => d.from === h1.id && d.text === '丁在线吗？');
+      if (hit) return hit;
+      await new Promise(r => setTimeout(r, 100));
+    }
+    return null;
+  })();
+  check('上线后收到离线留言', !!offlineDm && offlineDm.name === '大厅甲', JSON.stringify(hallD.dms));
+  check('离线留言只投递一次', (() => {
+    const count = hallD.dms.filter(d => d.text === '丁在线吗？').length;
+    return count === 1;
+  })(), JSON.stringify(hallD.dms));
+
+  hallD.ws.close();
+  // 重新上线不应再收到同一条
+  const hallD2 = await hallClient('大厅丁', h4.token);
+  await new Promise(r => setTimeout(r, 900));
+  check('重复上线不重复投递', !hallD2.dms.some(d => d.text === '丁在线吗？'), JSON.stringify(hallD2.dms));
+  hallD2.ws.close();
 
   [hallA, hallB, hallC, hallG, hallH].forEach(s => { try { s.ws.close(); } catch {} });
 } catch (error) {

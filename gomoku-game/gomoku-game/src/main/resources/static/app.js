@@ -1394,7 +1394,9 @@ function connect(url) {
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
 
     // 指数退避重连：delay = min(BASE * 2^attempt, MAX_DELAY) + jitter
-    if (mySessionId && reconnectAttempts < MAX_RECONNECT) {
+    // 对局中（mySessionId）与「只在大厅」（有 guestToken）都要重连：
+    // 此前只有对局中会重连，纯大厅用户一掉线就被踢回登录页，等再点进来好友都下线了。
+    if ((mySessionId || guestToken) && reconnectAttempts < MAX_RECONNECT) {
       reconnectAttempts++;
       const exponentialDelay = Math.min(
         RECONNECT_BASE_DELAY * Math.pow(2, reconnectAttempts - 1),
@@ -2168,13 +2170,14 @@ function askSoloDifficulty(type, onConfirm) {
 function handleMessage(msg) {
   switch (msg.type) {
     case 'ROOM_LIST':
+      // 收到 ROOM_LIST 说明连接已恢复：无论此前停在登录页还是大厅，都复位重连计数
+      reconnectAttempts = 0;
+      document.getElementById('reconnect-bar').classList.remove('show');
+      setStatus(true, '已连接');
       // 首次收到 ROOM_LIST 说明连接合法，正式进入大厅
       if (document.getElementById('login-screen').style.display !== 'none') {
-        reconnectAttempts = 0;
-        document.getElementById('reconnect-bar').classList.remove('show');
         document.getElementById('login-screen').style.display = 'none';
         showLobby();
-        setStatus(true, '已连接');
         buildGameSelector();
         updatePlayerCountSelector();
         loadLeaderboard();
@@ -2743,6 +2746,11 @@ function handleGameOver(msg) {
 function handleGameChat(msg) {
   // 举报确认走的是房间内 GAME_CHAT 通道，先让举报弹窗给出反馈
   if (/举报/.test(msg.message || '')) handleReportFeedback(msg);
+  // 离线私聊回执：提示已保存，并标记该条为「待送达」而不是发送失败
+  if (/离线消息/.test(msg.message || '')) {
+    setStatusMsg(msg.message, 'waiting');
+    return;
+  }
   const isMe = msg.playerId === myId;
   addChat(msg.message, isMe ? 'me' : 'other', msg.playerName, isMe);
 }
@@ -3429,9 +3437,7 @@ function sendDm() {
   renderDm();
   input.value = '';
   send({ type: 'DIRECT_MSG', data: dmOpenId, message: text });
-}
-
-/** 收到好友私聊：弹窗开着就地渲染，否则累计未读徽标 + 提示一条 */
+}/** 收到好友私聊：弹窗开着就地渲染，否则累计未读徽标 + 提示一条 */
 function handleDirectMsg(msg) {
   const from = msg.playerId;
   const text = msg.message || '';
@@ -3445,9 +3451,7 @@ function handleDirectMsg(msg) {
     loadFriends();
     setStatusMsg('💬 ' + (msg.playerName || '好友') + '：' + text.slice(0, 40), 'waiting');
   }
-}
-
-// ============ 运营治理：举报与管理处置 ============
+}// ============ 运营治理：举报与管理处置 ============
 
 /** 打开举报弹窗：列出同房间的其他真人玩家 */
 function openReport() {
