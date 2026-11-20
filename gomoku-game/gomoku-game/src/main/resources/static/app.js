@@ -2812,6 +2812,9 @@ function handleGameStart(msg) {
   document.getElementById('replay-bar').style.display = 'none';
   replayMode = false;
 
+  // 组队由服务端直接下发 GAME_START，不经过客户端 JOIN；此时队员仍在大厅。
+  // 先显示对局区域，再渲染座位与棋盘；已有对局页面保留聊天记录。
+  if (document.getElementById('game-screen').style.display === 'none') showGame();
   updatePlayerPanel();
   updateTurnStatus();
   showSurrenderBtn();

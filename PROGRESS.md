@@ -2115,3 +2115,20 @@ export PATH="/usr/bin:/bin:/e/JAVA/apache-maven-3.9.11/bin:/e/JAVA/jdk/jdk-21.0.
   - 移除旧的「先建房再把房号推给队员各自 JOIN」流程。
 - 测试：新增 PartyLaunchTest 9 例（全队同房开局、容量按队伍人数、离线拒绝且不占座、跨房拒绝不拽人、封禁拒绝、多标签页拒绝、非队长不能开局、座位带队伍标识、超员提示）；PartyServiceTest 13 例；ContextSmokeTest 增加 PartyService/PartyController 装配断言。全量 **449 项 0 失败**。
 - 新增 smoke-party.mjs 27 项：邀请/接受/实时推送、非好友与离线拒绝、队员不能邀请、一次开局全队同房、座位队伍标识、私房不进公共列表、超员拒绝且无人进房、3 人开多人玩法容量正确、退出与解散。回归 smoke：friends 54/54、moderation 20/20、ops 14/14、account 13/13、room-invite 全过。
+
+## 2026-11-20：约战邀请服务收尾与组队开局切屏修复
+
+- 当前暂停节点之前的 `master` 已推送至 `24cdf99`；本轮从工作区遗留的 `DuelService.java` 收尾，没有新增游戏。
+- 约战仅完成邀请状态服务，**尚未接入 REST、WebSocket 推送或玩家界面**。好友关系、认证和房间可加入性仍由未来接入层负责，服务本身不占座、不创建房间、不触发开局。
+- 邀请服务补齐：空白参数拒绝；同一对玩家的同向及反向待处理邀请去重；邀请对象和返回列表均为不可变快照；随机编号碰撞时重试；保留 2 分钟有效期、发起方 3 条和接收方 5 条上限、接收人校验、接受/拒绝单次消费及失效房间邀请清理。
+- 新增 `DuelServiceTest` 14 例，验证参数、房间绑定、交叉去重、双方配额与释放、归属校验、重复接受、拒绝、恰好到期边界、过期释放配额、幂等清理、快照以及并发接受只成功一次；`ContextSmokeTest` 增加服务装配断言。
+- 独立复核发现组队直接 `GAME_START` 会跳过普通客户端 JOIN 前的 `showGame()`，导致服务端已经开局、队长与队员界面仍留在大厅。现在 `handleGameStart` 完成状态初始化后，若对局页面隐藏则切入游戏，再绘制座位与棋盘；已在游戏页的再开局保留聊天。
+- `smoke-ui-party.mjs` 新增双方页面实际尺寸/可见性、大厅隐藏检查，收集真实运行时异常和 `console.error`；去掉恒为 true 的无错误断言；成功响应清理 CDP 超时器，结束时释放两个浏览器上下文。同步更新冒烟说明。
+- 静态资源同步升到 `?v=76`，Service Worker 缓存名升到 `gomoku-shell-v8`，让旧客户端获取切屏修复。
+- 本轮实际验证：
+  - `scripts/verify-project.ps1 -SkipDocker` 成功；本轮 57 个 Surefire 测试报告共 **463 项，0 失败、0 错误、0 跳过**，含约战 14 例、组队开局 9 例、组队服务 13 例及 Spring 启动检查。此后 Java 源码未再修改。
+  - 新增页面可见性检查在修复前的打包版本真实复现 **2 项失败、11 项通过**（队长与队员都未切屏）；修复后重新打包，在真实 Chrome 的两个隔离上下文中 **13/13 通过**，同时确认双方无脚本异常或控制台错误；截图位于忽略目录 `gomoku-game/gomoku-game/target/checkpoint-stop/after-shots/party-game.png`。
+  - `mvn -q -DskipTests package` 成功；最终版本 `app.js`、`games.js`、`sw.js` 和 `smoke-ui-party.mjs` 均通过 `node --check`，脚本比对确认 index/sw 的资源版本同为 76、缓存名为 v8；`git diff --check` 通过。
+  - 组队协议冒烟的本轮重跑申请两次因自动审批超时而未执行，**不计为本轮通过**；本轮也未重做 Docker、HTTPS/WSS 或移动端验收。上述结论仅覆盖实际执行的测试范围。
+- `flags` 是既有未跟踪文件，保持原样且不纳入提交。
+- 临时服务与独立 Chrome 均核对命令行后按本次 PID 关闭，确认 19000/19001/9335 三个测试端口已释放；日志、截图、隔离运行数据均位于 Git 忽略的 target 目录。

@@ -31,10 +31,18 @@ async function getDebuggerUrl() {
 class Cdp {
   constructor(ws) {
     this.ws = ws; this.id = 0; this.pending = new Map(); this.sessionId = null;
+    this.errors = [];
     ws.onmessage = (ev) => {
       const m = JSON.parse(ev.data);
+      if (m.method === 'Runtime.exceptionThrown') {
+        const details = m.params.exceptionDetails;
+        this.errors.push(details.exception?.description || details.text || '未知页面异常');
+      } else if (m.method === 'Runtime.consoleAPICalled' && m.params.type === 'error') {
+        this.errors.push(m.params.args.map(arg => arg.value || arg.description || arg.type).join(' '));
+      }
       if (m.id && this.pending.has(m.id)) {
-        const { resolve, reject } = this.pending.get(m.id);
+        const { resolve, reject, timer } = this.pending.get(m.id);
+        clearTimeout(timer);
         this.pending.delete(m.id);
         if (m.error) reject(new Error(JSON.stringify(m.error))); else resolve(m.result);
       }
@@ -45,11 +53,11 @@ class Cdp {
     const payload = { id, method, params: params || {} };
     if (useSession && this.sessionId) payload.sessionId = this.sessionId;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.ws.send(JSON.stringify(payload));
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         if (this.pending.has(id)) { this.pending.delete(id); reject(new Error('CDP 超时: ' + method)); }
       }, 30000);
+      this.pending.set(id, { resolve, reject, timer });
+      this.ws.send(JSON.stringify(payload));
     });
   }
   async eval(expr) {
@@ -108,14 +116,17 @@ async function openPlayer(name, browserContextId) {
 
 (async () => {
   const pages = [];
+  const contexts = [];
+  let admin;
   try {
     const wsUrl = await getDebuggerUrl();
     const ws = new WebSocket(wsUrl);
     await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
-    const admin = new Cdp(ws);
+    admin = new Cdp(ws);
     const ctxA = (await admin.send('Target.createBrowserContext', {}, false)).browserContextId;
+    contexts.push(ctxA);
     const ctxB = (await admin.send('Target.createBrowserContext', {}, false)).browserContextId;
-    admin.close();
+    contexts.push(ctxB);
 
     const a = await openPlayer('队长甲', ctxA);
     const b = await openPlayer('队员乙', ctxB);
@@ -164,7 +175,7 @@ async function openPlayer(name, browserContextId) {
     check('A 是队长且看到带队按钮', await a.cdp.eval("!!document.querySelector('#party-panel .party-start')"));
     await a.cdp.shot(OUT + '/party-a-panel.png');
 
-    // A 点「带全队开局」：建房 -> 服务端推 party_start -> B 自动进房
+    // A 点「带全队开局」：服务端给全队原子入座，直接下发 GAME_START。
     const started = await a.cdp.eval("(()=>{var btn=document.querySelector('#party-panel .party-start');"
       + "if(!btn)return false;btn.click();return true;})()");
     check('A 点「带全队开局」按钮', started === true);
@@ -177,6 +188,14 @@ async function openPlayer(name, browserContextId) {
     check('双方进入同一房间并开局', roomA === roomB && await a.cdp.eval("gameState === 'PLAYING'"),
       JSON.stringify({ roomA, roomB, stateA: await a.cdp.eval("gameState") }));
 
+    // gameState 与隐藏 DOM 都可能正常；必须确认用户真正看到对局页面。
+    const gameIsVisible = "(()=>{const game=document.getElementById('game-screen');"
+      + "const lobby=document.getElementById('lobby-screen');const rect=game.getBoundingClientRect();"
+      + "return getComputedStyle(game).display!=='none' && getComputedStyle(lobby).display==='none'"
+      + " && rect.width>0 && rect.height>0;})()";
+    check('A 已从大厅切入可见的对局页面', await a.cdp.eval(gameIsVisible));
+    check('B 已从大厅切入可见的对局页面', await b.cdp.eval(gameIsVisible));
+
     // 座位上的队伍徽标：两名队员显示同一个队伍短码
     await waitUntil(() => a.cdp.eval("document.querySelectorAll('.seat-party').length >= 2"), 'A 座位出现队伍徽标');
     await waitUntil(() => b.cdp.eval("document.querySelectorAll('.seat-party').length >= 2"), 'B 座位出现队伍徽标');
@@ -186,12 +205,24 @@ async function openPlayer(name, browserContextId) {
       chipsA.length >= 2 && chipsA.every(x => x === chipsA[0]) && chipsB.every(x => x === chipsA[0]),
       JSON.stringify({ chipsA, chipsB }));
     await a.cdp.shot(OUT + '/party-game.png');
-    check('页面无未捕获错误', true);
+    const pageErrors = pages.flatMap(p => p.cdp.errors.map(error => p.name + ': ' + error));
+    check('双方页面无脚本异常或控制台错误', pageErrors.length === 0, JSON.stringify(pageErrors));
   } catch (error) {
     failed++;
     console.error('[ui-party] FAIL 异常 :: ' + (error && error.message));
   } finally {
     pages.forEach(p => p.cdp && p.cdp.close());
+    if (admin) {
+      for (const browserContextId of contexts) {
+        try {
+          await admin.send('Target.disposeBrowserContext', { browserContextId }, false);
+        } catch (error) {
+          failed++;
+          console.error('[ui-party] FAIL 清理浏览器上下文 :: ' + error.message);
+        }
+      }
+      admin.close();
+    }
   }
   console.log(failed === 0
     ? '[ui-party] PASS (' + passed + '/' + passed + ')'
