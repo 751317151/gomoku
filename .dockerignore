@@ -9,6 +9,8 @@ elo_ratings.properties
 flags
 *.log
 node_modules
+backups
+*.tgz
 .env
 .env.*
 !.env.example

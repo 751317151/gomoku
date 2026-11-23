@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="棋战大厅">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="style.css?v=76">
+<link rel="stylesheet" href="style.css?v=97">
 </head>
 <body>
 
@@ -94,7 +94,7 @@
 <div id="login-screen">
   <div class="login-box">
     <div class="login-title">棋战大厅</div>
-    <div class="login-sub">五子棋 · 黑白棋 · 围棋 · 象棋 · 四子棋 · 回合制 · 卡牌 · 取石子 · 答题 · 骰子竞速 · 21 点 · 多人比大小</div>
+    <div class="login-sub">五子棋 · 黑白棋 · 围棋 · 象棋 · 跳棋 · 飞行棋 · 四子棋 · 回合制 · 卡牌 · 取石子 · 答题 · 骰子竞速 · 21 点 · 多人比大小</div>
 
     <input type="hidden" id="ws-url" value="" data-port="9001">
     <div class="field-label">你的昵称</div>
@@ -109,6 +109,7 @@
       <input class="field-input" type="text" id="account-username" placeholder="用户名（3–20 位）" maxlength="20" autocomplete="username">
       <input class="field-input" type="password" id="account-password" placeholder="密码（至少 6 位）" maxlength="128" autocomplete="current-password">
       <p class="account-hint" id="account-hint"></p>
+      <button type="button" class="account-link recovery-open" id="account-recover-open" onclick="openPasswordRecovery()">忘记密码？用恢复码找回</button>
     </div>
 
     <p id="login-sub-status" role="status"></p>
@@ -116,8 +117,93 @@
     <button class="btn-join" id="join-button" onclick="joinGame()">进入大厅</button>
     <div class="account-footer">
       <span id="account-state">当前：游客身份（战绩仅存在本浏览器）</span>
+      <button type="button" id="account-security" class="account-link" hidden onclick="openAccountSecurity()">账号安全</button>
       <button type="button" id="account-logout" class="account-link" hidden onclick="accountLogout()">退出账号</button>
     </div>
+  </div>
+</div>
+
+<!-- 账号安全：改密、撤销其他设备与查看当前登录方式 -->
+<div class="account-security-modal" id="account-security-modal" role="dialog" aria-modal="true" aria-labelledby="account-security-title">
+  <div class="account-security-box">
+    <div class="dm-head">
+      <div>
+        <div class="account-security-kicker">ACCOUNT SECURITY</div>
+        <div class="dm-title" id="account-security-title">账号安全</div>
+      </div>
+      <button class="leave-btn" onclick="closeAccountSecurity()">关闭</button>
+    </div>
+    <div class="account-security-identity" id="account-security-identity"></div>
+    <div class="account-security-note">
+      修改密码会让其他设备上的旧登录立即失效；当前设备会自动换用新凭证。
+    </div>
+    <label class="account-security-label" for="account-old-password">当前密码</label>
+    <input class="field-input account-security-input" type="password" id="account-old-password"
+           maxlength="128" autocomplete="current-password">
+    <label class="account-security-label" for="account-new-password">新密码</label>
+    <input class="field-input account-security-input" type="password" id="account-new-password"
+           maxlength="128" autocomplete="new-password">
+    <label class="account-security-label" for="account-confirm-password">再次输入新密码</label>
+    <input class="field-input account-security-input" type="password" id="account-confirm-password"
+           maxlength="128" autocomplete="new-password">
+    <p class="account-security-status" id="account-security-status" role="status" aria-live="polite"></p>
+    <button class="btn-join account-security-submit" id="account-password-submit"
+            onclick="changeAccountPassword()">更新密码并退出其他设备</button>
+    <button class="btn-outline account-security-wide" id="account-logout-others"
+            onclick="logoutOtherAccountSessions()">退出其他设备</button>
+    <button class="btn-outline account-security-wide" id="account-rotate-recovery"
+            onclick="rotateRecoveryCode()">重新生成恢复码</button>
+  </div>
+</div>
+
+<!-- 忘记密码：用一次性恢复码重置，成功后展示新恢复码 -->
+<div class="account-security-modal" id="account-recovery-modal" role="dialog" aria-modal="true" aria-labelledby="account-recovery-title">
+  <div class="account-security-box">
+    <div class="dm-head">
+      <div>
+        <div class="account-security-kicker">ACCOUNT RECOVERY</div>
+        <div class="dm-title" id="account-recovery-title">用恢复码找回账号</div>
+      </div>
+      <button class="leave-btn" onclick="closePasswordRecovery()">关闭</button>
+    </div>
+    <div class="account-security-note">
+      输入注册或上次改密时保存的 20 位恢复码。找回成功后旧密码与所有设备登录都会失效，并换发新的恢复码。
+    </div>
+    <label class="account-security-label" for="account-recovery-username">用户名</label>
+    <input class="field-input account-security-input" type="text" id="account-recovery-username"
+           maxlength="20" autocomplete="username">
+    <label class="account-security-label" for="account-recovery-code">恢复码</label>
+    <input class="field-input account-security-input recovery-code-input" type="text" id="account-recovery-code"
+           maxlength="29" autocomplete="off" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX">
+    <label class="account-security-label" for="account-recovery-password">新密码</label>
+    <input class="field-input account-security-input" type="password" id="account-recovery-password"
+           maxlength="128" autocomplete="new-password">
+    <label class="account-security-label" for="account-recovery-confirm">再次输入新密码</label>
+    <input class="field-input account-security-input" type="password" id="account-recovery-confirm"
+           maxlength="128" autocomplete="new-password">
+    <p class="account-security-status" id="account-recovery-status" role="status" aria-live="polite"></p>
+    <button class="btn-join account-security-submit" id="account-recovery-submit"
+            onclick="recoverAccountWithCode()">重置密码并找回账号</button>
+  </div>
+</div>
+
+<!-- 恢复码只显示一次：不写入 localStorage，关闭即不可再查看 -->
+<div class="account-security-modal" id="recovery-code-modal" role="dialog" aria-modal="true" aria-labelledby="recovery-code-title">
+  <div class="account-security-box">
+    <div class="dm-head">
+      <div>
+        <div class="account-security-kicker">RECOVERY CODE</div>
+        <div class="dm-title" id="recovery-code-title">请保存你的恢复码</div>
+      </div>
+      <button class="leave-btn" onclick="closeRecoveryCode()">关闭</button>
+    </div>
+    <div class="account-security-note">
+      忘记密码时，这是找回账号与全部战绩的唯一凭证。它只显示这一次，服务器不保存明文；请抄写或存进密码管理器，不要发给任何人。
+    </div>
+    <div class="recovery-code-value" id="recovery-code-value"></div>
+    <button class="btn-outline account-security-wide" id="recovery-code-copy" onclick="copyRecoveryCode()">复制恢复码</button>
+    <p class="account-security-status" id="recovery-code-status" role="status" aria-live="polite"></p>
+    <button class="btn-join account-security-submit" onclick="closeRecoveryCode()">我已保存，开始游戏</button>
   </div>
 </div>
 
@@ -135,9 +221,9 @@
 <div class="onboard-overlay" id="onboard-overlay">
   <div class="onboard-box">
     <div class="onboard-title">欢迎来到棋战大厅</div>
-    <div class="onboard-sub">14 种玩法 · 2–8 人在线同桌</div>
+    <div class="onboard-sub">19 种玩法 · 2–8 人在线同桌</div>
     <div class="onboard-steps">
-      <div class="onboard-step"><span>1</span><div><b>选玩法</b><p>用分类快速找到棋类、卡牌或派对玩法。</p></div></div>
+      <div class="onboard-step"><span>1</span><div><b>选玩法</b><p>用分类找玩法；点「查看规则」先读懂目标与操作。</p></div></div>
       <div class="onboard-step"><span>2</span><div><b>一键开局</b><p>「人机对战」随时练习，「快速匹配」找在线玩家。</p></div></div>
       <div class="onboard-step"><span>3</span><div><b>持续成长</b><p>完成每日目标可获得等级与成就，战绩自动保存。</p></div></div>
     </div>
@@ -239,6 +325,13 @@
           <button class="btn-outline" onclick="addFriend()">添加</button>
         </div>
         <div id="friend-requests" class="friend-requests" hidden></div>
+        <section id="duel-panel" class="duel-panel" aria-labelledby="duel-title" hidden>
+          <div class="duel-head"><strong id="duel-title">好友约战</strong><span>双人私房 · 同意后开局</span></div>
+          <label class="party-pick" for="duel-game">约战玩法<select id="duel-game" onchange="duelGameChanged()"></select></label>
+          <p class="duel-hint">选好玩法，点在线好友旁的「约战」。邀请 2 分钟有效。</p>
+          <div id="duel-status" class="duel-status" role="status" aria-live="polite"></div>
+          <div id="duel-invites" class="duel-invites"></div>
+        </section>
         <div id="party-panel" class="party-panel" hidden></div>
         <div id="friends-list" class="friends-list" aria-live="polite">加载中...</div>
       </div>
@@ -308,6 +401,25 @@
       <button class="achv-tab" data-filter="locked" onclick="setAchievementFilter('locked')">未解锁</button>
     </div>
     <div class="achv-wall" id="achv-wall" aria-live="polite"></div>
+  </div>
+</div>
+
+<!-- 玩法规则：大厅卡片与对局内共用同一份模块元数据，避免教程与引擎脱节 -->
+<div class="rules-modal" id="rules-modal" role="dialog" aria-modal="true" aria-labelledby="rules-title">
+  <div class="rules-box">
+    <div class="rules-head">
+      <div>
+        <div class="rules-kicker">玩法规则</div>
+        <div class="rules-title" id="rules-title">—</div>
+      </div>
+      <button class="leave-btn rules-close" id="rules-close" onclick="closeRules()" aria-label="关闭玩法规则">关闭</button>
+    </div>
+    <div class="rules-sub" id="rules-sub"></div>
+    <div class="rules-body" id="rules-body"></div>
+    <div class="rules-foot">
+      <span class="rules-meta" id="rules-meta"></span>
+      <button class="btn-solo rules-solo" id="rules-solo" onclick="startSoloFromRules()">▶ 人机练习</button>
+    </div>
   </div>
 </div>
 
@@ -384,6 +496,20 @@
       <div class="expiry-note">
         <div class="expiry-note-title">日活趋势（近 14 天）</div>
         <div id="ops-trend" class="ops-bars"></div>
+      </div>
+      <div class="expiry-note">
+        <div class="expiry-note-title">新手漏斗（进入大厅 → 再来一局）</div>
+        <div id="ops-funnel" class="ops-funnel"></div>
+      </div>
+      <div class="expiry-note">
+        <div class="expiry-note-title">入口与完局</div>
+        <div id="ops-modes" class="ops-table-wrap"></div>
+      </div>
+      <div class="expiry-note">
+        <div class="expiry-note-title">匹配质量</div>
+        <div id="ops-quality" class="ops-cards"></div>
+        <div id="ops-wait-summary" class="ops-definition" style="margin-top:8px"></div>
+        <div id="ops-wait" class="ops-bars" style="margin-top:8px"></div>
       </div>
       <div class="expiry-note">
         <div class="expiry-note-title">玩法热度</div>
@@ -495,6 +621,7 @@
         <button class="btn-outline invite-btn" id="invite-btn" onclick="copyInvite()" style="display:none">复制邀请</button>
         <div class="move-count" id="move-count">手数: 0</div>
         <div class="move-count" id="spectator-count" style="margin-top:4px;color:var(--accent2)">观众数: 0</div>
+        <button class="btn-outline rules-open-btn" onclick="openRulesFromGame()">查看玩法规则</button>
       </div>
       <details class="coach-panel">
         <summary>AI 导师</summary>
@@ -615,15 +742,35 @@
         <div class="high-card-score" id="gem-players"></div>
         <div class="quiz-log" id="gem-log"></div>
       </div>
+      <div id="bomb-cat-panel" class="bomb-cat-panel" style="display:none" aria-live="polite">
+        <div class="bomb-cat-head">
+          <div><span>BOMB CAT · 炸弹猫</span><h2 id="bomb-cat-turn">等待开局…</h2></div>
+          <div class="bomb-cat-deck"><b id="bomb-cat-deck-count">—</b><span>牌库</span></div>
+        </div>
+        <div id="bomb-cat-special" class="bomb-cat-special" hidden></div>
+        <div id="bomb-cat-players" class="bomb-cat-players"></div>
+        <div class="bomb-cat-hand-label">我的手牌 <span id="bomb-cat-hint"></span></div>
+        <div id="bomb-cat-hand" class="bomb-cat-hand"></div>
+        <div class="bomb-cat-actions">
+          <button class="btn-endturn" id="bomb-cat-draw" onclick="sendAction(100)">抽一张 · 结束回合</button>
+          <button class="btn-endturn" id="bomb-cat-target" onclick="chooseBombCatTarget()" hidden>选择偷牌目标</button>
+        </div>
+        <div id="bomb-cat-peek" class="bomb-cat-peek" hidden></div>
+        <div id="bomb-cat-log" class="quiz-log"></div>
+      </div>
       <div id="gameover-overlay">
         <div class="gameover-result" id="gameover-result">胜利！</div>
         <div class="gameover-sub" id="gameover-sub"></div>
+        <div class="gameover-insight" id="gameover-insight" hidden></div>
         <div class="gameover-scores" id="gameover-scores"></div>
         <div class="gameover-rewards" id="gameover-rewards"></div>
+        <div class="rematch-status" id="rematch-status" role="status" aria-live="polite"></div>
         <div class="gameover-btns">
           <button class="btn-review" onclick="dismissOverlay()">查看棋盘</button>
           <button class="btn-review" id="btn-enter-replay" onclick="enterReplay()">复盘</button>
-          <button class="btn-restart" onclick="requestRestart()">再来一局</button>
+          <button class="btn-restart" id="gameover-nextmatch" onclick="quickMatchNext()" style="display:none">匹配下一局</button>
+          <button class="btn-restart" id="gameover-restart" onclick="requestRestart()">再来一局</button>
+          <button class="btn-review" id="gameover-lobby" onclick="leaveRoom()">返回大厅</button>
         </div>
       </div>
     </div>
@@ -643,8 +790,12 @@
         <button class="btn-outline" style="padding:4px 10px;font-size:0.8rem;" onclick="exitReplay()">退出复盘</button>
       </div>
     </div>
-    <div id="restart-bar" style="display:none;justify-content:center;padding:8px 0;gap:12px;">
-      <button class="btn-restart" onclick="requestRestart()">再来一局</button>
+    <div id="restart-bar" class="gameover-actions" style="display:none">
+      <div class="rematch-status rematch-status-bar" id="restart-rematch-status"
+           role="status" aria-live="polite" hidden></div>
+      <button class="btn-outline" id="restart-bar-nextmatch" onclick="quickMatchNext()" style="display:none">匹配下一局</button>
+      <button class="btn-restart" id="restart-bar-restart" onclick="requestRestart()">再来一局</button>
+      <button class="btn-review" onclick="leaveRoom()">返回大厅</button>
     </div>
     <div class="board-footer" id="board-footer">15×15 标准五子棋 · 黑棋先手</div>
   </div>
@@ -671,8 +822,8 @@
 
 </main>
 
-<script src="js/games.js?v=76"></script>
-<script src="app.js?v=76"></script>
+<script src="js/games.js?v=97"></script>
+<script src="app.js?v=97"></script>
 </body>
 </html>
 

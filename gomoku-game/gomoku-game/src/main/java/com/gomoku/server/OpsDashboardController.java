@@ -1,6 +1,7 @@
 package com.gomoku.server;
 
 import com.gomoku.game.OpsMetricsService;
+import com.gomoku.game.ProductAnalyticsService;
 import com.gomoku.game.RoomManager;
 import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
@@ -20,11 +21,14 @@ import java.util.Map;
 public class OpsDashboardController {
 
     private final OpsMetricsService metrics;
+    private final ProductAnalyticsService analytics;
     private final RoomManager rooms;
     private final AdminGuard adminGuard;
 
-    public OpsDashboardController(OpsMetricsService metrics, RoomManager rooms, AdminGuard adminGuard) {
+    public OpsDashboardController(OpsMetricsService metrics, ProductAnalyticsService analytics,
+                                  RoomManager rooms, AdminGuard adminGuard) {
         this.metrics = metrics;
+        this.analytics = analytics;
         this.rooms = rooms;
         this.adminGuard = adminGuard;
     }
@@ -39,6 +43,7 @@ public class OpsDashboardController {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("realtime", rooms.getStats());
         body.put("metrics", metrics.overview(days));
+        body.put("funnel", analytics.overview(days));
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(body);
     }
 }

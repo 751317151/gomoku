@@ -1,5 +1,11 @@
 server:
   port: 9000
+  # 发布/重启时先停止接收新请求并等待在途请求结束，避免对局结算写到一半被 SIGKILL。
+  shutdown: graceful
+
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
 
 netty:
   port: 9001

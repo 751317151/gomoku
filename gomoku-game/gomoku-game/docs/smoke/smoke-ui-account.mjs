@@ -78,13 +78,16 @@ class Cdp {
   const name = 'ui' + Date.now().toString(36);
   await cdp.send('Page.navigate', { url: APP });
   await waitUntil(() => cdp.eval("typeof switchAuthTab === 'function' && !!document.getElementById('tab-register')"), '登录页脚本就绪');
+  // 等首屏 restoreAccount 的异步请求结束后再切页签，避免它晚到把注册表单重置成游客态。
+  await waitUntil(() => cdp.eval("typeof restoreAccountDone !== 'undefined' && restoreAccountDone === true"), '登录态恢复请求结束');
 
   // 1. 初始为游客态，账号字段隐藏
   check('初始游客态', await cdp.eval("document.getElementById('tab-guest').classList.contains('active') && document.getElementById('account-fields').hidden"));
 
   // 2. 切到注册，字段出现、按钮文案变化
   await cdp.eval("switchAuthTab('register')");
-  check('切换到注册态', await cdp.eval("!document.getElementById('account-fields').hidden && document.getElementById('join-button').textContent.includes('注册')"));
+  check('切换到注册态', await cdp.eval("!document.getElementById('account-fields').hidden && document.getElementById('join-button').textContent.includes('注册')"),
+    await cdp.eval("JSON.stringify({hidden:document.getElementById('account-fields').hidden,button:document.getElementById('join-button').textContent,tab:document.getElementById('tab-register').className})"));
 
   // 3. 填用户名密码，点注册
   await cdp.eval(`document.getElementById('player-name').value = '账号UI测试';

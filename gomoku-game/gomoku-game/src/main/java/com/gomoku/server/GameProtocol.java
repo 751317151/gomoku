@@ -39,6 +39,7 @@ public final class GameProtocol {
     public static final byte TYPE_END_TURN       = 13;  // 结束回合（卡牌等）
     public static final byte TYPE_CHAT           = 6;
     public static final byte TYPE_RESTART        = 7;
+    public static final byte TYPE_CANCEL_RESTART = 14;
     public static final byte TYPE_LEAVE          = 8;
     public static final byte TYPE_RECONNECT      = 9;
     public static final byte TYPE_SURRENDER      = 10;

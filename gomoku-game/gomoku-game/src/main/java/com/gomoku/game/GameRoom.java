@@ -57,6 +57,8 @@ public class GameRoom {
     }
 
     private static final int AI_DELAY_MS = 600;
+    /** 多人再来一局的确认窗口；给每个座位留出看结算和反应的时间 */
+    static final int REMATCH_WINDOW_SECONDS = 60;
     /** 一回合多行动时，AI 每步之间的小间隔（让前端能看到过程） */
     private static final int AI_STEP_DELAY_MS = 700;
     /** AI 单回合动作上限（安全阀） */
@@ -85,8 +87,13 @@ public class GameRoom {
     private volatile Player currentPlayer;
     private volatile Player winner;
     private String lastGameOverJson;
+    /** 本局结束原因（机器可读），用于结算解释与复盘，不依赖中文文案猜测。 */
+    private volatile FinishReason finishReason = FinishReason.NORMAL;
     private final int targetPlayers;
     private final java.util.Set<String> restartVotes = new java.util.HashSet<>();
+    /** 再来一局请求的截止时间；0 表示当前没有等待中的请求 */
+    private volatile long rematchExpiresAt;
+    private ScheduledFuture<?> rematchTimeoutFuture;
     private final java.util.Set<String> forfeited = new java.util.HashSet<>();
     private final java.util.Set<String> departed = ConcurrentHashMap.newKeySet();
     private final java.util.Set<String> pendingAI = new java.util.HashSet<>();
@@ -118,8 +125,14 @@ public class GameRoom {
     private EventService eventService;
     /** 队伍标识查询（座位徽标）；未注入时为 null，房间照常工作 */
     private PartyService partyService;
+    /** 房间管理器回调（开局/终局/再来一局）；未注入时不影响对局 */
+    private RoomManager roomManager;
+    /** 上一局实际参与者；只有原班人马再开才叫「再来一局」 */
+    private volatile java.util.Set<String> finishedPlayerIds = java.util.Collections.emptySet();
     // 本局开局时间戳（用于对局记录的时长与排序）
     private volatile long gameStartedAt;
+    /** 随机开局玩法的初始盘面；固定开局为 null。 */
+    private volatile int[][] initialBoardSnapshot;
 
     public GameRoom(String roomId, GameType gameType) {
         this(roomId, gameType, false);
@@ -158,9 +171,14 @@ public class GameRoom {
             case HIGH_CARD: return new HighCardEngine();
             case BLACKJACK: return new BlackjackEngine();
             case UNO:       return new UnoBattleEngine();
+            case BOMB_CAT:  return new BombCatEngine();
             case REVERSI:  return new ReversiBoard();
             case GO9:      return new GoBoard();
             case XIANGQI:  return new XiangqiBoard();
+            case CHECKERS: return new CheckersBoard();
+            case FLIGHT_CHESS: return new FlightChessBoard();
+            case JUNGLE:   return new JungleBoard();
+            case DARK_CHESS: return new DarkChessBoard();
             case CONNECT4: return new ConnectFourBoard();
             case RPG:      return new RpgBattleEngine();
             case CARD:     return new CardBattleEngine();
@@ -178,9 +196,14 @@ public class GameRoom {
             case HIGH_CARD: return HighCardAI.INSTANCE;
             case BLACKJACK: return BlackjackAI.INSTANCE;
             case UNO:       return UnoAI.INSTANCE;
+            case BOMB_CAT:  return BombCatAI.INSTANCE;
             case REVERSI:  return ReversiAI.INSTANCE;
             case GO9:      return GoAI.INSTANCE;
             case XIANGQI:  return XiangqiAI.INSTANCE;
+            case CHECKERS: return CheckersAI.INSTANCE;
+            case FLIGHT_CHESS: return FlightChessAI.INSTANCE;
+            case JUNGLE:   return JungleAI.INSTANCE;
+            case DARK_CHESS: return DarkChessAI.INSTANCE;
             case CONNECT4: return ConnectFourAI.INSTANCE;
             case RPG:      return RpgAI.INSTANCE;
             case CARD:     return CardAI.INSTANCE;
@@ -213,6 +236,10 @@ public class GameRoom {
         this.partyService = partyService;
     }
 
+    public void setRoomManager(RoomManager roomManager) {
+        this.roomManager = roomManager;
+    }
+
     private void touchActivity() {
         this.lastActivityTime = System.currentTimeMillis();
     }
@@ -224,6 +251,13 @@ public class GameRoom {
     // ============ 状态语义方法 ============
 
     public boolean canJoin() { return state == State.WAITING && players.size() < targetPlayers; }
+    /** 只有公开、仍在等人、未满且没有掉线人类席位的房间才能进入快速匹配。 */
+    public boolean isAvailableForMatching() {
+        return !isPrivateRoom()
+                && state == State.WAITING
+                && !isFull()
+                && players.stream().noneMatch(p -> !p.isAi() && !p.isConnected());
+    }
     public boolean canMove() { return state == State.PLAYING; }
     public boolean canRestart() { return state == State.FINISHED; }
     public boolean canSurrender() { return state == State.PLAYING; }
@@ -370,14 +404,22 @@ public class GameRoom {
     private void startGame() {
         state = State.PLAYING;
         lastGameOverJson = null;
+        finishReason = FinishReason.NORMAL;
         cancelForfeits();
         roundCount++;
         moveEffectsHistory.clear();
         restartVotes.clear();
+        cancelRematchTimeout();
+        rematchExpiresAt = 0;
         forfeited.clear();
         pendingAI.clear();
         gameStartedAt = System.currentTimeMillis();
         touchActivity();
+        boolean sameRoster = !finishedPlayerIds.isEmpty()
+                && players.stream().allMatch(p -> finishedPlayerIds.contains(p.getId()));
+        if (sameRoster) notifyManagerRematch();
+        finishedPlayerIds = java.util.Collections.emptySet();
+        notifyManagerStarted();
 
         // 清掉上一局的 ELO 变化，避免终局面板显示过期分数
         for (Player p : players) {
@@ -413,6 +455,12 @@ public class GameRoom {
             }
         }
         engine.reset();
+        initialBoardSnapshot = engine instanceof BoardGameEngine
+                ? ((BoardGameEngine) engine).getInitialBoardSnapshot() : null;
+        // reset() 可能直接跳过开局不可行动的座位（例如 21 点首手即为天然
+        // 21 点，引擎会把 currentTurn 推到下一位）。房间的行动者必须以
+        // 引擎初始化后的真实回合为准，否则合法的首位指令会被误拒，房间卡死。
+        currentPlayer = findPlayerByStone(engine.getCurrentTurn());
 
         // 非棋盘玩法没有棋子，但战斗日志与结算文案要用真实昵称，
         // 所以在分好方之后再注入一次（reset 会把名字重置成默认的「红方/蓝方」）。
@@ -420,6 +468,11 @@ public class GameRoom {
         // 这样加新玩法不用回这里改代码。
         for (Player p : players) {
             engine.setPlayerName(p.getStone(), p.getName());
+        }
+        // 飞行棋的当前骰子在 reset 时抛出；名字注入后再同步一次，
+        // 保证首个回合的「无棋可走自动跳过」日志使用真实昵称。
+        if (engine instanceof FlightChessBoard) {
+            ((FlightChessBoard) engine).beginTurnRoll();
         }
 
         // 初始化计时器（时限由引擎定义）
@@ -646,11 +699,11 @@ public class GameRoom {
             if (!canMove()) return false;
             if (!acceptsAction(player, expectedVersion)) return false;
             if (!player.getId().equals(currentPlayer.getId())) return false;
+            int previousRound = engine.getActionRound();
             if (!engine.pass(player.getStone())) return false;
-            resetActionClocks();
+            refreshActionClocks(previousRound, true);
             touchActivity();
             moveEffectsHistory.add(new ArrayList<>(engine.getLastMoveEffects()));
-
 
             broadcastMove(player, GameEngine.PASS_MOVE_ROW, GameEngine.PASS_MOVE_ROW, true);
 
@@ -660,6 +713,11 @@ public class GameRoom {
                 endGameByEngine();
             } else {
                 currentPlayer = findPlayerByStone(engine.getCurrentTurn());
+                // 飞行棋跳过并自动掷骰后，下一位仍可能无棋可走；
+                // AI 全自动推进，真人则看到「跳过」按钮并显式提交。
+                if (engine instanceof FlightChessBoard && currentPlayer != null && currentPlayer.isAi()) {
+                    autoSkipIfStuck((FlightChessBoard) engine);
+                }
                 if (currentPlayer != null && currentPlayer.isAi()) {
                     triggerAIMove();
                 }
@@ -668,6 +726,14 @@ public class GameRoom {
         } finally {
             lock.writeLock().unlock();
         }
+    }
+
+    /**
+     * 结算原因由服务端区分，客户端不能仅凭胜负猜测是五连、认输还是超时。
+     * 保留原有 reason 文案供存档/日志使用，另下发稳定的机器可读枚举。
+     */
+    private enum FinishReason {
+        NORMAL, SURRENDER, TIMEOUT, DISCONNECT, LEFT, DRAW
     }
 
     /**
@@ -704,9 +770,28 @@ public class GameRoom {
                 MoveCommand command = ai.decide(engine, actor.getStone(), aiDifficulty);
                 if (command != null && handleCommand(actor, command, -1)) return;
                 if (gameType == GameType.GO9) handlePass(actor);
+                else if (engine instanceof FlightChessBoard) autoSkipIfStuck((FlightChessBoard) engine);
                 else if (!engine.autoEndsTurn() && !engine.simultaneousTurn()) handleEndTurn(actor);
             } finally { lock.writeLock().unlock(); }
         }, AI_DELAY_MS, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * 飞行棋某个座位掷出无棋可走的点数时，引擎已在掷骰阶段自动轮转到下一位；
+     * 但若 AI 没有返回指令，房间仍停在旧座位会卡住。这里主动把「当前无合法走法」
+     * 的局面推进一步：掷骰并轮转，直到出现可行动座位。
+     */
+    private void autoSkipIfStuck(FlightChessBoard flight) {
+        if (!flight.legalMoves(flight.getCurrentTurn()).isEmpty()) return;
+        Player skipped = currentPlayer;
+        if (!flight.skipTurn(flight.getCurrentTurn())) return;
+        // 跳过也是一手，必须与 moveHistory 同步记录空效果，否则复盘滑块会整体错位。
+        moveEffectsHistory.add(new ArrayList<>(engine.getLastMoveEffects()));
+        resetActionClocks();
+        touchActivity();
+        currentPlayer = findPlayerByStone(engine.getCurrentTurn());
+        broadcastMove(skipped, -1, -1, true);
+        if (currentPlayer != null && currentPlayer.isAi()) triggerAIMove();
     }
 
     // ============ 计时器 ============
@@ -748,6 +833,7 @@ public class GameRoom {
             broadcastTimerSync();
             long remaining = players.stream().filter(p -> !forfeited.contains(p.getId())).count();
             if (engine.simultaneousTurn() && !expired.isEmpty() && expired.size() == remaining) {
+                finishReason = FinishReason.TIMEOUT;
                 endGame(null, "所有玩家同时超时，本局平局", null);
                 return;
             }
@@ -900,10 +986,20 @@ public class GameRoom {
         // 连线只有棋盘类才有（五子连珠/四连）；RPG 等玩法终止局时拿不到也不想拿
         int[][] winLine = engine instanceof BoardGameEngine
                 ? ((BoardGameEngine) engine).getWinLine() : null;
+        // 认输/超时/断线也可能让引擎进入「只剩最后一人」的终局。
+        // 此时必须保留调用方已经写入的结束原因，否则结算与记录会把
+        // 对手退出误报为正常完赛；只有从未设置过原因时才落到 NORMAL/DRAW。
+        if (finishReason == FinishReason.NORMAL) {
+            finishReason = winnerSide == null ? FinishReason.DRAW : FinishReason.NORMAL;
+        }
         endGame(winnerPlayer, reason, winLine);
     }
 
     private void endGame(Player winnerPlayer, String reason, int[][] winLine) {
+        FinishReason resolvedReason = finishReason;
+        if (winnerPlayer == null && resolvedReason == FinishReason.NORMAL) {
+            resolvedReason = FinishReason.DRAW;
+        }
         cancelTurnTimer();
         cancelForfeits();
         state = State.FINISHED;
@@ -966,6 +1062,12 @@ public class GameRoom {
         dataMap.put("eloChange", eloChange);
         dataMap.put("winningSides", winningSides);
         dataMap.put("drawingSides", drawingSides);
+        // 结算消息可能被重连恢复或缓存到客户端；房间可见性必须随终局一起下发，
+        // 不能依赖前端在进房时记住的临时标记。
+        dataMap.put("privateRoom", privateRoom);
+        dataMap.put("aiSeats", (int) players.stream().filter(Player::isAi).count());
+        dataMap.put("finishReason", resolvedReason.name());
+        dataMap.put("forfeitedPlayerIds", new ArrayList<>(forfeited));
         // 21 点可能出现「有庄家、但所有玩家都没赢」的决胜局：此时不能把所有人当平局。
         dataMap.put("decisiveNoWinner", gameType == GameType.BLACKJACK
                 && winningSides.isEmpty() && drawingSides.isEmpty());
@@ -978,6 +1080,10 @@ public class GameRoom {
         // 对局记录（用于回放）
         dataMap.put("moveHistory", engine.getMoveHistory());
         dataMap.put("moveEffects", moveEffectsHistory);
+        // 随机开局玩法必须把开局盘面带给客户端，否则结算页/独立复盘只能从空盘开始。
+        if (initialBoardSnapshot != null) {
+            dataMap.put("initialBoard", copyBoard(initialBoardSnapshot));
+        }
         // 结算时生效的限时活动：客户端据此在结算页解释多出来的经验
         EventService.Event activeEvent = eventService == null
                 ? null : eventService.activeFor(gameType, System.currentTimeMillis());
@@ -996,6 +1102,13 @@ public class GameRoom {
         // 先写入内存索引再广播：客户端收到终局后会立刻查询成长/任务进度，
         // 若先广播后存档，这次查询可能漏掉本局（磁盘仍是异步写，不阻塞广播）。
         archiveGame(winnerPlayer, reason, eloBefore, activeEvent);
+        java.util.Set<String> finished = new java.util.HashSet<>();
+        // 原班人马判定必须包含 AI 座位：否则人机房永远不满足 sameRoster，
+        // 「再来一局」指标会系统性漏掉最常用的人机练习入口。
+        // 身份去重与真人事件仍由 RoomManager 过滤 AI。
+        for (Player p : players) finished.add(p.getId());
+        finishedPlayerIds = java.util.Collections.unmodifiableSet(finished);
+        notifyManagerFinished();
 
         broadcastMessage(lastGameOverJson);
         broadcastRoomInfo();
@@ -1004,6 +1117,16 @@ public class GameRoom {
         for (Player p : new ArrayList<>(players)) {
             if (departed.contains(p.getId())) removePlayer(p);
         }
+            // 所有真人已离场，即使仍有 AI 也直接回收房间，不再保持等待
+            if (players.stream().noneMatch(p -> !p.isAi() && !departed.contains(p.getId()))) {
+                for (Player spectator : new ArrayList<>(spectators)) {
+                    GameMessage kickMsg = new GameMessage(GameMessage.Type.ERROR);
+                    kickMsg.setMessage("房间内玩家已全部离开，房间解散");
+                    spectator.sendMessage(gson.toJson(kickMsg));
+                }
+                players.clear();
+                spectators.clear();
+            }
 
         logger.info("[AUDIT] game_over roomId={} gameType={} winner={} reason=\"{}\" eloChange={}", roomId,
                 gameType, winnerPlayer != null ? winnerPlayer.getId() : "draw", reason, eloChange);
@@ -1070,6 +1193,7 @@ public class GameRoom {
 
             // 棋谱（存档服务会自行截断超长棋谱）
             record.setMoveHistory(new ArrayList<>(engine.getMoveHistory()));
+            record.setInitialBoard(initialBoardSnapshot == null ? null : copyBoard(initialBoardSnapshot));
             List<List<int[]>> effects = new ArrayList<>(moveEffectsHistory.size());
             for (List<int[]> e : moveEffectsHistory) {
                 effects.add(new ArrayList<>(e));
@@ -1085,12 +1209,50 @@ public class GameRoom {
         }
     }
 
+    /** 上报产品事件到房间管理器；统计失败绝不影响开局/终局流程。 */
+    private void notifyManagerStarted() {
+        if (roomManager == null) return;
+        try {
+            roomManager.onGameStarted(this);
+        } catch (RuntimeException e) {
+            logger.warn("开局产品事件上报失败 roomId={}", roomId, e);
+        }
+    }
+
+    private static int[][] copyBoard(int[][] board) {
+        if (board == null) return null;
+        int[][] copy = new int[board.length][];
+        for (int r = 0; r < board.length; r++) {
+            copy[r] = board[r] == null ? null : board[r].clone();
+        }
+        return copy;
+    }
+
+    private void notifyManagerFinished() {
+        if (roomManager == null) return;
+        try {
+            roomManager.onGameFinished(this);
+        } catch (RuntimeException e) {
+            logger.warn("终局产品事件上报失败 roomId={}", roomId, e);
+        }
+    }
+
+    private void notifyManagerRematch() {
+        if (roomManager == null) return;
+        try {
+            roomManager.onRematch(this);
+        } catch (RuntimeException e) {
+            logger.warn("再来一局产品事件上报失败 roomId={}", roomId, e);
+        }
+    }
+
     public void surrender(Player player) {
         lock.writeLock().lock();
         try {
             if (!canSurrender()) return;
             Player found = findPlayerById(player.getId());
             if (found == null) return;
+            finishReason = FinishReason.SURRENDER;
             handleForfeit(found, player.getName() + " 认输");
         } finally {
             lock.writeLock().unlock();
@@ -1104,17 +1266,106 @@ public class GameRoom {
             Player found = findPlayerById(player.getId());
             if (found == null) return;
 
+            if (restartVotes.contains(found.getId())) {
+                // 网络重传或重复点击必须幂等，且不能放大成新一轮全房广播。
+                return;
+            }
             restartVotes.add(found.getId());
             boolean allReady = players.size() == targetPlayers
                     && players.stream().allMatch(p -> p.isAi() || restartVotes.contains(p.getId()));
             if (allReady) { startGame(); return; }
-            GameMessage msg = new GameMessage(GameMessage.Type.RESTART_REQUEST);
-            msg.setRoomId(roomId); msg.setPlayerName(found.getName()); msg.setPlayerId(found.getId());
-            msg.setMessage(found.getName() + " 已准备再来一局（" + restartVotes.size() + " 人确认）");
-            broadcastMessage(gson.toJson(msg));
+            if (rematchExpiresAt == 0) {
+                rematchExpiresAt = System.currentTimeMillis() + REMATCH_WINDOW_SECONDS * 1000L;
+                scheduleRematchTimeout();
+            }
+            broadcastRematchState(found.getName() + " 已准备再来一局"
+                    + "（" + restartVotes.size() + "/" + humanPlayerCount() + " 人确认）");
         } finally {
             lock.writeLock().unlock();
         }
+    }
+
+    /**
+     * 撤回再来一局准备。最后一个准备者撤回时立即结束本轮等待，
+     * 不必让其他玩家盯着一个已经没有意义的倒计时。
+     */
+    public void cancelRestart(Player player) {
+        lock.writeLock().lock();
+        try {
+            if (state != State.FINISHED || player == null) return;
+            Player found = findPlayerById(player.getId());
+            if (found == null || !restartVotes.remove(found.getId())) return;
+            if (restartVotes.isEmpty()) {
+                clearRematchWait();
+                broadcastRematchState(found.getName() + " 撤回了再来一局");
+                return;
+            }
+            broadcastRematchState(found.getName() + " 撤回了再来一局");
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    private void scheduleRematchTimeout() {
+        cancelRematchTimeout();
+        long delay = Math.max(1L, rematchExpiresAt - System.currentTimeMillis());
+        rematchTimeoutFuture = aiExecutor.schedule(() -> {
+            lock.writeLock().lock();
+            try {
+                if (state != State.FINISHED || rematchExpiresAt == 0) return;
+                if (System.currentTimeMillis() < rematchExpiresAt) return;
+                clearRematchWait();
+                broadcastRematchState("再来一局等待超时，已回到结算页");
+            } finally {
+                lock.writeLock().unlock();
+            }
+        }, delay, TimeUnit.MILLISECONDS);
+    }
+
+    private void cancelRematchTimeout() {
+        ScheduledFuture<?> future = rematchTimeoutFuture;
+        rematchTimeoutFuture = null;
+        if (future != null) future.cancel(false);
+    }
+
+    private void clearRematchWait() {
+        restartVotes.clear();
+        rematchExpiresAt = 0;
+        cancelRematchTimeout();
+    }
+
+    /** 电脑自动跟随，不参与准备确认。 */
+    private int humanPlayerCount() {
+        return (int) players.stream().filter(p -> !p.isAi()).count();
+    }
+
+    private RematchStateDto buildRematchState() {
+        RematchStateDto dto = new RematchStateDto();
+        List<String> ready = new ArrayList<>();
+        List<String> waiting = new ArrayList<>();
+        for (Player p : players) {
+            if (p.isAi() || departed.contains(p.getId())) continue;
+            if (restartVotes.contains(p.getId())) ready.add(p.getId());
+            else waiting.add(p.getId());
+        }
+        dto.setReadyPlayerIds(ready);
+        dto.setWaitingPlayerIds(waiting);
+        dto.setHumanPlayers(ready.size() + waiting.size());
+        boolean pending = state == State.FINISHED && rematchExpiresAt > 0
+                && System.currentTimeMillis() < rematchExpiresAt;
+        dto.setPending(pending);
+        dto.setExpiresAt(pending ? rematchExpiresAt : null);
+        return dto;
+    }
+
+    private void broadcastRematchState(String message) {
+        broadcastRoomInfo();
+        if (message == null || message.isEmpty()) return;
+        GameMessage msg = new GameMessage(GameMessage.Type.RESTART_REQUEST);
+        msg.setRoomId(roomId);
+        msg.setMessage(message);
+        msg.setData(gson.toJson(buildRematchState()));
+        broadcastMessage(gson.toJson(msg));
     }
 
     public void handleChat(Player player, String message) {
@@ -1183,6 +1434,13 @@ public class GameRoom {
     /**
      * 显式离开房间（LEAVE 消息 / 清理任务）：立即移除席位
      */
+    /**
+     * 显式离开房间（LEAVE / 清理任务）。
+     *
+     * 终局房里的离场必须只移除该玩家，不能再把椅子状态改成 WAITING：
+     * 留下的人仍应停留在结算页；若房间转成公开等待房，离开者下一条 JOIN
+     * 会立刻匹配回原房，并把仍在看结算的对手强行拉进下一局。
+     */
     public void removePlayer(Player player) {
         lock.writeLock().lock();
         try {
@@ -1201,6 +1459,20 @@ public class GameRoom {
 
             if (!players.contains(player)) return;
             departed.add(player.getId());
+            boolean otherHumanOnResult = state == State.FINISHED && players.stream()
+                    .anyMatch(p -> !p.isAi() && !p.getId().equals(player.getId()) && !departed.contains(p.getId()));
+            if (otherHumanOnResult) {
+                players.remove(player);
+                departed.remove(player.getId());
+                if (players.stream().noneMatch(p -> !p.isAi())) {
+                    players.clear();
+                }
+                for (int i = 0; i < players.size(); i++) players.get(i).setStone(i + 1);
+                touchActivity();
+                broadcastRoomInfo();
+                logger.info("[AUDIT] player_leave_finished roomId={} playerId={}", roomId, player.getId());
+                return;
+            }
             if (state == State.PLAYING) {
                 handleForfeit(player, player.getName() + " 离开房间");
                 // 全部真人已显式离场时停止剩余电脑局，避免后台继续排 AI 与计时任务。
@@ -1223,9 +1495,10 @@ public class GameRoom {
             state = State.WAITING;
             engine.reset();
             lastGameOverJson = null;
+            finishReason = FinishReason.NORMAL;
             currentPlayer = null;
             pendingAI.clear();
-            restartVotes.clear();
+            clearRematchWait();
             cancelForfeits();
             moveEffectsHistory.clear();
             cancelTurnTimer();
@@ -1257,17 +1530,37 @@ public class GameRoom {
 
     private void handleForfeit(Player player, String reason) {
         if (!forfeited.add(player.getId())) return;
+        if (reason.contains("认输")) finishReason = FinishReason.SURRENDER;
+        else if (reason.contains("超时") || reason.contains("时间耗尽")) finishReason = FinishReason.TIMEOUT;
+        else if (reason.contains("断线")) finishReason = FinishReason.DISCONNECT;
+        else if (reason.contains("离开")) finishReason = FinishReason.LEFT;
         int previousRound = engine.getActionRound();
         if (engine.forfeit(player.getStone())) {
             if (engine.isOver()) endGameByEngine();
             else {
                 currentPlayer = findPlayerByStone(engine.getCurrentTurn());
                 refreshActionClocks(previousRound, true);
+                // forfeit 也可能给引擎追加一手（如多人淘汰记录），与手数保持逐手对齐。
+                if (moveEffectsHistory.size() < engine.getMoveCount()) {
+                    while (moveEffectsHistory.size() < engine.getMoveCount()) {
+                        moveEffectsHistory.add(new ArrayList<>(engine.getLastMoveEffects()));
+                    }
+                }
+                // 飞行棋的认输只淘汰一个座位，必须让大厅和聊天区明确看到
+                // 谁离场；普通双人局仍由终局/离开提示承担同一信息。
+                if (engine instanceof FlightChessBoard) {
+                    broadcastPlayerStatus(player.getName() + " 已退出本局", player);
+                }
                 broadcastMove(player, -1, -1, true);
                 triggerAIMove();
             }
         } else {
             // 多人引擎必须定义自己的淘汰规则，不能把第一位对手误判为唯一胜者。
+            finishReason = reason.contains("认输") ? FinishReason.SURRENDER
+                    : reason.contains("超时") || reason.contains("时间耗尽") ? FinishReason.TIMEOUT
+                    : reason.contains("断线") ? FinishReason.DISCONNECT
+                    : reason.contains("离开") ? FinishReason.LEFT
+                    : FinishReason.NORMAL;
             endGame(targetPlayers == 2 ? getOpponent(player) : null, reason, null);
         }
     }
@@ -1363,6 +1656,7 @@ public class GameRoom {
         List<PlayerInfoDto> playerDtos = new ArrayList<>();
         for (Player p : players) {
             PlayerInfoDto dto = new PlayerInfoDto(p.getId(), p.getName(), p.getStone(), p.getWins(), p.getElo());
+            dto.setAi(p.isAi());
             // 段位徽章挂在座位上：多人房里一眼看出谁是老玩家，也把「赛季」变成可见身份
             if (seasonService != null && !p.isAi()) {
                 dto.setTier(seasonService.tierOf(p.getIdentityId()));
@@ -1384,7 +1678,15 @@ public class GameRoom {
         data.setCurrentTurn(engine.getCurrentTurn());
         // 非棋盘玩法把状态挂在房间数据里，GAME_START 就能画出完整面板
         data.setView(engine.getViewState(viewerSide));
+        data.setRematch(buildRematchState());
+        applyVisibility(data);
         return data;
+    }
+
+    private void applyVisibility(RoomDataDto data) {
+        data.setPrivateRoom(privateRoom);
+        data.setAiSeats((int) players.stream().filter(Player::isAi).count());
+        data.setHumanSeats((int) players.stream().filter(p -> !p.isAi()).count());
     }
 
     private GameSyncDto buildSyncData() {
@@ -1399,7 +1701,8 @@ public class GameRoom {
         // 只有棋盘类才填 board；非棋盘玩法（RPG/卡牌等）改填 view，
         // 前端按 gameType 选渲染模块，不会去读不存在的盘面。
         if (engine instanceof BoardGameEngine) {
-            data.setBoard(((BoardGameEngine) engine).getBoardSnapshot());
+            // 暗棋等隐藏信息玩法会覆写 visible 版本；绝不能把内部真实盘面直接下发。
+            data.setBoard(((BoardGameEngine) engine).getVisibleBoardSnapshot());
         }
         data.setView(engine.getViewState(viewerSide));
         data.setMoveCount(engine.getMoveCount());
@@ -1494,6 +1797,7 @@ public class GameRoom {
     public void notifyShutdown() {
         cancelTurnTimer();
         cancelForfeits();
+        cancelRematchTimeout();
         GameMessage msg = new GameMessage(GameMessage.Type.ERROR);
         msg.setMessage("服务器正在关闭，请稍后重连");
         broadcastMessage(gson.toJson(msg));
@@ -1521,6 +1825,18 @@ public class GameRoom {
     public int getPlayerCount() { return players.size(); }
     public int getSpectatorCount() { return spectators.size(); }
     public int getTargetPlayers() { return targetPlayers; }
+    /** 当前重开截止时间；无等待时为 0。 */
+    public long getRematchDeadline() {
+        lock.readLock().lock();
+        try { return rematchExpiresAt; }
+        finally { lock.readLock().unlock(); }
+    }
+    /** 当前已准备重开的真人玩家数（电脑不计入）。 */
+    public int getRestartVoteCount() {
+        lock.readLock().lock();
+        try { return restartVotes.size(); }
+        finally { lock.readLock().unlock(); }
+    }
     public boolean isFull() { return players.size() >= targetPlayers; }
     public int getAiDifficulty() { return aiDifficulty; }
 }

@@ -27,6 +27,8 @@ public class BlackjackEngine implements GameEngine {
 
     private final Random random;
     private final List<Integer> deck = new ArrayList<>();
+    /** 非 null 时只供测试重放固定牌序；生产房间保持 null。 */
+    private List<Integer> injectedDeck;
     @SuppressWarnings("unchecked")
     private final List<Integer>[] hands = new List[MAX_PLAYERS + 1];
     private final List<Integer> dealer = new ArrayList<>();
@@ -50,6 +52,16 @@ public class BlackjackEngine implements GameEngine {
         reset();
     }
 
+    /** 仅供回归测试构造确定性牌序；正常房间始终使用随机洗牌。 */
+    void setDeckForTest(List<Integer> cards) {
+        injectedDeck = new ArrayList<>();
+        // drawCard() 从末尾抽取；测试按实际发牌顺序传入，转成栈序。
+        for (int i = cards.size() - 1; i >= 0; i--) injectedDeck.add(cards.get(i));
+        deck.clear();
+        deck.addAll(injectedDeck);
+        resetFromCurrentDeck();
+    }
+
     @Override public GameType type() { return GameType.BLACKJACK; }
 
     @Override
@@ -61,6 +73,12 @@ public class BlackjackEngine implements GameEngine {
     @Override
     public void reset() {
         deck.clear();
+        if (injectedDeck == null) buildDeck();
+        else deck.addAll(injectedDeck);
+        resetFromCurrentDeck();
+    }
+
+    private void resetFromCurrentDeck() {
         dealer.clear();
         history.clear();
         lastEffects.clear();
@@ -72,7 +90,6 @@ public class BlackjackEngine implements GameEngine {
             busted[i] = false;
             natural[i] = false;
         }
-        buildDeck();
         for (int side = 1; side <= playerCount; side++) {
             hands[side].add(drawCard());
             hands[side].add(drawCard());
@@ -96,7 +113,11 @@ public class BlackjackEngine implements GameEngine {
     }
 
     private int drawCard() {
-        if (deck.size() < 20) buildDeck();
+        // 固定牌序可能只有十几张；测试期间不能用「少于 20 张」触发的
+        // 自动换靴把注入牌序冲掉。正常牌堆仍按原有阈值换新靴。
+        // 固定牌序抽完后（例如庄家继续补牌）回落到正常新靴，
+        // 避免测试辅助反而制造越界异常。
+        if (deck.isEmpty() || (deck.size() < 20 && injectedDeck == null)) buildDeck();
         return deck.remove(deck.size() - 1);
     }
 

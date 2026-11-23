@@ -43,6 +43,7 @@ public class BinaryMessageEncoder extends MessageToMessageEncoder<GameMessage> {
             case GameProtocol.TYPE_PASS:
             case GameProtocol.TYPE_END_TURN:
             case GameProtocol.TYPE_RESTART:
+            case GameProtocol.TYPE_CANCEL_RESTART:
             case GameProtocol.TYPE_SURRENDER:
                 // 无 payload
                 break;
@@ -58,6 +59,10 @@ public class BinaryMessageEncoder extends MessageToMessageEncoder<GameMessage> {
                 writeNullableString(buf, msg.getGameType());
                 writeNullableString(buf, msg.getDeck());
                 writeNullableString(buf, msg.getDeckCards());
+                buf.writeBoolean(msg.isCreateRoom());
+                buf.writeByte(msg.getPlayerCount());
+                // 保持旧帧兼容：新增字段放在尾部；旧客户端不发则由服务端按 QUICK 处理
+                writeNullableString(buf, msg.getEntryMode());
                 break;
 
             case GameProtocol.TYPE_SPECTATE:
@@ -156,6 +161,7 @@ public class BinaryMessageEncoder extends MessageToMessageEncoder<GameMessage> {
                 writeNullableString(buf, msg.getPlayerName());
                 writeNullableString(buf, msg.getMessage());
                 writeNullableString(buf, msg.getPlayerId());
+                writeNullableString(buf, msg.getData());
                 break;
 
             case GameProtocol.TYPE_ERROR:
@@ -205,6 +211,7 @@ public class BinaryMessageEncoder extends MessageToMessageEncoder<GameMessage> {
             case END_TURN:        return GameProtocol.TYPE_END_TURN;
             case CHAT:            return GameProtocol.TYPE_CHAT;
             case RESTART:         return GameProtocol.TYPE_RESTART;
+            case CANCEL_RESTART:  return GameProtocol.TYPE_CANCEL_RESTART;
             case LEAVE:           return GameProtocol.TYPE_LEAVE;
             case RECONNECT:       return GameProtocol.TYPE_RECONNECT;
             case SURRENDER:       return GameProtocol.TYPE_SURRENDER;

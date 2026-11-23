@@ -121,6 +121,29 @@ class BlackjackEngineTest {
         room.notifyShutdown();
     }
 
+    @Test
+    void roomStartsWithEngineSeatWhenFirstSeatBeginsWithNaturalBlackjack() {
+        GameRoom room = new GameRoom("ROOM-BJ-NATURAL", GameType.BLACKJACK, true, 2);
+        // 发牌顺序：甲黑杰克、乙普通牌、庄家普通牌。首位在 reset() 时
+        // 已自动停牌，引擎当前行动者是 2 号座位。
+        ((BlackjackEngine) room.getEngine()).setDeckForTest(List.of(
+                card(0, 1), card(0, 10),
+                card(1, 2), card(1, 3),
+                card(2, 4), card(2, 5)));
+
+        Player first = new Player("bj-natural-a", "甲", null);
+        Player second = new Player("bj-natural-b", "乙", null);
+        room.addPlayer(first);
+        room.addPlayer(second);
+
+        assertEquals(2, room.getEngine().getCurrentTurn(),
+                "1 号首手黑杰克后，引擎应直接轮到 2 号");
+        assertFalse(room.handleEndTurn(first), "已自动停牌的 1 号不应被房间当成当前行动者");
+        assertTrue(room.handleEndTurn(second), "房间行动者必须与引擎当前座位一致");
+        assertEquals(GameRoom.State.FINISHED, room.getState());
+        room.notifyShutdown();
+    }
+
     private static int card(int suit, int rank) { return suit * 13 + (rank - 1); }
 
     @SuppressWarnings("unchecked")

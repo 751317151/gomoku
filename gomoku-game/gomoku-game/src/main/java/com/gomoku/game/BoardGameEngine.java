@@ -48,6 +48,27 @@ public interface BoardGameEngine extends GameEngine {
     int[][] getBoardSnapshot();
 
     /**
+     * 下发客户端的盘面快照。
+     *
+     * 信息全公开的玩法直接复用 {@link #getBoardSnapshot()}；暗棋这类有背面棋子的玩法
+     * 必须覆写本方法，把未公开身份统一脱敏。房间同步包只调用这个入口，
+     * 避免「内部真实盘面」和「客户端可见盘面」混用导致底牌泄露。
+     */
+    default int[][] getVisibleBoardSnapshot() {
+        return getBoardSnapshot();
+    }
+
+    /**
+     * 开局盘面（用于回放重建）。
+     *
+     * 固定开局的玩法返回 null 即可，前端会用模块自带的 initialBoard()；
+     * 暗棋这类随机开局必须返回开局快照，否则复盘只能从空盘开始。
+     */
+    default int[][] getInitialBoardSnapshot() {
+        return null;
+    }
+
+    /**
      * 最后一手的连线（五子棋五星连珠 / 四子棋四连），无连线返回 null。
      * 围棋、象棋这类不吃「连线」概念的玩法保持 null。
      */

@@ -6,6 +6,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.PostConstruct;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
@@ -307,10 +308,34 @@ public class ModerationService {
             store.sanctions = new LinkedHashMap<>(sanctions);
             Path temporary = path.resolveSibling(path.getFileName() + ".tmp");
             Files.writeString(temporary, gson.toJson(store), StandardCharsets.UTF_8);
-            try { Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
-            catch (AtomicMoveNotSupportedException e) { Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING); }
+            moveIntoPlace(temporary, path);
         } catch (Exception e) {
             throw new IllegalStateException("无法保存治理数据", e);
+        }
+    }
+
+    /**
+     * Windows 上杀毒/索引扫描会短暂占用刚写完的临时文件，原子替换随即报 AccessDenied。
+     * 这不是数据损坏，短暂重试即可；连续失败仍然抛出，由调用方明确感知，绝不静默丢处置。
+     */
+    private static void moveIntoPlace(Path temporary, Path path) throws IOException {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                try {
+                    Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                } catch (AtomicMoveNotSupportedException e) {
+                    Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING);
+                }
+                return;
+            } catch (FileSystemException e) {
+                if (attempt >= 3) throw e;
+                try {
+                    Thread.sleep(25L * attempt);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                }
+            }
         }
     }
 }

@@ -11,7 +11,7 @@ import java.util.*;
  * 运营数据：日活趋势、留存、玩法热度与时段分布。
  *
  * 为什么从对局记录派生而不是另建埋点表：
- * - 项目已有 5000 条摘要索引，覆盖足够长的窗口，且「打了一局」是当前唯一有意义的活跃信号
+ * - 从完整历史中按日期窗口取摘要，不再假设大厅 5000 条索引能覆盖统计窗口；「打了一局」是当前的活跃信号
  *   （大厅停留时长没有采集，凭空造一个数字只会误导运营）。
  * - 纯派生意味着零迁移、零额外写入，也不会因为埋点丢事件而失真。
  *
@@ -42,11 +42,12 @@ public class OpsMetricsService {
      */
     public Map<String, Object> overview(int days) {
         int window = Math.max(1, Math.min(days, 90));
-        List<GameRecord> all = records.snapshotRecentRecords();
         long now = now();
         ZoneId zone = zone();
         LocalDate today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate();
         LocalDate from = today.minusDays(window - 1L);
+        List<GameRecord> all = records.recordsInWindow(from.atStartOfDay(zone).toInstant().toEpochMilli(),
+                today.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli());
 
         // 按自然日聚合：活跃身份集合、局数、玩法计数、参与人次
         Map<LocalDate, Set<String>> dailyUsers = new LinkedHashMap<>();

@@ -234,6 +234,103 @@
     padding: 2px 4px;
   }
   .account-link:hover { color: var(--accent2); }
+
+  .account-security-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    /* 账号安全从登录页打开，必须高于 #login-screen 的 1000，否则会被遮罩盖住。 */
+    z-index: 1200;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: rgba(4, 12, 10, .82);
+    backdrop-filter: blur(5px);
+  }
+  .account-security-modal.show { display: flex; }
+  .account-security-box {
+    width: min(430px, calc(100vw - 24px));
+    max-height: 88dvh;
+    overflow-y: auto;
+    padding: 18px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: linear-gradient(160deg, #0d2a23, #071a16);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, .55);
+  }
+  .account-security-kicker {
+    margin-bottom: 3px;
+    color: var(--accent);
+    font: .64rem 'JetBrains Mono', monospace;
+    letter-spacing: .15em;
+  }
+  .account-security-identity {
+    margin-bottom: 10px;
+    padding: 9px 11px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    color: var(--text);
+    background: rgba(255, 255, 255, .03);
+    font-size: .82rem;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+  }
+  .account-security-note {
+    margin-bottom: 12px;
+    color: var(--text-dim);
+    font-size: .74rem;
+    line-height: 1.6;
+  }
+  .account-security-label {
+    display: block;
+    margin: 9px 0 5px;
+    color: var(--text-dim);
+    font-size: .72rem;
+  }
+  .account-security-input { margin-bottom: 0; padding: 10px 12px; font-size: .9rem; }
+  .account-security-status {
+    min-height: 18px;
+    margin: 9px 0 5px;
+    color: var(--text-dim);
+    font-size: .73rem;
+    line-height: 1.5;
+  }
+  .account-security-submit { padding: 12px; font-size: .88rem; letter-spacing: .04em; }
+  .account-security-wide {
+    width: 100%;
+    min-height: 44px;
+    margin-top: 8px;
+  }
+  .recovery-open {
+    display: block;
+    margin: 2px 0 8px auto;
+    font-size: .72rem;
+  }
+  .recovery-code-input {
+    font: .92rem 'JetBrains Mono', monospace;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .recovery-code-value {
+    margin: 4px 0 6px;
+    padding: 14px 12px;
+    border: 1px dashed var(--accent);
+    border-radius: 8px;
+    color: var(--accent);
+    background: rgba(0, 0, 0, .28);
+    font: 1.02rem 'JetBrains Mono', monospace;
+    letter-spacing: .13em;
+    text-align: center;
+    overflow-wrap: anywhere;
+    user-select: all;
+  }
+  .recovery-code-value:empty::before { content: '—'; color: var(--text-dim); }
+  @media (max-width: 640px) {
+    .account-security-modal { padding: 8px; }
+    .account-security-box { width: 100%; max-height: 94dvh; padding: 14px; }
+    .account-security-submit, .account-security-wide { min-height: 44px; }
+    .account-footer { flex-wrap: wrap; justify-content: flex-start; }
+  }
   @media (prefers-reduced-motion: reduce) { .account-fields { animation: none; } }
 
   .ws-url-field {
@@ -681,11 +778,18 @@
     justify-content: center;
     flex-direction: column;
     gap: 20px;
+    box-sizing: border-box;
+    padding: 20px 12px;
+    overflow-y: auto;
     z-index: 10;
     backdrop-filter: blur(6px);
   }
 
   #gameover-overlay.show { display: flex; }
+  /* 内容变高时（手机 + 玩法解释 + 奖励 + 重开进度）从顶部开始滚动，
+     内容较矮时仍保持垂直居中。auto 外边距在溢出时会归零，不会把顶部裁掉。 */
+  #gameover-overlay.show > .gameover-result { margin-top: auto; }
+  #gameover-overlay.show > .gameover-btns { margin-bottom: auto; }
 
   .gameover-result {
     font-size: 2.5rem;
@@ -698,6 +802,43 @@
   .gameover-result.draw { color: var(--accent2); }
 
   .gameover-sub { color: var(--text-dim); font-size: 0.9rem; max-width: 90%; text-align: center; overflow-wrap: anywhere; }
+
+  /* 结算解释要跟着玩法走：同一组按钮下，玩家需要知道这局为什么赢/输、下次做什么。 */
+  .gameover-insight {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 4px 10px;
+    box-sizing: border-box;
+    width: min(88%, 560px);
+    padding: 10px 14px;
+    border: 1px solid rgba(212, 168, 67, .28);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, .04);
+    text-align: left;
+  }
+
+  .gameover-insight[hidden] { display: none; }
+  .gameover-insight-label {
+    color: var(--accent);
+    font-size: .72rem;
+    font-weight: 700;
+    letter-spacing: .08em;
+    white-space: nowrap;
+  }
+  .gameover-insight-text {
+    color: var(--text-dim);
+    font-size: .8rem;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+  }
+  .gameover-insight-tip {
+    grid-column: 1 / -1;
+    padding-top: 5px;
+    border-top: 1px solid rgba(255, 255, 255, .07);
+    color: var(--text);
+    font-size: .78rem;
+    line-height: 1.6;
+  }
 
   .gameover-scores {
     display: flex;
@@ -756,9 +897,46 @@
 
   .gameover-btns {
     display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
     gap: 12px;
     margin-top: 4px;
   }
+
+  /* 结算后可继续再开，也要能直接换玩法；两个出口都不能藏在浮层背后。 */
+  .gameover-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+    padding: 10px 0;
+  }
+
+  .gameover-actions .btn-restart,
+  .gameover-actions .btn-review {
+    min-height: 44px;
+  }
+
+  /* 再来一局是协作动作：先点的人需要看到谁还没准备，而不是只看一个按钮 */
+  .rematch-status {
+    flex: 1 1 100%;
+    box-sizing: border-box;
+    max-width: min(88%, 460px);
+    margin-inline: auto;
+    padding: 8px 14px;
+    border: 1px solid rgba(212, 168, 67, .45);
+    border-radius: 10px;
+    background: rgba(212, 168, 67, .08);
+    color: var(--text);
+    text-align: center;
+    line-height: 1.6;
+  }
+
+  .rematch-title { color: var(--accent); font-size: .92rem; font-weight: 700; }
+  .rematch-detail { color: var(--text-dim); font-size: .8rem; overflow-wrap: anywhere; }
+  .rematch-countdown { color: var(--accent2); font-size: .78rem; font-variant-numeric: tabular-nums; }
+  .rematch-status[hidden] { display: none; }
+  .rematch-status-bar { max-width: min(100%, 620px); }
 
   .btn-review {
     background: transparent;
@@ -989,7 +1167,9 @@
 
   /* ============ 游戏类型选择（大厅） ============ */
   .recovery-hint { margin: 4px 0 0; color: var(--accent); font-size: 0.78rem; }
-  .onboard-overlay { position: fixed; inset: 0; z-index: 1200; display: none; align-items: center; justify-content: center; padding: 16px; background: rgba(4,12,10,0.78); backdrop-filter: blur(5px); }
+  /* 必须高于登录页(1000)与账号安全弹层(1200)：新手引导在 DOM 中靠后，
+     同为 1200 时会盖住登录页里打开的账号安全/恢复码弹层。 */
+  .onboard-overlay { position: fixed; inset: 0; z-index: 1300; display: none; align-items: center; justify-content: center; padding: 16px; background: rgba(4,12,10,0.78); backdrop-filter: blur(5px); }
   .onboard-overlay.show { display: flex; }
   .onboard-box { width: min(430px, 100%); max-height: 90dvh; overflow-y: auto; padding: 22px; border: 1px solid var(--border); border-radius: 14px; background: linear-gradient(160deg,#0d2a23,#071a16); box-shadow: 0 24px 60px rgba(0,0,0,.55); }
   .onboard-title { font: 1.5rem Georgia,'Songti SC',serif; color: var(--accent); }
@@ -1030,7 +1210,7 @@
 
   .game-card-activity {
     position: absolute;
-    top: 10px;
+    top: 34px;
     right: 10px;
     padding: 2px 8px;
     font-size: 0.64rem;
@@ -1061,6 +1241,55 @@
     font-family: 'JetBrains Mono', monospace;
     line-height: 1.5;
   }
+
+/* 玩法卡规则入口：不改变选中状态，只用小徽章把「怎么玩」放在开局前 */
+.game-card .btn-rules {
+  position: absolute;
+    top: 6px;
+    right: 10px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(0,0,0,.18);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: .64rem;
+  cursor: pointer;
+}
+.game-card .btn-rules:hover,
+.game-card .btn-rules:focus-visible { color: var(--accent); border-color: var(--accent); }
+.game-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ============ 玩法规则弹层 ============ */
+.rules-modal { display: none; position: fixed; inset: 0; z-index: 220; align-items: center; justify-content: center; padding: 16px; background: rgba(4,12,10,.8); backdrop-filter: blur(4px); }
+.rules-modal.show { display: flex; }
+.rules-box { width: min(620px, calc(100vw - 24px)); max-height: 88dvh; display: flex; flex-direction: column; box-sizing: border-box; padding: 18px; border: 1px solid var(--border); border-radius: 12px; background: linear-gradient(160deg, #0d2a23, #071a16); box-shadow: 0 24px 60px rgba(0,0,0,.55); }
+.rules-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.rules-kicker { font-size: .68rem; letter-spacing: .16em; color: var(--accent); }
+.rules-title { margin-top: 4px; font: 1.35rem Georgia, 'Songti SC', serif; color: var(--text); }
+.rules-sub { margin-top: 4px; color: var(--text-dim); font-size: .78rem; line-height: 1.5; }
+.rules-body { margin-top: 14px; overflow-y: auto; padding-right: 4px; }
+.rules-goal, .rules-section { padding: 10px 0; border-top: 1px solid rgba(255,255,255,.07); }
+.rules-label { display: block; margin-bottom: 6px; color: var(--accent); font-size: .72rem; font-weight: 700; letter-spacing: .08em; }
+.rules-goal p { margin: 0; color: var(--text); font-size: .9rem; line-height: 1.6; }
+.rules-steps, .rules-tips { margin: 0; padding-left: 1.25rem; color: var(--text); font-size: .84rem; line-height: 1.7; }
+.rules-steps li, .rules-tips li { margin-bottom: 4px; overflow-wrap: anywhere; }
+.rules-tips { color: var(--text-dim); }
+.rules-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 12px; border-top: 1px solid var(--border); }
+.rules-meta { color: var(--text-dim); font-size: .72rem; font-family: 'JetBrains Mono', monospace; }
+.rules-solo { flex: 0 0 auto; margin: 0; padding: 8px 16px; border: none; border-radius: 6px; background: var(--accent); color: #0b1512; font-family: inherit; font-weight: 700; cursor: pointer; }
+.rules-solo:hover { background: var(--accent2); }
+.rules-open-btn { width: 100%; margin-top: 8px; padding: 5px 8px; font-size: .72rem; }
+.rules-close { flex: 0 0 auto; }
+
+@media (max-width: 600px) {
+  .rules-modal { padding: 8px; }
+  .rules-box { width: 100%; max-height: 92dvh; padding: 14px; }
+  .rules-title { font-size: 1.1rem; }
+  .rules-goal p, .rules-steps, .rules-tips { font-size: .82rem; }
+  .rules-foot { flex-direction: column; align-items: stretch; }
+  .rules-solo { width: 100%; min-height: 44px; }
+}
 
   /* ============ 排行榜页签 ============ */
   .lb-tabs {
@@ -2567,6 +2796,43 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 .dice-race-sub { color:var(--text-dim); text-align:center; font-size:.9rem; }
 .dice-choices { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
 .gem-bids { display:grid; grid-template-columns:repeat(6,1fr); gap:8px; }
+.bomb-cat-panel { display:flex; flex-direction:column; gap:14px; width:min(780px,100%); min-height:520px; padding:22px; color:#f3ecdd; background:radial-gradient(circle at 50% 0,#382321 0,#1b1718 58%,#111315 100%); border:1px solid #825047; border-radius:18px; box-sizing:border-box; box-shadow:inset 0 0 80px #0a0808; }
+.bomb-cat-head { display:flex; align-items:center; justify-content:space-between; gap:14px; }
+.bomb-cat-head > div:first-child > span { color:#e4a26c; font:.68rem monospace; letter-spacing:.18em; }
+.bomb-cat-head h2 { margin:5px 0 0; font:1.45rem Georgia,'Songti SC',serif; }
+.bomb-cat-deck { display:flex; flex-direction:column; align-items:center; min-width:72px; padding:8px; border:1px solid #735049; border-radius:10px; background:#201c1d; }
+.bomb-cat-deck b { color:#f1c570; font:1.15rem Georgia,serif; }
+.bomb-cat-deck span { color:#b9aaa3; font-size:.7rem; }
+.bomb-cat-special { display:flex; flex-direction:column; gap:8px; padding:12px; border:1px solid #d39243; border-radius:10px; background:#352316; }
+.bomb-cat-special strong { color:#ffd584; }
+.bomb-cat-special > div { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+.bomb-cat-special button { padding:9px 6px; color:#f5e3c0; background:#5b3222; border:1px solid #ba7447; border-radius:8px; cursor:pointer; }
+.bomb-cat-players { display:grid; grid-template-columns:repeat(auto-fit,minmax(105px,1fr)); gap:8px; }
+.bomb-cat-player { display:flex; flex-direction:column; gap:4px; padding:9px 10px; border:1px solid #493839; border-radius:9px; background:#211b1c; font-size:.78rem; overflow-wrap:anywhere; }
+.bomb-cat-player.is-you { border-color:#e4a26c; }
+.bomb-cat-player.is-turn { box-shadow:0 0 0 1px #f2bc58 inset; background:#2f211d; }
+.bomb-cat-player.is-out { opacity:.45; }
+.bomb-cat-player strong { color:#f1c570; font:1.35rem Georgia,serif; }
+.bomb-cat-player strong small { font:.68rem sans-serif; color:#b9aaa3; }
+.bomb-cat-player em { color:#a99c94; font-style:normal; font-size:.7rem; }
+.bomb-cat-hand-label { color:#d5c6ba; font-size:.8rem; }
+.bomb-cat-hand-label span { color:#a99c94; margin-left:7px; }
+.bomb-cat-hand { display:flex; flex-wrap:wrap; gap:9px; min-height:104px; }
+.bomb-cat-card { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; flex:0 0 76px; min-height:100px; padding:6px; color:#2a211d; background:#f2e3c6; border:2px solid #d7b989; border-radius:10px; box-shadow:0 5px 0 #0a0808; cursor:pointer; transition:transform .15s,filter .15s; }
+.bomb-cat-card span { font-size:1.45rem; }
+.bomb-cat-card strong { font-size:.76rem; }
+.bomb-cat-card small { color:#75543b; font-size:.62rem; }
+.bomb-cat-card:hover:enabled { transform:translateY(-5px); filter:brightness(1.08); }
+.bomb-cat-card:disabled { opacity:.55; cursor:default; }
+.bomb-cat-defuse { color:#d9f8ea; background:#27593f; border-color:#69c692; }
+.bomb-cat-attack { background:#f0b2a6; border-color:#d66e5c; }
+.bomb-cat-bomb { color:#fff4da; background:#6f2623; border-color:#c94d40; }
+.bomb-cat-peek { padding:10px; border:1px solid #665147; border-radius:9px; background:#252022; color:#d8c5b3; font-size:.78rem; }
+.bomb-cat-peek > div:first-child { display:flex; justify-content:space-between; gap:8px; }
+.bomb-cat-peek-cards { display:flex; flex-wrap:wrap; gap:7px; margin-top:8px; }
+.bomb-cat-peek-card { padding:5px 8px; border-radius:7px; color:#2a211d; background:#f2e3c6; }
+.bomb-cat-actions { display:flex; flex-wrap:wrap; gap:9px; }
+.bomb-cat-actions button { min-height:44px; }
 .dice-choice { display:flex; flex-direction:column; gap:6px; padding:14px 10px; border:1px solid rgba(255,255,255,.12); border-radius:12px; background:rgba(255,255,255,.04); color:var(--text); cursor:pointer; transition:transform .15s,border-color .15s,background .15s; }
 .dice-choice:hover:not(:disabled) { transform:translateY(-2px); border-color:var(--accent2); background:rgba(255,255,255,.08); }
 .dice-choice:disabled { opacity:.55; cursor:default; }
@@ -2577,6 +2843,12 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 .dice-player-row span { color:var(--text-dim); font-size:.86rem; }
 @media (max-width:600px) { .dice-choices { grid-template-columns:1fr; } }
 @media (max-width:600px) { .gem-bids { grid-template-columns:repeat(3,1fr); } }
+@media (max-width:600px) {
+  .bomb-cat-panel { padding:14px; border-radius:12px; min-height:460px; }
+  .bomb-cat-player { padding:7px; }
+  .bomb-cat-card { flex-basis:66px; min-height:90px; }
+  .bomb-cat-special > div { grid-template-columns:1fr; }
+}
 @media (max-width: 600px) {
   body { padding-bottom: env(safe-area-inset-bottom); }
   header { flex-wrap: wrap; gap: 8px; }
@@ -2694,6 +2966,18 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 .ops-bar-value { flex: 0 0 76px; text-align: right; color: var(--text); }
 .ops-bar-value small { color: var(--text-dim); }
 .ops-definitions { font-size: .74rem; color: var(--text-dim); line-height: 1.7; }
+.ops-funnel { display: flex; flex-direction: column; gap: 6px; }
+.ops-funnel-row { display: flex; align-items: center; gap: 8px; font-size: .76rem; }
+.ops-funnel-label { flex: 0 0 84px; color: var(--text-dim); white-space: nowrap; }
+.ops-funnel-track { flex: 1; height: 18px; background: rgba(255,255,255,.06); border-radius: 4px; overflow: hidden; }
+.ops-funnel-fill { display: block; height: 100%; min-width: 2px; background: linear-gradient(90deg, rgba(212,168,67,.35), rgba(212,168,67,.85)); border-radius: 4px; }
+.ops-funnel-value { flex: 0 0 104px; text-align: right; color: var(--text); }
+.ops-funnel-value small { color: var(--text-dim); margin-left: 3px; }
+.ops-table-wrap { overflow-x: auto; }
+.ops-table { width: 100%; border-collapse: collapse; font-size: .76rem; }
+.ops-table th, .ops-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+.ops-table th:first-child, .ops-table td:first-child { text-align: left; }
+.ops-table th { color: var(--text-dim); font-weight: 600; }
 @media (max-width: 600px) { .ops-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ops-bar-label { flex-basis: 66px; } }
 
 /* ============ 队伍（组队约战） ============ */
@@ -2716,3 +3000,25 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 .party-pick { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--text-dim); font-size: .8rem; }
 .party-pick select { flex: 1; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; font-size: .8rem; }
 .party-start:disabled { opacity: .5; cursor: not-allowed; }
+
+/* 好友约战：沿用大厅黑金主题，并把双人确认流程收在好友面板内。 */
+.duel-panel { margin-bottom: 12px; padding: 10px; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; background: rgba(212,168,67,.04); }
+.duel-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-bottom: 10px; }
+.duel-head strong { color: var(--accent); font-size: .86rem; }
+.duel-head > span, .duel-hint { color: var(--text-dim); font-size: .74rem; line-height: 1.6; }
+.duel-hint { margin: 6px 0; }
+.duel-status { font-size: .8rem; line-height: 1.6; overflow-wrap: anywhere; }
+.duel-status:empty { display: none; }
+.duel-status.error { color: #ef9a9a; }
+.duel-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 9px 0; border-top: 1px dashed var(--border); }
+.duel-detail { flex: 1 1 150px; min-width: 0; }
+.duel-detail strong { display: block; font-size: .82rem; font-weight: 500; overflow-wrap: anywhere; }
+.duel-meta { color: var(--text-dim); font-size: .74rem; margin-top: 3px; }
+.duel-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.duel-actions button, .friend-duel { min-height: 36px; white-space: nowrap; }
+.duel-actions button:disabled, .friend-duel:disabled { cursor: not-allowed; opacity: .55; }
+@media (max-width: 600px) {
+  .duel-actions { width: 100%; }
+  .duel-actions button { flex: 1; min-height: 44px; }
+  .friend-duel { min-height: 44px; }
+}

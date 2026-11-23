@@ -45,6 +45,13 @@
             <artifactId>gson</artifactId>
         </dependency>
 
+        <!-- 历史摘要索引：按持久身份查全量历史，避免最近 5000 局窗口吞掉长期资产。 -->
+        <dependency>
+            <groupId>org.xerial</groupId>
+            <artifactId>sqlite-jdbc</artifactId>
+            <version>3.54.1.0</version>
+        </dependency>
+
         <!-- Spring Boot Actuator + Micrometer 监控 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

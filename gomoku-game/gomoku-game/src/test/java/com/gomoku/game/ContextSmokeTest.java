@@ -21,7 +21,11 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
  * 这里用 RANDOM_PORT + netty.port=0 让 Netty 绑定临时端口，避免与本地服务冲突。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = {"netty.port=0"})
+        properties = {
+                "netty.port=0",
+                "gomoku.records.directory=target/context-records-${random.uuid}",
+                "gomoku.analytics.directory=target/context-analytics-${random.uuid}"
+        })
 class ContextSmokeTest {
 
     @Autowired
@@ -42,6 +46,7 @@ class ContextSmokeTest {
         assertNotNull(context.getBean(PartyService.class));
         assertNotNull(context.getBean(com.gomoku.server.PartyController.class));
         assertNotNull(context.getBean(DuelService.class));
+        assertNotNull(context.getBean(com.gomoku.server.DuelController.class));
 
         // 控制器层：REST 入口真实存在且依赖注入成功
         assertNotNull(context.getBean(GameApiController.class));

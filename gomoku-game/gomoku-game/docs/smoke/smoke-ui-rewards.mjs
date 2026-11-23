@@ -67,6 +67,8 @@ class Cdp {
   async shot(file) {
     const r = await this.send('Page.captureScreenshot', { format: 'png' });
     const fs = await import('node:fs');
+    const path = await import('node:path');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, Buffer.from(r.data, 'base64'));
   }
 }
@@ -130,6 +132,8 @@ const chipsText = () => "document.getElementById('gameover-rewards').textContent
   check('显示每日任务进度 1/3', rewards.includes('每日任务 1/3 局'), rewards);
   check('未完成三局时不显示可领取', !rewards.includes('可领取'), rewards);
   check('失败局结果为「失  败」', await cdp.eval("document.getElementById('gameover-result').textContent") === '失  败');
+  check('结算浮层提供返回大厅', await cdp.eval(
+    "!!document.getElementById('gameover-lobby') && document.getElementById('gameover-lobby').offsetParent !== null"));
   const chipCount = await cdp.eval("document.querySelectorAll('#gameover-rewards .reward-chip').length");
   check('奖励徽标数量不少于 3', chipCount >= 3, 'chips=' + chipCount);
 
@@ -163,6 +167,17 @@ const chipsText = () => "document.getElementById('gameover-rewards').textContent
   check('徽标文字不溢出自身边界', geom.chips.every(c => !c.overflow), JSON.stringify(geom.chips));
   check('徽标彼此不重叠', !geom.overlap, JSON.stringify(geom.chips));
   check('奖励区高度不超过两行', geom.boxH < 80, 'h=' + geom.boxH);
+  await cdp.eval("document.querySelector('#gameover-overlay .btn-review').click()");
+  const actions = await cdp.eval(
+    "(() => { const bar = document.getElementById('restart-bar'); const rect = bar.getBoundingClientRect();"
+    + " const labels = Array.from(bar.querySelectorAll('button')).map(b => b.textContent.trim());"
+    + " return { visible: bar.style.display === 'flex' && bar.offsetParent !== null,"
+    + "  labels, height: rect.height, overflow: bar.scrollWidth > bar.clientWidth + 1 }; })()");
+  check('关闭结算浮层后仍可再来一局或返回大厅', actions.visible
+    && actions.labels.includes('再来一局') && actions.labels.includes('返回大厅')
+    && actions.height >= 44 && !actions.overflow, JSON.stringify(actions));
+  await cdp.eval("document.getElementById('gameover-overlay').classList.add('show');"
+    + "document.getElementById('restart-bar').style.display='none'; true");
   await cdp.shot(OUT + '/rewards-after.png');
 
   // 5. 服务端与页面一致：45 经验、1 局、初出茅庐已解锁

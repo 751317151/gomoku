@@ -18,7 +18,7 @@ import java.util.List;
  * Payload 格式按 Type 不同：
  * - 简单消息（PING/LEAVE/GET_ROOMS/ADD_AI/RESTART/SURRENDER）: 无 payload
  * - 带字符串的消息（JOIN/SPECTATE/RECONNECT/CHAT）: 字段按序写入
- * - 落子（MOVE）: row(1) + col(1) + moveSeq(4)
+ * - 落子（MOVE）: row(1) + col(1) + [0x80 + fromRow(1) + fromCol(1)] + moveSeq(4)
  * - 服务端消息: 按 type 分别解析
  */
 public class BinaryMessageDecoder extends ByteToMessageDecoder {
@@ -61,6 +61,7 @@ public class BinaryMessageDecoder extends ByteToMessageDecoder {
                 case GameProtocol.TYPE_PASS:
                 case GameProtocol.TYPE_END_TURN:
                 case GameProtocol.TYPE_RESTART:
+                case GameProtocol.TYPE_CANCEL_RESTART:
                 case GameProtocol.TYPE_SURRENDER:
                     // 无 payload
                     break;
@@ -93,6 +94,7 @@ public class BinaryMessageDecoder extends ByteToMessageDecoder {
                     }
                     if (in.readableBytes() > 0) msg.setCreateRoom(in.readBoolean());
                     if (in.readableBytes() > 0) msg.setPlayerCount(in.readUnsignedByte());
+                    if (in.readableBytes() > 0) msg.setEntryMode(readNullableString(in));
                     break;
 
                 case GameProtocol.TYPE_SPECTATE:
@@ -104,12 +106,18 @@ public class BinaryMessageDecoder extends ByteToMessageDecoder {
                     if (in.readableBytes() < 6) { in.resetReaderIndex(); return; }
                     msg.setRow(in.readUnsignedByte());
                     msg.setCol(in.readUnsignedByte());
-                    msg.setMoveSeq(in.readInt());
-                    // 可选：起点坐标（象棋，0xFF = 无）
-                    if (in.readableBytes() >= 2) {
+                    // 扩展 MOVE：row,col,0x80,fromRow,fromCol,seq。
+                    // 标记紧跟在 row/col 之后；带起点时 payload 为 9 字节，旧格式为 6 字节。
+                    // 先按标记判断帧长，完整到齐前不消费，避免半包被当旧格式读出错误序号。
+                    boolean withOrigin = (in.getByte(in.readerIndex()) & 0xFF) == 0x80;
+                    int payloadBytes = withOrigin ? 9 : 6;
+                    if (in.readableBytes() + 2 < payloadBytes) { in.resetReaderIndex(); return; }
+                    if (withOrigin) {
+                        in.skipBytes(1);
                         msg.setFromRow(in.readByte());
                         msg.setFromCol(in.readByte());
                     }
+                    msg.setMoveSeq(in.readInt());
                     break;
 
                 case GameProtocol.TYPE_CHAT:
@@ -164,6 +172,7 @@ public class BinaryMessageDecoder extends ByteToMessageDecoder {
             case GameProtocol.TYPE_END_TURN:    return GameMessage.Type.END_TURN;
             case GameProtocol.TYPE_CHAT:        return GameMessage.Type.CHAT;
             case GameProtocol.TYPE_RESTART:     return GameMessage.Type.RESTART;
+            case GameProtocol.TYPE_CANCEL_RESTART: return GameMessage.Type.CANCEL_RESTART;
             case GameProtocol.TYPE_LEAVE:       return GameMessage.Type.LEAVE;
             case GameProtocol.TYPE_RECONNECT:   return GameMessage.Type.RECONNECT;
             case GameProtocol.TYPE_SURRENDER:   return GameMessage.Type.SURRENDER;

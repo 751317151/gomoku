@@ -16,3 +16,6 @@ elo_ratings.properties
 
 # 本地验证日志
 /test-run.log
+
+# 备份归档（可能含玩家数据，默认不入库）
+backups/

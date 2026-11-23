@@ -9,6 +9,18 @@ services:
   caddy:
     image: caddy:2.9-alpine
     restart: unless-stopped
+    stop_grace_period: 15s
+    # Caddy 需要绑定 80/443，仅保留这一项 capability。
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
     depends_on:
       app:
         condition: service_healthy
@@ -16,9 +28,11 @@ services:
       DOMAIN: "${DOMAIN:-localhost}"
       ACME_EMAIL: "${ACME_EMAIL:-admin@example.com}"
     ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
+      # 与基础 Compose 的 HTTP_PORT/WS_PORT（应用端口）分开命名，避免误改应用映射。
+      # 默认保持正式部署的 80/443；本地验收可改成 19092/19093 等高位端口。
+      - "${CADDY_HTTP_PORT:-80}:80"
+      - "${CADDY_HTTPS_PORT:-443}:443"
+      - "${CADDY_HTTPS_UDP_PORT:-443}:443/udp"
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

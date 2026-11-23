@@ -4,13 +4,14 @@ import org.springframework.stereotype.Service;
 
 import java.security.SecureRandom;
 import java.util.*;
+import java.util.function.Function;
 
 /**
- * 好友 1v1 约战邀请状态。当前仅提供服务层，尚未接入 REST / WebSocket / UI。
+ * 好友 1v1 约战邀请：发邀请不占座，接受成功才一次安排双方进入新私房。
  *
  * 设计取舍：
- * - 纯内存状态，邀请 2 分钟有效；房间本身仍走既有 JOIN 链路，计时/ELO/存档零改动。
- * - 好友关系、身份认证、房间可加入性须由接入层校验，本服务不占座或开局。
+ * - 纯内存状态，邀请 2 分钟有效；好友关系、身份和在线状态由接入层再次校验。
+ * - 开局期间冻结双方涉及的邀请；不持有本服务锁调用房间层，失败保留邀请供重试。
  * - 同一对好友只保留一条待处理邀请；发起方最多 3 条、接收方最多 5 条，防刷屏。
  */
 @Service
@@ -24,25 +25,35 @@ public class DuelService {
     private final SecureRandom random = new SecureRandom();
     /** inviteId -> 邀请 */
     private final Map<String, Duel> invites = new LinkedHashMap<>();
+    private final Set<String> launching = new HashSet<>();
 
-    /** 返回不可变邀请，调用方不能修改归属、房号或有效期。 */
+    /** 返回不可变邀请，调用方不能修改归属、玩法或有效期。 */
     public static final class Duel {
         public final String id;
         public final String fromId;
         public final String toId;
-        public final String roomId;
         public final String gameType;
         public final long createdAt;
         public final long expiresAt;
 
-        private Duel(String id, String fromId, String toId, String roomId, String gameType, long createdAt) {
+        private Duel(String id, String fromId, String toId, String gameType, long createdAt) {
             this.id = id;
             this.fromId = fromId;
             this.toId = toId;
-            this.roomId = roomId;
             this.gameType = gameType;
             this.createdAt = createdAt;
             this.expiresAt = createdAt + INVITE_TTL_MS;
+        }
+    }
+
+    /** 成功后返回被作废的全部邀请，接入层据此刷新涉及的好友面板。 */
+    public static final class Started<T> {
+        public final T result;
+        public final List<Duel> clearedInvites;
+
+        private Started(T result, List<Duel> clearedInvites) {
+            this.result = result;
+            this.clearedInvites = List.copyOf(clearedInvites);
         }
     }
 
@@ -58,12 +69,19 @@ public class DuelService {
     /** 当前时间（测试可覆盖） */
     long now() { return System.currentTimeMillis(); }
 
-    public synchronized Duel invite(String fromId, String toId, String roomId, String gameType) {
-        if (isBlank(fromId) || isBlank(toId) || isBlank(roomId) || isBlank(gameType)) {
+    public synchronized Duel invite(String fromId, String toId, String gameType) {
+        if (isBlank(fromId) || isBlank(toId) || isBlank(gameType)) {
             throw new DuelException("INVALID", "约战参数不完整");
         }
         if (fromId.equals(toId)) throw new DuelException("INVALID", "不能约战自己");
         purgeExpired();
+        requireIdle(fromId, toId);
+        GameType type;
+        try { type = GameType.valueOf(gameType.trim().toUpperCase(Locale.ROOT)); }
+        catch (IllegalArgumentException e) { throw new DuelException("INVALID", "不支持该玩法"); }
+        if (type.getMinPlayers() > 2 || type.getMaxPlayers() < 2) {
+            throw new DuelException("INVALID", "该玩法不支持双人约战");
+        }
         for (Duel pending : invites.values()) {
             if ((pending.fromId.equals(fromId) && pending.toId.equals(toId))
                     || (pending.fromId.equals(toId) && pending.toId.equals(fromId))) {
@@ -82,12 +100,12 @@ public class DuelService {
         do {
             inviteId = "DUEL-" + randomCode(6);
         } while (invites.containsKey(inviteId));
-        Duel duel = new Duel(inviteId, fromId, toId, roomId, gameType, now());
+        Duel duel = new Duel(inviteId, fromId, toId, type.name(), now());
         invites.put(duel.id, duel);
         return duel;
     }
 
-    /** 校验邀请归属与有效期，但不移除；控制器先验房间再真正接受。 */
+    /** 校验邀请归属与有效期；接受时仍会在同一临界区复核。 */
     public synchronized Duel findForTarget(String identityId, String inviteId) {
         purgeExpired();
         Duel duel = inviteId == null ? null : invites.get(inviteId);
@@ -98,21 +116,56 @@ public class DuelService {
         return duel;
     }
 
-    public synchronized Duel accept(String identityId, String inviteId) {
-        Duel duel = findForTarget(identityId, inviteId);
-        invites.remove(duel.id);
-        return duel;
+    /**
+     * 冻结双方后释放邀请锁，再调用房间服务。重叠邀请不能同时开局，
+     * 拒绝/撤回也不能中途消费邀请；房间校验失败时释放冻结，原邀请仍可重试。
+     */
+    public <T> Started<T> accept(String identityId, String inviteId, Function<Duel, T> start) {
+        Duel duel;
+        synchronized (this) {
+            duel = findForTarget(identityId, inviteId);
+            requireIdle(duel.fromId, duel.toId);
+            launching.add(duel.fromId);
+            launching.add(duel.toId);
+        }
+        try {
+            T result = start.apply(duel);
+            synchronized (this) {
+                List<Duel> cleared = new ArrayList<>();
+                Iterator<Duel> pending = invites.values().iterator();
+                while (pending.hasNext()) {
+                    Duel candidate = pending.next();
+                    if (involves(candidate, duel.fromId) || involves(candidate, duel.toId)) {
+                        cleared.add(candidate);
+                        pending.remove();
+                    }
+                }
+                return new Started<>(result, cleared);
+            }
+        } finally {
+            synchronized (this) {
+                launching.remove(duel.fromId);
+                launching.remove(duel.toId);
+            }
+        }
     }
 
     public synchronized Duel decline(String identityId, String inviteId) {
         Duel duel = findForTarget(identityId, inviteId);
+        requireIdle(duel.fromId, duel.toId);
         invites.remove(duel.id);
         return duel;
     }
 
-    /** 丢弃（房间已失效等），不校验接收人；供控制器在确认归属后清理。 */
-    public synchronized void drop(String inviteId) {
-        if (inviteId != null) invites.remove(inviteId);
+    /** 仅发起人可撤回，接收方使用 decline。 */
+    public synchronized Duel cancel(String identityId, String inviteId) {
+        purgeExpired();
+        Duel duel = inviteId == null ? null : invites.get(inviteId);
+        if (duel == null) throw new DuelException("NOT_FOUND", "约战邀请已失效");
+        if (!duel.fromId.equals(identityId)) throw new DuelException("UNAUTHORIZED", "只能撤回自己发出的约战");
+        requireIdle(duel.fromId, duel.toId);
+        invites.remove(inviteId);
+        return duel;
     }
 
     public synchronized List<Duel> invitesFor(String identityId) {
@@ -140,7 +193,18 @@ public class DuelService {
 
     private void purgeExpired() {
         long ts = now();
-        invites.values().removeIf(d -> d.expiresAt <= ts);
+        invites.values().removeIf(d -> d.expiresAt <= ts
+                && !launching.contains(d.fromId) && !launching.contains(d.toId));
+    }
+
+    private void requireIdle(String fromId, String toId) {
+        if (launching.contains(fromId) || launching.contains(toId)) {
+            throw new DuelException("CONFLICT", "约战正在开局，请稍后重试");
+        }
+    }
+
+    private static boolean involves(Duel invite, String identityId) {
+        return invite.fromId.equals(identityId) || invite.toId.equals(identityId);
     }
 
     private static boolean isBlank(String value) {

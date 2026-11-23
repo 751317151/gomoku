@@ -1,4 +1,4 @@
-param([switch]$Https, [string]$Domain, [string]$Email, [switch]$CheckOnly)
+﻿param([switch]$Https, [string]$Domain, [string]$Email, [switch]$CheckOnly)
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $taskRoot
@@ -12,6 +12,9 @@ try {
     if ($Email) { $configText = $configText -replace '(?m)^ACME_EMAIL=.*$', ('ACME_EMAIL=' + $Email) }
     if ($Domain -or $Email) { Set-Content -LiteralPath '.env' -Value $configText -Encoding utf8 }
     if ($Https -and $configText -match '(?m)^DOMAIN=game.example.com\s*$') { throw 'HTTPS 部署需设置 .env 的 DOMAIN，或传入 -Domain' }
+    if (-not $CheckOnly -and $configText -match '(?m)^ADMIN_TOKEN=\s*$') {
+        Write-Warning 'ADMIN_TOKEN 为空：治理后台与运营看板将返回 503。需要时请在 .env 配置强随机令牌。'
+    }
     $composeArgs = @('compose', '-f', 'docker-compose.yml')
     if ($Https) { $composeArgs += @('-f', 'docker-compose.https.yml') }
     & docker @composeArgs config --quiet

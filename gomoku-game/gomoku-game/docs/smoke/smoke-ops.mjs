@@ -24,7 +24,14 @@ function wsJoin(name, token) {
   return new Promise(resolve => {
     const ws = new WebSocket(WS_URL);
     const st = { ws, errors: [], state: null };
-    ws.onopen = () => ws.send(JSON.stringify({ type: 'JOIN', playerName: name, gameType: 'GOMOKU', guestToken: token }));
+    ws.onopen = () => {
+      // 先绑定大厅身份，才能被计入「进入大厅」漏斗阶段
+      ws.send(JSON.stringify({ type: 'HALL_BIND', playerName: name, guestToken: token }));
+      ws.send(JSON.stringify({
+        type: 'JOIN', playerName: name, gameType: 'GOMOKU',
+        guestToken: token, entryMode: 'AI', createRoom: true
+      }));
+    };
     ws.onmessage = ev => {
       let m; try { m = JSON.parse(ev.data.toString()); } catch { return; }
       if (m.type === 'WAITING' || m.type === 'GAME_START') st.state = m.type;
@@ -52,6 +59,8 @@ try {
   const metrics = first.body.metrics || {};
   check('实时在线数据存在', first.body.realtime && typeof first.body.realtime.totalPlayers === 'number',
     JSON.stringify(first.body.realtime));
+    check('漏斗数据存在', first.body.funnel && Array.isArray(first.body.funnel.stages),
+      JSON.stringify(first.body.funnel));
   check('窗口为 7 天', metrics.windowDays === 7, String(metrics.windowDays));
   check('趋势按天补齐', Array.isArray(metrics.trend) && metrics.trend.length === 7,
     JSON.stringify(metrics.trend));
@@ -90,6 +99,19 @@ try {
   check('玩法热度包含 CONNECT4 且带占比', !!typeRow && typeof typeRow.share === 'number',
     JSON.stringify(typeRow));
   check('时段分布为 8 段', (afterPvp.hourly || []).length === 8, JSON.stringify(afterPvp.hourly));
+    const funnelAfter = (await request('/api/admin/ops?days=7', admin())).body.funnel;
+    const quickMode = (funnelAfter.gameModes || []).find(m => m.mode === 'QUICK');
+    check('真人对局后 QUICK 入口开局增长', quickMode && quickMode.starts > 0,
+      JSON.stringify(quickMode));
+    check('真人对局后 QUICK 完局增长', quickMode && quickMode.finishes > 0,
+      JSON.stringify(quickMode));
+    check('真人对局后真人漏斗完局计数增长', (funnelAfter.humanStages || []).some(s => s.key === 'gameFinish' && s.users > 0),
+      JSON.stringify(funnelAfter.humanStages));
+    const aiFinish = (funnelAfter.aiStages || []).find(s => s.key === 'gameFinish');
+    check('未打完的人机局不计入 AI 完局', !aiFinish || aiFinish.users === 0,
+      JSON.stringify(aiFinish));
+    check('漏斗口径说明拼接完整', first.body.funnel.definitions && first.body.funnel.definitions.length > 0,
+      JSON.stringify(first.body.funnel.definitions));
 } catch (error) {
   failed++;
   console.error('[ops] FAIL 异常 :: ' + (error && error.message));
@@ -120,9 +142,12 @@ function playQuickGame(t1, t2) {
     const make = (name, token) => {
       const st = { ws: new WebSocket(WS_URL), stone: 0, seq: 0, turn: 1,
                    board: Array.from({ length: 6 }, () => new Array(7).fill(0)), pending: false };
-      st.ws.onopen = () => st.ws.send(JSON.stringify({
-        type: 'JOIN', playerName: name, gameType: 'CONNECT4', guestToken: token
-      }));
+      st.ws.onopen = () => {
+        st.ws.send(JSON.stringify({ type: 'HALL_BIND', playerName: name, guestToken: token }));
+        st.ws.send(JSON.stringify({
+          type: 'JOIN', playerName: name, gameType: 'CONNECT4', guestToken: token, entryMode: 'QUICK'
+        }));
+      };
       st.ws.onmessage = ev => {
         let m; try { m = JSON.parse(ev.data.toString()); } catch { return; }
         if (m.type === 'GAME_START') {

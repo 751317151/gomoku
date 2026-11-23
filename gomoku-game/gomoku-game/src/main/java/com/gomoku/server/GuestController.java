@@ -23,10 +23,14 @@ public class GuestController {
     }
     @PostMapping("/api/guest")
     public ResponseEntity<Map<String, String>> guest(@RequestHeader(value="Authorization", required=false) String authorization) {
-        String id = guests.resolve(token(authorization));
+        String suppliedToken = token(authorization);
+        String id = guests.resolve(suppliedToken);
         Map<String, String> result;
         if (id == null) result = guests.issue();
-        else { result = new LinkedHashMap<>(); result.put("id", id); }
+        else {
+            result = new LinkedHashMap<>();
+            result.put("id", id);
+        }
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(result);
     }
     @GetMapping("/api/me/stats")

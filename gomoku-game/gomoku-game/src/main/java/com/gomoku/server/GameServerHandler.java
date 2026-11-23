@@ -43,6 +43,7 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
     /** 卡牌攻击指令的 action 标记（负数，与手牌下标区分） */
     private static final int ATTACK_MARKER = -2;
     private final RoomManager roomManager;
+    @Autowired private com.gomoku.game.ProductAnalyticsService analytics;
     @Autowired private com.gomoku.game.GuestIdentityService guests;
     @Autowired private com.gomoku.game.FriendService friends;
     @Autowired private com.gomoku.game.ModerationService moderation;
@@ -69,6 +70,7 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
         handlers.put(GameMessage.Type.DIRECT_MSG, this::handleDirectMsg);
         handlers.put(GameMessage.Type.REPORT, this::handleReport);
         handlers.put(GameMessage.Type.RESTART, (conn, msg) -> handleRestart(conn));
+        handlers.put(GameMessage.Type.CANCEL_RESTART, (conn, msg) -> handleCancelRestart(conn));
         handlers.put(GameMessage.Type.LEAVE, (conn, msg) -> handleLeave(conn));
         handlers.put(GameMessage.Type.RECONNECT, this::handleReconnect);
         handlers.put(GameMessage.Type.SURRENDER, (conn, msg) -> handleSurrender(conn));
@@ -223,10 +225,11 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
             return;
         }
         String playerName = NameSanitizer.sanitize(msg.getPlayerName());
-        if (!roomManager.bindIdentity(conn, playerName, identityId)) {
+        if (!roomManager.bindIdentity(conn, playerName, identityId, msg.getGuestToken())) {
             sendError(conn, "游客凭证无效，请重新进入大厅");
             return;
         }
+        analytics.recordLobbyEnter(identityId);
         // 上线投递离线私聊：先绑定身份再投递，保证人确实在线才收
         deliverOfflineMessages(conn, identityId);
     }
@@ -260,7 +263,8 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
             sendError(conn, "账号已被封禁，如有疑问请联系管理员");
             return;
         }
-        if (msg.getGuestToken() != null && !roomManager.bindIdentity(conn, playerName, resolvedIdentity)) {
+        if (msg.getGuestToken() != null
+                && !roomManager.bindIdentity(conn, playerName, resolvedIdentity, msg.getGuestToken())) {
             sendError(conn, "游客凭证无效，请重新进入大厅"); return;
         }
         GameType gameType = GameType.fromString(msg.getGameType());
@@ -268,7 +272,8 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
         // 首次 JOIN 时 getPlayer(conn) 还是 null，之前那样写套牌永远记不上（实测只剩 BALANCED）。
         // 而且第二个玩家加入会立刻触发 startGame，所以必须在 addPlayer 之前传进去。
         GameRoom room = roomManager.joinGame(conn, playerName, msg.getRoomId(), gameType,
-                msg.getDeck(), msg.getDeckCards(), msg.isCreateRoom(), msg.getPlayerCount());
+                msg.getDeck(), msg.getDeckCards(), msg.isCreateRoom(), msg.getPlayerCount(),
+                msg.getEntryMode());
         if (room == null) {
             boolean byCode = msg.getRoomId() != null && !msg.getRoomId().trim().isEmpty();
             sendError(conn, byCode
@@ -525,10 +530,20 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
     private void handleRestart(Channel conn) {
         Player player = roomManager.getPlayer(conn);
         if (player == null) return;
-        if (!player.canPerformAction()) return;
         GameRoom room = roomManager.getRoomByPlayer(player);
         if (room == null) return;
+        // 重开确认是低频且幂等的房间状态操作：两人几乎同时确认时，
+        // 通用 300ms 动作限流会吞掉最后一张确认，让整桌停在等待页。
+        // 重复确认由 requestRestart 识别，不推进投票。
         room.requestRestart(player);
+    }
+
+    private void handleCancelRestart(Channel conn) {
+        Player player = roomManager.getPlayer(conn);
+        if (player == null) return;
+        GameRoom room = roomManager.getRoomByPlayer(player);
+        if (room == null) return;
+        room.cancelRestart(player);
     }
 
     private void handleSurrender(Channel conn) {
@@ -542,6 +557,7 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
     private void handleReconnect(Channel conn, GameMessage msg) {
         if (msg.getSessionId() == null) { sendError(conn, "重连需要 sessionId"); return; }
         GameRoom room = roomManager.reconnect(conn, msg.getSessionId());
+        analytics.recordReconnect(room != null);
         if (room == null) {
             sendError(conn, "重连失败（会话已过期）");
         } else {

@@ -215,4 +215,60 @@ class RoomLifecycleTest {
                 .filter(p -> "段位玩家".equals(p.getName())).findFirst().orElseThrow();
         assertEquals("白银", dto.getTier(), "座位信息应携带赛季段位徽章");
     }
+
+    @Test void roomDataExposesVisibilityAndAiSeatsForSettlementEntry() {
+        EmbeddedChannel human = channel();
+        GameRoom room = manager.joinGame(human, "房主", null, GameType.GOMOKU, null, null, true);
+        GameSyncDto waiting = room.buildSyncDataForReconnect(manager.getPlayer(human));
+        assertTrue(waiting.getRoomData().isPrivateRoom(), "房号房必须标为私有，结算页才不会引导去公开匹配");
+        assertEquals(0, waiting.getRoomData().getAiSeats());
+        assertEquals(1, waiting.getRoomData().getHumanSeats());
+
+        manager.addAI(human);
+        GameSyncDto withAi = room.buildSyncDataForReconnect(manager.getPlayer(human));
+        assertEquals(1, withAi.getRoomData().getAiSeats(), "人机席位必须显式下发，而不是靠昵称猜测");
+        assertTrue(withAi.getRoomData().getPlayers().stream().anyMatch(PlayerInfoDto::isAi));
+
+        EmbeddedChannel publicHost = channel();
+        GameRoom publicRoom = manager.joinGame(publicHost, "公开房主", null, GameType.GOMOKU);
+        assertFalse(publicRoom.buildSyncDataForReconnect(manager.getPlayer(publicHost))
+                .getRoomData().isPrivateRoom(), "快速匹配房应标为公开，允许结算页直接再匹配");
+    }
+
+    @Test void leavingSettlementKeepsOpponentOnResultAndNeverRequeuesTheSameRoom() {
+        EmbeddedChannel first = channel(), second = channel();
+        GameRoom finished = manager.joinGame(first, "甲", null, GameType.GOMOKU, null, null, false);
+        manager.joinGame(second, "乙", finished.getRoomId(), GameType.GOMOKU);
+        finished.surrender(manager.getPlayer(first));
+        assertEquals(GameRoom.State.FINISHED, finished.getState());
+
+        manager.leaveRoom(first);
+        assertEquals(GameRoom.State.FINISHED, finished.getState(),
+                "离开终局房不能把仍看结算的对手切回等待房");
+        assertEquals(1, finished.getPlayerCount());
+        assertFalse(finished.isAvailableForMatching());
+        assertSame(finished, manager.getRoomByPlayer(manager.getPlayer(second)));
+
+        GameRoom next = manager.joinGame(first, "甲", null, GameType.GOMOKU);
+        assertNotSame(finished, next, "结算后再匹配不能回到刚离开的终局房");
+        assertEquals(GameRoom.State.WAITING, next.getState());
+        assertTrue(next.isAvailableForMatching());
+
+        manager.leaveRoom(second);
+        assertEquals(1, ((Number) manager.getStats().get("totalRooms")).intValue(),
+                "最后一名真人离开终局房时房间必须被回收");
+    }
+
+    @Test void settlementCarriesMachineReadableFinishReason() {
+        EmbeddedChannel first = channel(), second = channel();
+        GameRoom room = manager.joinGame(first, "甲", null, GameType.GOMOKU, null, null, true);
+        manager.joinGame(second, "乙", room.getRoomId(), GameType.GOMOKU);
+        room.surrender(manager.getPlayer(first));
+
+        GameSyncDto sync = room.buildSyncDataForReconnect(manager.getPlayer(second));
+        var data = JsonParser.parseString(sync.getGameOver().getData()).getAsJsonObject();
+        assertEquals("SURRENDER", data.get("finishReason").getAsString(),
+                "认输必须在结算数据中可识别，客户端不能据此显示五连原因");
+        assertTrue(data.getAsJsonArray("forfeitedPlayerIds").size() >= 1);
+    }
 }

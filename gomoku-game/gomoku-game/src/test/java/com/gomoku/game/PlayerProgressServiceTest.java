@@ -16,6 +16,55 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class PlayerProgressServiceTest {
 
+    private static class CountingRecords extends GameRecordService {
+        int scans;
+        CountingRecords() throws Exception { super(Files.createTempDirectory("progress-cache")); }
+        @Override
+        public synchronized long visitIdentityRecords(String identityId, java.util.function.Consumer<GameRecord> visitor) {
+            scans++;
+            return super.visitIdentityRecords(identityId, visitor);
+        }
+    }
+
+    @Test
+    void cachedProgressInvalidatesOnlyForThatIdentityAndDoesNotCacheRewardXp() throws Exception {
+        CountingRecords records = new CountingRecords();
+        try {
+            PlayerProgressService service = new PlayerProgressService(records);
+            GameRecord first = game("CACHE-1", "GOMOKU", 1000L, 2000L, "a", "WIN", 2);
+            first.setId("CACHE-1"); records.saveAsync(first);
+            assertEquals(75, service.getProgress("a").get("xp"));
+            int scans = records.scans;
+            assertEquals(125, service.getProgress("a", 50).get("xp"));
+            records.saveAsync(game("CACHE-OTHER", "UNO", 3000L, 4000L, "b", "WIN", 2));
+            assertEquals(75, service.getProgress("a").get("xp"));
+            records.saveAsync(first); // 幂等重试也不应使缓存失效。
+            assertEquals(75, service.getProgress("a").get("xp"));
+            assertEquals(scans, records.scans);
+            records.saveAsync(game("CACHE-2", "GOMOKU", 5000L, 6000L, "a", "LOSE", 2));
+            assertEquals(95, service.getProgress("a").get("xp"));
+            assertEquals(scans + 1, records.scans);
+        } finally { records.shutdown(); }
+    }
+
+    @Test
+    void boundedProgressCacheCanEvictAndRebuildWithoutLosingAssets() throws Exception {
+        CountingRecords records = new CountingRecords();
+        try {
+            PlayerProgressService service = new PlayerProgressService(records);
+            records.saveAsync(game("CACHE-KEEP", "GOMOKU", 1000L, 2000L, "owner", "WIN", 2));
+            Map<String, Object> expected = service.getProgress("owner");
+            for (int i = 0; i < 512; i++) service.getProgress("visitor-" + i);
+            int before = records.scans;
+            assertEquals(expected, service.getProgress("owner"));
+            assertEquals(before + 1, records.scans, "冷身份应从完整历史重建，而不是让缓存随身份数无限增长");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> achievements = (List<Map<String, Object>>) expected.get("achievements");
+            achievements.get(0).put("unlocked", false);
+            assertTrue(unlocked(service.getProgress("owner"), "first-game"), "API 调用方不能篡改缓存中的成就");
+        } finally { records.shutdown(); }
+    }
+
     private static GameRecordService newRecords() throws Exception {
         return new GameRecordService(Files.createTempDirectory("progress-test"));
     }

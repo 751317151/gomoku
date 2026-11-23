@@ -145,7 +145,9 @@ public class TicTacToeBoard implements BoardGameEngine {
 
 ### 隐藏信息（重要）
 
-如果玩法有「对手不能看到」的信息（手牌、选择），**不要**把它塞进 `GAME_MOVE.data`，而是覆写：
+如果玩法有「对手不能看到」的信息（手牌、选择、暗子身份），**不要**把它塞进 `GAME_MOVE.data`。
+
+非棋盘玩法覆写 `getViewState(viewerSide)`，按观众裁剪：
 
 ```java
 @Override
@@ -158,6 +160,40 @@ public Object getViewState(int viewerSide) {
 ```
 
 房间会为**每个观看者**单独调用一次（`viewerSide = 0` 是观战者），所以同一手广播里每个人收到的 `data.view` 不同。这是卡牌/答题能正确隐藏信息的原因。
+
+棋盘玩法的公开盘面**默认**来自 `getBoardSnapshot()`，房间用它广播 `GAME_SYNC`。如果盘面上也有底牌，必须额外覆写 `getVisibleBoardSnapshot()`：
+
+```java
+@Override
+public int[][] getVisibleBoardSnapshot() {
+    int[][] visible = getBoardSnapshot();
+    // 把当前不能公开的身份统一替换成一个公开占位编码。
+    for (int r = 0; r < visible.length; r++)
+        for (int c = 0; c < visible[r].length; c++)
+            if (isHidden(r, c)) visible[r][c] = HIDDEN;
+    return visible;
+}
+```
+
+约定：
+
+- `getBoardSnapshot()` 仍返回**服务器内部真实盘面**，只给规则与 AI 使用；`GameRoom` 的玩家同步与观战使用 `getVisibleBoardSnapshot()`。
+- 翻子这一手可以在本手 `effects` 中公开新身份，但不要把整张真实盘面顺带下发。
+- 如果身份本身也是隐藏信息，AI 也必须读取公开版本，否则电脑会偷看底牌。
+- 第三方客户端也不能把 `getBoardSnapshot()` 当作对外协议；它只属于服务端内部接口。
+
+随机开局的棋盘还要覆写 `getInitialBoardSnapshot()`，否则复盘无法还原洗牌结果：
+
+```java
+@Override
+public int[][] getInitialBoardSnapshot() {
+    return visibleInitialBoardCopy; // 已按公开视角编码
+}
+```
+
+默认返回 `null`，表示使用前端模块的固定 `initialBoard()`。返回非 `null` 时会随 `GAME_OVER`、房间数据和 `GameRecord.initialBoard` 一起持久化，前端复盘优先使用它。开局快照也必须是观众可见的信息，不能为了“便于复盘”泄漏底牌。
+
+测试至少覆盖三件事：玩家与观战视角在翻牌前看不到身份；翻牌后只公开本手身份；重启或从记录加载后，复盘从保存的随机初始盘面开始而不是空盘。
 
 ---
 
@@ -219,6 +255,10 @@ private GameAI aiFor() {
 - **一回合多行动**（卡牌）：`autoEndsTurn()` 返回 `false`，并实现 `endTurn(int side)`
 - **双方同时行动**（答题）：`simultaneousTurn()` 返回 `true`
 - **战斗日志文案用真实昵称**：实现 `setPlayerName(int side, String name)`
+- **需要起点与终点**（象棋、跳棋）：`MOVE` 同时带 `fromRow/fromCol` 和 `row/col`。二进制帧在目标坐标后写 `0x80,fromRow,fromCol`，再写 4 字节序号；旧的无起点帧继续兼容。客户端两阶段选子优先复用 `GameModules[type].moveSelect`。
+- **服务端自动掷骰/发牌**（飞行棋）：`reset()` 只清状态，另提供明确的开局 hook（如 `beginTurnRoll()`），由 `GameRoom.startGame()` 在注入昵称后调用。不要在构造器和 `reset()` 各掷一次，否则首个骰子会被覆盖。
+- **多人淘汰**（飞行棋）：实现 `forfeit(int side)`，只淘汰该座位并在 `getViewState` 暴露 `eliminated`；只剩最后一人时再判胜。房间会继续轮转其他座位，并为飞行棋广播退出状态。
+- **无棋可走自动跳过**：引擎负责 `skipTurn/advance` 并写入 `moveHistory`+`moveSeq`；房间层 `autoSkipIfStuck()` 会补一条空效果到 `moveEffectsHistory`。两边都推进，复盘滑块才能与棋谱逐手对齐。
 
 ---
 
@@ -318,6 +358,10 @@ window.GameModules = { GOMOKU, REVERSI, GO9, XIANGQI, CONNECT4, RPG, CARD, NIM, 
 5. **`getWinner()` 在未结束时返回 null，被当成平局**：先判 `isOver()`。
 6. **`moveSeq` 自己乱校验**：房间只对棋盘玩法做幂等检查；非棋盘玩法自己维护即可。
 7. **AI 无子可下时返回坐标 `{-1,-1}`**：应返回 `null`，否则房间会把它当一手合法棋发出去。
+8. **`reset()` 后房间行动者过期**：引擎可能在初始化时自动跳过无法行动的座位（21 点天然黑杰克、飞行棋首骰无棋）。`GameRoom.startGame()` 现在会在 `reset()` 后按 `engine.getCurrentTurn()` 重新绑定 `currentPlayer`；新玩法如果有类似「开局自动推进」逻辑，必须保证 `getCurrentTurn()` 返回真实可行动座位，不要只在开局时假设 1 号座位。
+9. **多人淘汰只广播空移动**：多人玩法要让 `forfeit(side)` 只淘汰该座位，并在只剩最后一人时由引擎判胜；`GameRoom` 会为飞行棋额外广播 `PLAYER_STATUS`。新玩法若也有淘汰语义，应像飞行棋一样把历史、效果与 `moveSeq` 对齐，避免复盘错位。
+10. **自动跳过没有入谱**：房间自动 AI 跳过或引擎掷骰后直接轮转时，若只改状态不追加历史，`moveHistory` 与 `moveEffectsHistory` 会逐手错位。新增「无棋可走/自动跳过」分支时，要同时推进 `moveSeq` 并记录空效果；当前 `GameRoom.autoSkipIfStuck()` 可作参考。
+11. **服务端自动掷骰的首骰重复**：像飞行棋这种「开局即掷骰」的玩法，不要在 `reset()` 和房间开局各掷一次；应在房间注入昵称后调用一次明确的开局 hook（如 `beginTurnRoll()`），并用单测断言首骰只执行一次。
 
 ---
 
@@ -329,5 +373,9 @@ window.GameModules = { GOMOKU, REVERSI, GO9, XIANGQI, CONNECT4, RPG, CARD, NIM, 
 - [ ] `GameRoom.createEngine` / `aiFor` 各加一行
 - [ ] `GameModules.XXX` 注册（canvas 或 html 面板）
 - [ ] `XxxBoardTest` 覆盖合法/非法/胜负/平局/重置
-- [ ] `smoke-xxx.mjs` 跑通一局
+- [ ] `smoke-xxx.mjs` 跑通一局；走子类玩法至少覆盖强制规则、连续走子、回放和协议非法输入
+- [ ] 有真实交互界面的玩法补 `smoke-ui-xxx.mjs`，验证桌面/390px、鼠标命中、AI 行动和运行时异常
+- [ ] 多人淘汰玩法补 `forfeit` 单测：一人退出其余人继续、最后一人获胜、`scores` 含全部座位且不进双人 ELO
+- [ ] 如果开局会自动掷骰/跳过座位，断言 `startGame()` 后的 `currentPlayer` 与 `engine.getCurrentTurn()` 一致，且首骰只执行一次
+- [ ] 新增玩法后同步成就总数（基础 11 + 全模式制霸 + 当前玩法数）、规则卡、约战和结算冒烟
 - [ ] `PROGRESS.md` / `README.md` 更新玩法表

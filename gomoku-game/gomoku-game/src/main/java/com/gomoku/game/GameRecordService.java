@@ -14,6 +14,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -25,12 +29,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.Collections;
+import java.util.function.Consumer;
 
 /**
  * 对局记录服务 — 落盘 + 战绩查询
@@ -38,14 +44,15 @@ import java.time.ZoneId;
  * 存储结构：
  * <pre>
  * data/games/
- *   index.jsonl          每局一行摘要（不含棋谱），启动时加载用于列表与战绩统计
+ *   index.jsonl          每局一行摘要（不含棋谱），保留为可重放的历史日志
+ *   archive.sqlite       可重建的全量摘要/参与者索引，供长期战绩与成长查询
  *   20261111-143022-a1b2c3.json   单局完整记录（含棋谱，供复盘）
  * </pre>
  *
  * 设计取舍：
  * - 摘要与详情分开存：战绩/列表查询只读 index.jsonl，不必解析动辄几十 KB 的棋谱
  * - 写盘走单线程守护线程：终局路径（持有房间写锁）不能因为 IO 卡住
- * - 内存只保留最近 {@link #MAX_INDEX_ENTRIES} 条摘要，老记录仍可从磁盘按 ID 取回
+ * - 大厅内存只保留最近 {@link #MAX_INDEX_ENTRIES} 条摘要，长期资产查询不受该窗口限制
  */
 @Service
 public class GameRecordService {
@@ -59,13 +66,31 @@ public class GameRecordService {
 
     private final Path baseDir;
     private final Path indexPath;
+    private GameArchive archive;
+    private boolean initialized;
+    private boolean drainScheduled;
+    /** 仅记录本进程中的身份变更版本，供有界成长缓存失效；持久真相仍来自完整历史。 */
+    private final Map<String, Long> identityRevisions = new HashMap<>();
+    /** 尚未持久化的不可变快照；读接口叠加这部分，终局后立即可见且不会重复计算。 */
+    private final LinkedHashMap<String, PendingRecord> pending = new LinkedHashMap<>();
+
+    private static final class PendingRecord {
+        final GameRecord detail;
+        final GameRecord summary;
+        boolean journaled;
+        int failures;
+        PendingRecord(GameRecord detail) {
+            this.detail = detail;
+            this.summary = stripMoves(detail);
+        }
+    }
 
     /** 摘要索引：最新的在前 */
     private final LinkedList<GameRecord> recent = new LinkedList<>();
     /** 玩家名 → 该玩家的摘要（最新的在前） */
     private final Map<String, LinkedList<GameRecord>> byPlayer = new ConcurrentHashMap<>();
 
-    private final ExecutorService writer = Executors.newSingleThreadExecutor(r -> {
+    private final ScheduledExecutorService writer = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "Game-Record-Writer");
         t.setDaemon(true);
         return t;
@@ -75,6 +100,11 @@ public class GameRecordService {
         this(Paths.get("data", "games"));
     }
 
+    @org.springframework.beans.factory.annotation.Autowired
+    public GameRecordService(@org.springframework.beans.factory.annotation.Value("${gomoku.records.directory:data/games}") String baseDir) {
+        this(Paths.get(baseDir));
+    }
+
     /** 供测试注入自定义目录 */
     public GameRecordService(Path baseDir) {
         this.baseDir = baseDir;
@@ -82,12 +112,19 @@ public class GameRecordService {
     }
 
     @PostConstruct
-    public void init() {
-        loadIndex();
+    public synchronized void init() {
+        if (initialized) return;
+        archive = new GameArchive(baseDir);
+        List<GameRecord> loaded = archive.recent(MAX_INDEX_ENTRIES);
+        // index() 在头部添加；必须从旧到新恢复，不能在重启后反转最近对局和 ELO。
+        Collections.reverse(loaded);
+        for (GameRecord record : loaded) index(record);
+        initialized = true;
     }
 
     @PreDestroy
     public void shutdown() {
+        if (!awaitPending(3000)) logger.error("停机时仍有对局尚未持久化：{}", getStorageStatus());
         writer.shutdown();
         try {
             if (!writer.awaitTermination(3, TimeUnit.SECONDS)) {
@@ -104,25 +141,60 @@ public class GameRecordService {
     /**
      * 异步存档一局。调用方在终局路径上，不等待落盘结果。
      */
-    public void saveAsync(GameRecord record) {
+    public synchronized void saveAsync(GameRecord record) {
         if (record == null) return;
+        if (writer.isShutdown()) throw new IllegalStateException("对局记录服务已停止");
+        init();
         if (record.getId() == null) {
             record.setId(newRecordId());
         }
+        GameArchive.validate(record);
+        if (pending.containsKey(record.getId()) || archive.contains(record.getId())) return;
         // 内存索引只放「摘要副本」：一局棋谱可达几十 KB，若把原始对象留在索引里，
         // 内存会随对局数线性增长（5000 条 × 数十 KB 就是数百 MB）。
-        index(stripMoves(record));
-        // 截断超长棋谱后再交给写线程
-        if (record.getMoveHistory() != null && record.getMoveHistory().size() > MAX_STORED_MOVES) {
-            record.setMoveHistory(null);
-            record.setMoveEffects(null);
+        GameRecord detail = stripMoves(record);
+        detail.setInitialBoard(copyBoard(record.getInitialBoard()));
+        if (record.getMoveHistory() != null && record.getMoveHistory().size() <= MAX_STORED_MOVES) {
+            detail.setMoveHistory(copyMoves(record.getMoveHistory()));
+            if (record.getMoveEffects() != null) {
+                List<List<int[]>> effects = new ArrayList<>();
+                for (List<int[]> effect : record.getMoveEffects()) effects.add(effect == null ? null : copyMoves(effect));
+                detail.setMoveEffects(effects);
+            }
         }
-        writer.submit(() -> writeToDisk(record));
+        PendingRecord accepted = new PendingRecord(detail);
+        pending.put(detail.getId(), accepted);
+        java.util.Set<String> identities = new java.util.HashSet<>();
+        for (GameRecord.Participant participant : detail.getParticipants()) {
+            if (!participant.isAi() && participant.getIdentityId() != null && identities.add(participant.getIdentityId())) {
+                identityRevisions.merge(participant.getIdentityId(), 1L, Long::sum);
+            }
+        }
+        index(accepted.summary);
+        if (!drainScheduled) {
+            drainScheduled = true;
+            writer.execute(this::drainWrites);
+        }
+    }
+
+    private static List<int[]> copyMoves(List<int[]> moves) {
+        List<int[]> copy = new ArrayList<>(moves.size());
+        for (int[] move : moves) copy.add(move == null ? null : move.clone());
+        return copy;
+    }
+
+    private static int[][] copyBoard(int[][] board) {
+        if (board == null) return null;
+        int[][] copy = new int[board.length][];
+        for (int r = 0; r < board.length; r++) {
+            copy[r] = board[r] == null ? null : board[r].clone();
+        }
+        return copy;
     }
 
     private String newRecordId() {
         String stamp = new SimpleDateFormat("yyyyMMdd-HHmmss").format(new Date());
-        return stamp + "-" + UUID.randomUUID().toString().substring(0, 6);
+        return stamp + "-" + UUID.randomUUID();
     }
 
     private synchronized void index(GameRecord record) {
@@ -132,7 +204,10 @@ public class GameRecordService {
             for (GameRecord.Participant p : dropped.getParticipants()) {
                 if (p.getName() == null) continue;
                 LinkedList<GameRecord> list = byPlayer.get(p.getName());
-                if (list != null) list.remove(dropped);
+                if (list != null) {
+                    list.remove(dropped);
+                    if (list.isEmpty()) byPlayer.remove(p.getName());
+                }
             }
         }
         for (GameRecord.Participant p : record.getParticipants()) {
@@ -141,21 +216,61 @@ public class GameRecordService {
         }
     }
 
-    private void writeToDisk(GameRecord record) {
-        try {
-            Files.createDirectories(baseDir);
-            // 详情：完整记录（含棋谱）
-            Path detail = baseDir.resolve(record.getId() + ".json");
-            Files.write(detail, gson.toJson(record).getBytes(StandardCharsets.UTF_8));
-
-            // 摘要：一行一条，供列表/战绩快速读取
-            GameRecord summary = stripMoves(record);
-            String line = gson.toJson(summary) + System.lineSeparator();
-            Files.write(indexPath, line.getBytes(StandardCharsets.UTF_8),
-                    StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-        } catch (IOException e) {
-            logger.warn("对局记录写入失败 id={}", record.getId(), e);
+    private void drainWrites() {
+        while (true) {
+            PendingRecord next;
+            synchronized (this) {
+                if (pending.isEmpty()) { drainScheduled = false; notifyAll(); return; }
+                next = pending.values().iterator().next();
+            }
+            try {
+                writeToDisk(next);
+                synchronized (this) { pending.remove(next.summary.getId()); notifyAll(); }
+            } catch (IOException | RuntimeException e) {
+                int failures;
+                synchronized (this) { failures = ++next.failures; }
+                logger.error("对局存档失败，将保序重试 id={} attempt={}", next.summary.getId(), failures, e);
+                if (!writer.isShutdown()) writer.schedule(this::drainWrites,
+                        Math.min(30, 1L << Math.min(failures - 1, 5)), TimeUnit.SECONDS);
+                return;
+            }
         }
+    }
+
+    /** 单线程保序：详情原子替换 → 摘要日志强制落盘 → 索引事务。重启可从日志补齐索引。 */
+    private void writeToDisk(PendingRecord accepted) throws IOException {
+        if (!accepted.journaled) {
+            Files.createDirectories(baseDir);
+            Path detail = baseDir.resolve(accepted.detail.getId() + ".json");
+            Path temporary = detail.resolveSibling(detail.getFileName() + ".tmp");
+            byte[] json = gson.toJson(accepted.detail).getBytes(StandardCharsets.UTF_8);
+            try (FileChannel output = FileChannel.open(temporary, StandardOpenOption.CREATE,
+                    StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
+                writeFully(output, ByteBuffer.wrap(json)); output.force(true);
+            }
+            try { Files.move(temporary, detail, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
+            catch (AtomicMoveNotSupportedException e) { Files.move(temporary, detail, StandardCopyOption.REPLACE_EXISTING); }
+            // 若上一次崩溃留下半行，先隔开，不能让下一局粘到损坏行后也变得不可恢复。
+            try (FileChannel output = FileChannel.open(indexPath, StandardOpenOption.CREATE,
+                    StandardOpenOption.READ, StandardOpenOption.WRITE)) {
+                long size = output.size();
+                if (size > 0) {
+                    ByteBuffer last = ByteBuffer.allocate(1); output.position(size - 1); output.read(last);
+                    output.position(size);
+                    if (last.array()[0] != '\n') writeFully(output, ByteBuffer.wrap(new byte[] {'\n'}));
+                }
+                output.position(output.size());
+                writeFully(output, ByteBuffer.wrap((gson.toJson(accepted.summary) + "\n").getBytes(StandardCharsets.UTF_8)));
+                output.force(true);
+            }
+            accepted.journaled = true;
+        }
+        archive.insert(accepted.summary);
+        archive.markJournaled(Files.size(indexPath));
+    }
+
+    private static void writeFully(FileChannel output, ByteBuffer bytes) throws IOException {
+        while (bytes.hasRemaining()) output.write(bytes);
     }
 
     private static GameRecord stripMoves(GameRecord src) {
@@ -172,41 +287,23 @@ public class GameRecordService {
         copy.setEventId(src.getEventId());
         copy.setEventTitle(src.getEventTitle());
         copy.setEventXpPercent(src.getEventXpPercent());
-        copy.setParticipants(src.getParticipants());
+        List<GameRecord.Participant> participants = new ArrayList<>();
+        for (GameRecord.Participant source : src.getParticipants()) {
+            GameRecord.Participant participant = new GameRecord.Participant(source.getPlayerId(), source.getName(),
+                    source.getSide(), source.getResult(), source.isAi(), source.getEloBefore(), source.getEloAfter(), source.getEloChange());
+            participant.setIdentityId(source.getIdentityId()); participant.setDeck(source.getDeck());
+            participant.setDeckLabel(source.getDeckLabel()); participant.setDeckSummary(source.getDeckSummary());
+            participants.add(participant);
+        }
+        copy.setParticipants(participants);
         return copy;
     }
 
     // ============ 读取 ============
 
-    private void loadIndex() {
-        if (!Files.exists(indexPath)) return;
-        int loaded = 0;
-        try {
-            List<String> lines = Files.readAllLines(indexPath, StandardCharsets.UTF_8);
-            // 从后往前读，保留最新的 MAX_INDEX_ENTRIES 条
-            for (int i = lines.size() - 1; i >= 0 && loaded < MAX_INDEX_ENTRIES; i--) {
-                String line = lines.get(i).trim();
-                if (line.isEmpty()) continue;
-                try {
-                    GameRecord record = gson.fromJson(line, GameRecord.class);
-                    if (record == null) continue;
-                    record.setMoveHistory(null);
-                    record.setMoveEffects(null);
-                    index(record);
-                    loaded++;
-                } catch (Exception ignored) {
-                    // 单行损坏不该影响整体加载
-                }
-            }
-            logger.info("对局记录索引已加载：{} 条（来自 {}）", loaded, indexPath);
-        } catch (IOException e) {
-            logger.warn("对局记录索引读取失败: {}", indexPath, e);
-        }
-    }
-
     /** 最近的若干局（不分游戏类型） */
     public synchronized List<GameRecord> getRecentGames(int limit) {
-        return recent.stream().limit(Math.max(1, limit)).collect(Collectors.toList());
+        return recent.stream().limit(Math.max(1, limit)).map(GameRecordService::stripMoves).collect(Collectors.toList());
     }
 
     /** 最近的若干局，限定游戏类型（null 或空表示不限） */
@@ -231,6 +328,7 @@ public class GameRecordService {
                 .filter(r -> gameType == null || gameType.isEmpty() || gameType.equalsIgnoreCase(r.getGameType()))
                 .filter(r -> deckFilter == null || hasDeck(r, deckFilter))
                 .limit(Math.max(1, limit))
+                .map(GameRecordService::stripMoves)
                 .collect(Collectors.toList());
     }
 
@@ -246,7 +344,7 @@ public class GameRecordService {
     public synchronized List<GameRecord> getPlayerGames(String playerName, int limit) {
         LinkedList<GameRecord> list = byPlayer.get(playerName);
         if (list == null) return new ArrayList<>();
-        return list.stream().limit(Math.max(1, limit)).collect(Collectors.toList());
+        return list.stream().limit(Math.max(1, limit)).map(GameRecordService::stripMoves).collect(Collectors.toList());
     }
 
     /**
@@ -254,7 +352,9 @@ public class GameRecordService {
      * @return { total, wins, losses, draws, winRate, elo, gameType }
      */
     public synchronized Map<String, Object> getPlayerStats(String playerName, String gameType) {
-        LinkedList<GameRecord> list = byPlayer.get(playerName);
+        List<GameRecord> list = new ArrayList<>();
+        visitNameRecords(playerName, list::add);
+        Collections.reverse(list);
         int total = 0, wins = 0, losses = 0, draws = 0;
         int lastElo = 0;
         if (list != null) {
@@ -292,7 +392,7 @@ public class GameRecordService {
     public synchronized Map<String, Object> getIdentityStats(String identityId, String gameType) {
         int wins = 0, losses = 0, draws = 0;
         int rankedTotal = 0, rankedWins = 0, rankedLosses = 0, rankedDraws = 0, elo = 0;
-        for (GameRecord record : recent) {
+        for (GameRecord record : getIdentityRecords(identityId)) {
             if (gameType != null && !gameType.isEmpty() && !gameType.equalsIgnoreCase(record.getGameType())) continue;
             GameRecord.Participant me = findParticipantByIdentity(record, identityId);
             if (me == null || me.isAi()) continue;
@@ -327,7 +427,7 @@ public class GameRecordService {
         int todayGames = 0, todayWins = 0;
         java.util.Set<String> todayTypes = new java.util.HashSet<>();
         java.util.Set<LocalDate> activeDays = new java.util.HashSet<>();
-        for (GameRecord record : recent) {
+        for (GameRecord record : getIdentityRecords(identityId)) {
             GameRecord.Participant participant = findParticipantByIdentity(record, identityId);
             // 每日活跃统计身份参与的全部对局（含人机、多人休闲房）；这里排除的只是 AI 自己的身份。
             // ranked 只决定 ELO/竞技战绩，不能让多人或人机玩法从运营任务里消失。
@@ -369,12 +469,12 @@ public class GameRecordService {
     public synchronized List<Map<String, Object>> getWeeklyActivityLeaderboard(int topN) {
         long cutoff = System.currentTimeMillis() - java.util.concurrent.TimeUnit.DAYS.toMillis(7);
         Map<String, WeeklyRow> rows = new HashMap<>();
-        for (GameRecord record : recent) {
+        for (GameRecord record : recordsInWindow(cutoff, Long.MAX_VALUE)) {
             if (record.getEndedAt() <= 0 || record.getEndedAt() < cutoff) continue;
             for (GameRecord.Participant p : record.getParticipants()) {
                 if (p.isAi() || p.getIdentityId() == null) continue;
                 WeeklyRow row = rows.computeIfAbsent(p.getIdentityId(), k -> new WeeklyRow());
-                if (p.getName() != null) row.name = p.getName();
+                if (row.name == null && p.getName() != null) row.name = p.getName();
                 row.games++;
                 if ("WIN".equals(p.getResult())) row.wins++;
                 if (record.getGameType() != null) row.types.add(record.getGameType());
@@ -410,7 +510,7 @@ public class GameRecordService {
     public synchronized Map<String, Object> getSeasonStats(String identityId, long since, long until) {
         int wins = 0, draws = 0, losses = 0;
         if (identityId != null) {
-            for (GameRecord record : recent) {
+            for (GameRecord record : recordsInWindow(since, until)) {
                 long ended = record.getEndedAt();
                 if (ended < since || ended >= until) continue;
                 GameRecord.Participant me = findParticipantByIdentity(record, identityId);
@@ -449,13 +549,13 @@ public class GameRecordService {
     public synchronized List<Map<String, Object>> getSeasonResults(long since, long until) {
         Map<String, WeeklyRow> rows = new HashMap<>();
         Map<String, Integer> points = new HashMap<>();
-        for (GameRecord record : recent) {
+        for (GameRecord record : recordsInWindow(since, until)) {
             long ended = record.getEndedAt();
             if (ended < since || ended >= until) continue;
             for (GameRecord.Participant p : record.getParticipants()) {
                 if (p.isAi() || p.getIdentityId() == null) continue;
                 WeeklyRow row = rows.computeIfAbsent(p.getIdentityId(), k -> new WeeklyRow());
-                if (p.getName() != null) row.name = p.getName();
+                if (row.name == null && p.getName() != null) row.name = p.getName();
                 row.games++;
                 if ("WIN".equals(p.getResult())) {
                     row.wins++;
@@ -492,22 +592,64 @@ public class GameRecordService {
      */
     public synchronized List<GameRecord> getIdentityRecords(String identityId) {
         List<GameRecord> result = new ArrayList<>();
-        if (identityId == null) return result;
-        for (GameRecord record : recent) {
-            GameRecord.Participant participant = findParticipantByIdentity(record, identityId);
-            if (participant != null && !participant.isAi()) result.add(record);
+        visitIdentityRecords(identityId, result::add);
+        Collections.reverse(result);
+        return result;
+    }
+
+    /** 按存档顺序从旧到新流式读取全历史；成长计算无需把全部历史再装入内存。 */
+    public synchronized long visitIdentityRecords(String identityId, Consumer<GameRecord> visitor) {
+        if (identityId == null) return 0;
+        init();
+        archive.visitIdentity(identityId, record -> {
+            if (!pending.containsKey(record.getId())) visitor.accept(record);
+        });
+        for (PendingRecord record : pending.values()) {
+            GameRecord.Participant me = findParticipantByIdentity(record.summary, identityId);
+            if (me != null && !me.isAi()) visitor.accept(stripMoves(record.summary));
         }
+        return getIdentityRevision(identityId);
+    }
+
+    public synchronized long getIdentityRevision(String identityId) {
+        return identityRevisions.getOrDefault(identityId, 0L);
+    }
+
+    private void visitNameRecords(String name, Consumer<GameRecord> visitor) {
+        if (name == null) return;
+        init();
+        archive.visitName(name, record -> {
+            if (!pending.containsKey(record.getId())) visitor.accept(record);
+        });
+        for (PendingRecord record : pending.values()) {
+            GameRecord.Participant me = findParticipant(record.summary, name);
+            if (me != null && !me.isAi()) visitor.accept(stripMoves(record.summary));
+        }
+    }
+
+    /** 日期窗口独立于大厅 5000 条窗口：高活跃时每日任务、赛季、运营统计也不能缩水。 */
+    public synchronized List<GameRecord> recordsInWindow(long since, long until) {
+        init();
+        List<GameRecord> result = new ArrayList<>();
+        archive.visitWindow(since, until, record -> {
+            if (!pending.containsKey(record.getId())) result.add(record);
+        });
+        for (PendingRecord record : pending.values()) {
+            long ended = record.summary.getEndedAt();
+            if (ended >= since && ended < until) result.add(stripMoves(record.summary));
+        }
+        Collections.reverse(result);
         return result;
     }
 
     /**
      * 运营指标用的全量摘要快照（最新在前）。
      *
-     * 返回的是内存索引里的同一批对象，调用方只读不写。
+     * 返回摘要副本，避免调用方修改索引或仍在等待持久化的快照。
      * 抽这个方法而不是把字段暴露出去，是为了让 OpsMetricsService 不必知道 recent 的锁细节。
      */
     public synchronized List<GameRecord> snapshotRecentRecords() {
-        return new ArrayList<>(recent);
+        return recent.stream().map(GameRecordService::stripMoves).collect(Collectors.toList());
     }
 
     /**
@@ -516,13 +658,16 @@ public class GameRecordService {
      */
     public synchronized String getLastKnownName(String identityId) {
         if (identityId == null) return null;
-        for (GameRecord record : recent) {
-            GameRecord.Participant participant = findParticipantByIdentity(record, identityId);
+        init();
+        List<PendingRecord> unsaved = new ArrayList<>(pending.values());
+        Collections.reverse(unsaved);
+        for (PendingRecord record : unsaved) {
+            GameRecord.Participant participant = findParticipantByIdentity(record.summary, identityId);
             if (participant != null && !participant.isAi() && participant.getName() != null) {
                 return participant.getName();
             }
         }
-        return null;
+        return archive.lastName(identityId);
     }
 
     private static GameRecord.Participant findParticipant(GameRecord record, String playerName) {
@@ -549,11 +694,11 @@ public class GameRecordService {
         if (!Files.exists(file)) {
             // 内存里可能还有（写盘尚未完成）
             synchronized (this) {
-                for (GameRecord r : recent) {
-                    if (id.equals(r.getId())) return r;
-                }
+                init();
+                PendingRecord unsaved = pending.get(id);
+                if (unsaved != null) return gson.fromJson(gson.toJson(unsaved.detail), GameRecord.class);
+                return archive.get(id);
             }
-            return null;
         }
         try {
             String json = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
@@ -621,19 +766,30 @@ public class GameRecordService {
 
     /** 便于测试：等待所有待写任务落盘 */
     public void flushForTest() {
-        try {
-            writer.submit(() -> {}).get(5, TimeUnit.SECONDS);
-        } catch (Exception ignored) {
+        if (!awaitPending(10000)) throw new IllegalStateException("对局存档队列未在时限内清空");
+    }
+
+    private synchronized boolean awaitPending(long timeoutMs) {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+        while (!pending.isEmpty()) {
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0) return false;
+            try { TimeUnit.NANOSECONDS.timedWait(this, remaining); }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); return false; }
         }
+        return true;
+    }
+
+    /** 只报告数量，不暴露身份或对局明细；持久化失败时健康检查应及时变红。 */
+    public synchronized Map<String, Object> getStorageStatus() {
+        long failed = pending.values().stream().filter(record -> record.failures > 0).count();
+        return Map.of("ready", initialized, "pendingRecords", pending.size(), "failedRecords", failed);
     }
 
     /** 便于测试：直接从 map 里查某玩家的记录条数 */
-    int indexedPlayerCount(String playerName) {
+    synchronized int indexedPlayerCount(String playerName) {
         LinkedList<GameRecord> list = byPlayer.get(playerName);
         return list == null ? 0 : list.size();
     }
 
-    // 保留 HashMap 引用，避免 IDE 误报未使用（预留扩展）
-    @SuppressWarnings("unused")
-    private final Map<String, Integer> reserved = new HashMap<>();
 }

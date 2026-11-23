@@ -19,6 +19,7 @@ public class GameMessage {
         DIRECT_MSG,     // 好友私聊（客户端→服务端：data=对方身份，message=文本；服务端→客户端：playerId/playerName=发送者）
         REPORT,         // 举报（客户端→服务端：data=被举报身份，action=原因码，message=补充说明）
         RESTART,        // 请求重新开始
+        CANCEL_RESTART, // 取消自己的「再来一局」准备
         LEAVE,          // 离开房间/大厅
         RECONNECT,      // 断线重连
         SURRENDER,      // 认输
@@ -80,6 +81,10 @@ public class GameMessage {
     private int playerCount;
     public int getPlayerCount() { return playerCount; }
     public void setPlayerCount(int playerCount) { this.playerCount = playerCount; }
+    /** 入口来源（QUICK/PRIVATE/CODE/AI/PARTY/DUEL），仅用于运营漏斗统计。 */
+    private String entryMode;
+    public String getEntryMode() { return entryMode; }
+    public void setEntryMode(String entryMode) { this.entryMode = entryMode; }
 
     public GameMessage() {}
 

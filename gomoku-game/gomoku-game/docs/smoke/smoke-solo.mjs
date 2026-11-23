@@ -1,4 +1,4 @@
-// 单机模式冒烟：9 个玩法逐个「建房 + 加电脑」，断言都能直接开局
+// 单机模式冒烟：19 个玩法逐个「建房 + 加电脑」，断言都能直接开局
 // 这条覆盖的是一个曾经的致命缺陷：一个人进房间后「添加电脑」按钮从不渲染，
 // 导致所有玩法都只能干等另一个真人加入。
 const WS_URL = process.env.WS_URL || 'ws://127.0.0.1:19001';
@@ -9,11 +9,21 @@ const GAMES = [
   { type: 'REVERSI', name: '黑白棋' },
   { type: 'GO9', name: '围棋' },
   { type: 'XIANGQI', name: '中国象棋' },
+  { type: 'CHECKERS', name: '西洋跳棋' },
+  { type: 'JUNGLE', name: '斗兽棋' },
+  { type: 'DARK_CHESS', name: '暗棋' },
+  { type: 'FLIGHT_CHESS', name: '飞行棋' },
   { type: 'CONNECT4', name: '四子棋' },
   { type: 'RPG', name: '回合制对战' },
   { type: 'CARD', name: '卡牌对战' },
   { type: 'NIM', name: '取石子' },
   { type: 'QUIZ', name: '答题对战' },
+  { type: 'DICE_RACE', name: '骰子竞速' },
+  { type: 'GEM_AUCTION', name: '宝石拍卖' },
+  { type: 'BLACKJACK', name: '21 点' },
+  { type: 'HIGH_CARD', name: '比大小' },
+  { type: 'UNO', name: 'UNO 对战' },
+  { type: 'BOMB_CAT', name: '炸弹猫' },
 ];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -32,7 +42,9 @@ function soloStart(gameType) {
     const st = { gameState: null, myStone: 0, view: null, gameType: null, errs: [] };
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'JOIN', playerName: 'solo-' + gameType, gameType }));
+      // 多人玩法默认 4 人，单机冒烟只需要验证「人 + 电脑」能开局，
+      // 因此显式要求 2 人容量；否则加 1 个电脑仍差 2 席，永远不开局。
+      ws.send(JSON.stringify({ type: 'JOIN', playerName: 'solo-' + gameType, gameType, playerCount: 2 }));
       // 服务端需要房间先建好才接受 ADD_AI
       setTimeout(() => ws.send(JSON.stringify({ type: 'ADD_AI', data: '4' })), 450);
     };
@@ -86,7 +98,7 @@ function soloStart(gameType) {
         { gameState: s.gameState, errs: s.errs });
       assert(s.myStone > 0, `${g.name} 分配到我方棋色`, { myStone: s.myStone });
       // 非棋盘玩法应该有 view
-      if (['RPG', 'CARD', 'NIM', 'QUIZ'].includes(g.type)) {
+      if (['RPG', 'CARD', 'NIM', 'QUIZ', 'DICE_RACE', 'GEM_AUCTION', 'BLACKJACK', 'HIGH_CARD', 'UNO'].includes(g.type)) {
         assert(!!s.view, `${g.name} 开局即下发 view`, { hasView: !!s.view });
       }
       started.push(g.name);

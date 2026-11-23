@@ -6,6 +6,9 @@ let soundEnabled = readPreference('gomoku_sound', 'on') === 'on';
 let guestToken = readPreference('gomoku_guest');
 let authMode = 'guest';
 let accountInfo = null;
+let restoreAccountDone = false;
+/** 用户是否已经主动选过登录/注册页签；恢复登录态不得覆盖用户的选择。 */
+let authTabTouched = false;
 let targetPlayers = 2;
 function toggleSound() {
   soundEnabled = !soundEnabled; savePreference('gomoku_sound', soundEnabled ? 'on' : 'off');
@@ -71,6 +74,13 @@ let actionVersion = null; // 服务端下发的当前对局/轮次或局面版�
 let selectedGameType = 'GOMOKU';  // 大厅选中的游戏类型
 let currentGameType = 'GOMOKU';   // 当前所在房间的游戏类型
 let selectedFrom = null;          // 象棋选中的起点 {row, col}
+/** 随机开局玩法的复盘初始盘面（暗棋等）；null 时使用模块自带 initialBoard() */
+let replayInitialBoard = null;
+
+/** 深拷贝二维盘面：复盘会反复在初始盘面上推演，不能直接改服务端快照。 */
+function deepCopyBoard(source) {
+  return Array.from(source || [], row => Array.from(row || []));
+}
 let cardAttackFrom = null;        // 卡牌：选中待攻击的己方随从下标
 let nimSelectedPile = null;      // 取石子：选中待取子的堆号
 // 卡牌：已点选、但还需要指定目标的法术牌下标（null = 未处于选目标状态）
@@ -79,12 +89,21 @@ let board = [];                   // 当前棋盘（尺寸由 GameModule 决定�
 let lastMove = null;
 let winLine = null; // 获胜连线坐标 [[row,col],...]
 let players = {};
+/** 最近一次房间数据里的再来一局状态（结算页展示准备名单与倒计时） */
+let rematchState = null;
+let rematchTimer = null;
 let myWins = 0, myLosses = 0;
 // 匹配体验：等待计时、同玩法等待提示与大厅玩法卡的人气标识
 let latestMatchOverview = null;
 let matchWaitStartedAt = 0;
 let matchWaitTimer = null;
+let matchTimeoutTimer = null;
 let matchRoomIsPublic = false;
+/** 最近一次公开匹配用的玩法：结算页「匹配下一局」沿用，避免回到大厅重选。 */
+let lastMatchGameType = null;
+/** 服务端下发的房间可见性：决定结算页能否直接回到公开匹配队列。 */
+let currentRoomPrivate = false;
+let currentRoomAiSeats = 0;
 let matchOverviewDebounce = null;
 // ============ 会话持久化：标签页内 + 关闭后恢复 ============
 // sessionStorage 只覆盖当前标签页；关闭再打开时用它 + localStorage 备份找回座位。
@@ -167,6 +186,7 @@ function htmlPanelIds() {
 
 function initGameModule(type) {
   actionVersion = null;
+  replayInitialBoard = null;
   currentGameType = GameModules[type] ? type : 'GOMOKU';
   const m = mod();
   const isHtml = !!m.html;
@@ -214,11 +234,13 @@ let useBinary = false; // 是否使用二进制协议（默认 JSON）
 const BIN_TYPE = {
   GET_ROOMS: 1, JOIN: 2, SPECTATE: 3, ADD_AI: 4, MOVE: 5,
   CHAT: 6, RESTART: 7, LEAVE: 8, RECONNECT: 9, SURRENDER: 10,
-  PASS: 12, PING: 11,
+  PASS: 12, END_TURN: 13, CANCEL_RESTART: 14, PING: 11,
   ROOM_LIST: 50, ROOM_INFO: 51, GAME_START: 52, GAME_SYNC: 53,
   GAME_MOVE: 54, GAME_OVER: 55, GAME_CHAT: 56, WAITING: 57,
   RESTART_REQUEST: 58, TIMER_SYNC: 59, ERROR: 60, PLAYER_STATUS: 61
 };
+// 多字节可选起点扩展：服务端旧解析器按字节数判断，带此值才读取 fromRow/fromCol。
+const BIN_MOVE_FROM = 0x80;
 const BIN_TYPE_NAME = {};
 Object.keys(BIN_TYPE).forEach(k => BIN_TYPE_NAME[BIN_TYPE[k]] = k);
 
@@ -242,6 +264,7 @@ function encodeBinary(msg) {
     case BIN_TYPE.LEAVE:
     case BIN_TYPE.PASS:
     case BIN_TYPE.RESTART:
+    case BIN_TYPE.CANCEL_RESTART:
     case BIN_TYPE.SURRENDER:
       break; // no payload
     case BIN_TYPE.JOIN:
@@ -251,6 +274,7 @@ function encodeBinary(msg) {
       parts.push(encodeNullableStr(msg.deck));
       parts.push(encodeNullableStr(msg.deckCards));
       parts.push(new Uint8Array([msg.createRoom ? 1 : 0, msg.playerCount || 0]));
+      parts.push(encodeNullableStr(msg.entryMode));
       break;
     case BIN_TYPE.SPECTATE:
       parts.push(encodeStr(msg.playerName || ''));
@@ -261,7 +285,9 @@ function encodeBinary(msg) {
       parts.push(encodeNullableStr(msg.deck));
       break;
     case BIN_TYPE.MOVE:
-      parts.push(new Uint8Array([msg.row, msg.col]));
+      const from = Number.isInteger(msg.fromRow) && msg.fromRow >= 0
+        && Number.isInteger(msg.fromCol) && msg.fromCol >= 0;
+      parts.push(new Uint8Array([msg.row, msg.col, ...(from ? [BIN_MOVE_FROM, msg.fromRow, msg.fromCol] : [])]));
       const seqBuf = new ArrayBuffer(4);
       new DataView(seqBuf).setInt32(0, msg.moveSeq || 0);
       parts.push(new Uint8Array(seqBuf));
@@ -392,6 +418,7 @@ function decodeBinary(arrayBuffer) {
       msg.playerName = readNullableStr();
       msg.message = readNullableStr();
       if (offset < data.byteLength) msg.playerId = readNullableStr();
+      if (offset < data.byteLength) msg.data = readNullableStr();
       break;
     case BIN_TYPE.TIMER_SYNC:
       msg.roomId = readNullableStr();
@@ -434,7 +461,8 @@ function drawBoard() {
     myStone,
     currentTurn,
     selected: selectedFrom,
-    hint: gameState === 'PLAYING'
+    hint: gameState === 'PLAYING',
+    view: rpgView
   });
 }
 
@@ -1064,6 +1092,120 @@ function renderGemAuctionPanel() {
   logEl.innerHTML = (v.log || []).map(line => '<div>' + escHtml(line) + '</div>').join(''); logEl.scrollTop = logEl.scrollHeight;
 }
 
+function renderBombCatPanel() {
+  const turnEl = document.getElementById('bomb-cat-turn');
+  const deckEl = document.getElementById('bomb-cat-deck-count');
+  const specialEl = document.getElementById('bomb-cat-special');
+  const playersEl = document.getElementById('bomb-cat-players');
+  const handEl = document.getElementById('bomb-cat-hand');
+  const hintEl = document.getElementById('bomb-cat-hint');
+  const drawBtn = document.getElementById('bomb-cat-draw');
+  const targetBtn = document.getElementById('bomb-cat-target');
+  const peekEl = document.getElementById('bomb-cat-peek');
+  const logEl = document.getElementById('bomb-cat-log');
+  if (!turnEl || !playersEl || !handEl || !logEl) return;
+  const v = rpgView;
+  if (!v || !v.players) {
+    turnEl.textContent = '等待开局…';
+    playersEl.innerHTML = '';
+    handEl.innerHTML = '';
+    logEl.innerHTML = '';
+    return;
+  }
+  const me = v.players.find(p => p.side === myStone);
+  const current = v.players.find(p => p.side === v.turn);
+  const myTurn = gameState === 'PLAYING' && !v.over && v.turn === myStone && myId !== 'SPECTATOR';
+  const reinserting = v.pendingReinsertSide > 0;
+  const iMustReinsert = reinserting && v.pendingReinsertSide === myStone;
+  const noPlaysLeft = myTurn && Number(v.playsLeft || 0) <= 0;
+  turnEl.textContent = v.over ? '对局结束'
+    : reinserting ? (iMustReinsert ? '拆弹器生效：秘密选择炸弹位置' : '等待玩家秘密放回炸弹')
+    : myTurn ? '你的回合 · 可连续出牌' : '轮到 ' + ((current && current.name) || '玩家');
+  deckEl.textContent = v.deckCount + ' 张';
+  specialEl.hidden = !reinserting;
+  specialEl.innerHTML = reinserting
+    ? (iMustReinsert
+      ? '<strong>把炸弹放回哪里？</strong><div><button data-reinsert="110">牌库顶</button><button data-reinsert="111">牌库中间</button><button data-reinsert="112">牌库底部</button></div>'
+      : '<strong>对手正在拆弹</strong><span>放回位置不会公开</span>')
+    : '';
+  playersEl.innerHTML = v.players.map(p =>
+    '<div class="bomb-cat-player ' + (p.side === myStone ? 'is-you ' : '') + (p.active ? '' : 'is-out ') + (p.side === v.turn && !v.over ? 'is-turn' : '') + '">'
+      + '<span>' + escHtml(p.name) + '</span><strong>' + p.handCount + '<small> 张</small></strong>'
+      + '<em>' + (!p.active ? '已出局' : p.extraTurns > 0 ? '额外回合 ×' + p.extraTurns : p.side === v.turn && !v.over ? '行动中' : '等待') + '</em>'
+    + '</div>'
+  ).join('');
+  const hand = (me && me.hand) || [];
+  handEl.innerHTML = hand.map(c => {
+    const isDefuse = c.type === 'DEFUSE';
+    return '<button class="bomb-cat-card bomb-cat-' + c.type.toLowerCase() + '" data-bomb-index="' + c.index + '"'
+      + (!c.playable || !myTurn || reinserting || v.over ? ' disabled' : '') + '>'
+      + '<span>' + escHtml(bombCatGlyph(c.type)) + '</span><strong>' + escHtml(c.label) + '</strong>'
+      + (isDefuse ? '<small>保护一次</small>' : '') + '</button>';
+  }).join('');
+  handEl.querySelectorAll('[data-bomb-index]').forEach(button => button.onclick = () => {
+    const index = Number(button.dataset.bombIndex);
+    const card = hand.find(c => c.index === index);
+    if (!card || !card.playable || card.type === 'DEFUSE' || !myTurn || reinserting) return;
+    if (card.type === 'FAVOR') {
+      chooseBombCatTarget();
+      return;
+    }
+    sendBombCatAction(index);
+  });
+  const peek = v.peekForSide === myStone ? (v.peekCards || []) : [];
+  peekEl.hidden = !peek.length;
+  peekEl.innerHTML = peek.length
+    ? '<div><strong>你看到的牌库顶</strong><span>下一张</span></div><div class="bomb-cat-peek-cards">'
+      + peek.map((c, index) => '<span class="bomb-cat-peek-card">' + (index + 1) + ' · ' + escHtml(c.label) + '</span>').join('')
+      + '</div>'
+    : '';
+  hintEl.textContent = v.over ? '本局已结束'
+    : iMustReinsert ? '先选择炸弹放回位置'
+    : noPlaysLeft ? '本回合行动次数已用完，请抽一张结束回合'
+    : myTurn ? '出牌后仍轮到你；抽牌才会结束回合'
+    : '等待其他玩家行动';
+  drawBtn.disabled = !myTurn || reinserting || v.over;
+  targetBtn.hidden = !myTurn || reinserting || noPlaysLeft || !hand.some(c => c.type === 'FAVOR' && c.playable);
+  logEl.innerHTML = (v.log || []).map(line => '<div>' + escHtml(line) + '</div>').join('');
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function bombCatGlyph(type) {
+  return ({DEFUSE:'✚', SKIP:'⏭', ATTACK:'⚔', SEE_FUTURE:'🔮', SHUFFLE:'🔀', FAVOR:'🫳', BOMB:'💣'})[type] || '?';
+}
+
+function sendBombCatAction(action) {
+  if (currentGameType !== 'BOMB_CAT' || gameState !== 'PLAYING' || myId === 'SPECTATOR') return;
+  send({ type: 'MOVE', action, moveSeq });
+}
+
+function chooseBombCatTarget() {
+  const v = rpgView;
+  const me = v && v.players && v.players.find(p => p.side === myStone);
+  if (!me || Number(v.playsLeft || 0) <= 0 || !(me.hand || []).some(c => c.type === 'FAVOR' && c.playable)) return;
+  const candidates = (v.players || []).filter(p => p.side !== myStone && p.active && p.handCount > 0);
+  if (!candidates.length) {
+    setStatusMsg('没有可偷牌的玩家', 'waiting');
+    return;
+  }
+  if (candidates.length === 1) {
+    const index = me.hand.find(c => c.type === 'FAVOR' && c.playable).index;
+    send({ type: 'MOVE', action: index, targetSide: 2, targetIndex: candidates[0].side, moveSeq });
+    return;
+  }
+  const answer = window.prompt('选择要偷牌的座位：' + candidates.map(p => p.side + ' = ' + p.name).join(' / '), String(candidates[0].side));
+  const target = Number(answer);
+  if (!candidates.some(p => p.side === target)) return;
+  const index = me.hand.find(c => c.type === 'FAVOR' && c.playable).index;
+  send({ type: 'MOVE', action: index, targetSide: 2, targetIndex: target, moveSeq });
+}
+
+document.getElementById('bomb-cat-special').addEventListener('click', function (e) {
+  const button = e.target.closest ? e.target.closest('[data-reinsert]') : null;
+  if (!button) return;
+  sendBombCatAction(Number(button.dataset.reinsert));
+});
+
 document.getElementById('gem-bids').addEventListener('click', function (e) {
   const btn = e.target.closest ? e.target.closest('.gem-bid') : null;
   if (!btn || btn.disabled) return;
@@ -1101,6 +1243,8 @@ function applyViewData(dataStr) {
 // 落子预览
 canvas.addEventListener('mousemove', function(e) {
   if (gameState !== 'PLAYING' || currentTurn !== myStone) return;
+  // 暗棋没有落子预览；背面棋子点击就是翻子，避免鼠标移动把提示画成幽灵子。
+  if (currentGameType === 'DARK_CHESS') return;
   const rect = canvas.getBoundingClientRect();
   const scaleX = canvas.width / rect.width;
   const scaleY = canvas.height / rect.height;
@@ -1147,6 +1291,39 @@ canvas.addEventListener('click', function(e) {
 function tryMoveFromPixel(clientX, clientY) {
   // 非棋盘玩法不通过画布交互（面板按钮直接发行动）
   if (mod().html) return;
+  if (currentGameType === 'DARK_CHESS') {
+    tryDarkChessClick(clientX, clientY);
+    return;
+  }
+  if (currentGameType === 'FLIGHT_CHESS') {
+    if (rpgView?.phase === 'SKIP' || rpgView?.over) return;
+    const flight = GameModules.FLIGHT_CHESS;
+    const rect = canvas.getBoundingClientRect();
+    const hit = flight.hitTest(
+      (clientX - rect.left) * (canvas.width / rect.width),
+      (clientY - rect.top) * (canvas.height / rect.height)
+    );
+    if (!hit) return;
+    const legal = Array.isArray(rpgView?.legalMoves) ? rpgView.legalMoves : [];
+    const ownMove = legal.find(m => m.fromRow === hit.row && m.fromCol === hit.col);
+    if (ownMove && (!selectedFrom || selectedFrom.row !== hit.row || selectedFrom.col !== hit.col)) {
+      selectedFrom = hit;
+      drawBoard();
+      return;
+    }
+    if (!selectedFrom) return;
+    const move = legal.find(m => m.fromRow === selectedFrom.row && m.fromCol === selectedFrom.col
+      && m.toRow === hit.row && m.toCol === hit.col);
+    if (!move) {
+      selectedFrom = null;
+      drawBoard();
+      return;
+    }
+    sendMove(hit.row, hit.col, selectedFrom.row, selectedFrom.col);
+    selectedFrom = null;
+    drawBoard();
+    return;
+  }
   const rect = canvas.getBoundingClientRect();
   const scaleX = canvas.width / rect.width;
   const scaleY = canvas.height / rect.height;
@@ -1155,8 +1332,8 @@ function tryMoveFromPixel(clientX, clientY) {
   const hit = mod().hitTest(mx, my, board);
   if (!hit) return;
 
-  // 象棋：两阶段交互（先选己方棋子，再点目标点）
-  if (currentGameType === 'XIANGQI') {
+  // 走子类棋种：两阶段交互（先选己方棋子，再点目标点）
+  if (mod().moveSelect) {
     const v = board[hit.row][hit.col];
     const isOwn = v !== 0 && Math.floor(v / 10) === myStone;
     if (isOwn) {
@@ -1177,6 +1354,50 @@ function tryMoveFromPixel(clientX, clientY) {
   if (!target) return;
   if (!mod().isLegal(board, target.row, target.col, myStone)) return;
   sendMove(target.row, target.col);
+}
+
+/**
+ * 暗棋交互：点背面棋子 = 翻子；点己方明棋 = 选中；选中后点目标 = 走子。
+ * 服务端下发的 legalFlips / legalMoves 是唯一权威，客户端不自行推断背面身份。
+ */
+function tryDarkChessClick(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const hit = GameModules.DARK_CHESS.hitTest(
+    (clientX - rect.left) * (canvas.width / rect.width),
+    (clientY - rect.top) * (canvas.height / rect.height)
+  );
+  if (!hit) return;
+  const value = board[hit.row] ? board[hit.row][hit.col] : 0;
+  const flips = Array.isArray(rpgView?.legalFlips) ? rpgView.legalFlips : [];
+  const legal = Array.isArray(rpgView?.legalMoves) ? rpgView.legalMoves : [];
+
+  if (value === 9) {
+    const canFlip = flips.some(f => f.row === hit.row && f.col === hit.col);
+    if (!canFlip) { selectedFrom = null; drawBoard(); return; }
+    sendMove(hit.row, hit.col);
+    selectedFrom = null;
+    drawBoard();
+    return;
+  }
+
+  if (value !== 0 && Math.floor(value / 10) === myStone) {
+    selectedFrom = (selectedFrom && selectedFrom.row === hit.row && selectedFrom.col === hit.col)
+      ? null : hit;
+    drawBoard();
+    return;
+  }
+
+  if (!selectedFrom) return;
+  const move = legal.find(m => m.fromRow === selectedFrom.row && m.fromCol === selectedFrom.col
+    && m.toRow === hit.row && m.toCol === hit.col);
+  if (!move) {
+    selectedFrom = null;
+    drawBoard();
+    return;
+  }
+  sendMove(hit.row, hit.col, selectedFrom.row, selectedFrom.col);
+  selectedFrom = null;
+  drawBoard();
 }
 
 // 把用户点击的格子换算成最终要提交的落点。
@@ -1215,6 +1436,7 @@ function getWsUrl() {
 
 // ============ 账号体系 ============
 const authHeaders = () => guestToken ? { Authorization: 'Bearer ' + guestToken } : {};
+let passwordAutoUpgradeNotice = false;
 
 function setAccountHint(text, isError) {
   const hint = document.getElementById('account-hint');
@@ -1226,7 +1448,254 @@ function setLoginStatus(text, isError) {
   if (el) { el.textContent = text || ''; el.style.color = isError ? 'var(--red)' : 'var(--green)'; }
 }
 
+function setAccountSecurityStatus(text, isError) {
+  const el = document.getElementById('account-security-status');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = isError ? 'var(--red)' : 'var(--green)';
+}
+
+function renderAccountSecurityIdentity() {
+  const el = document.getElementById('account-security-identity');
+  if (!el || !accountInfo) return;
+  const username = accountInfo.username || '—';
+  const nickname = accountInfo.nickname || username;
+  el.textContent = '账号 ' + username + ' · 昵称 ' + nickname;
+}
+
+function openAccountSecurity() {
+  if (!accountInfo || !guestToken) return;
+  // 新手引导层级高于登录页；打开账号弹层前先收起，避免遮住表单。
+  const onboarding = document.getElementById('onboard-overlay');
+  if (onboarding) onboarding.classList.remove('show');
+  const modal = document.getElementById('account-security-modal');
+  if (!modal) return;
+  renderAccountSecurityIdentity();
+  setAccountSecurityStatus('');
+  ['old', 'new', 'confirm'].forEach(part => {
+    const input = document.getElementById('account-' + part + '-password');
+    if (input) input.value = '';
+  });
+  modal.classList.add('show');
+  const first = document.getElementById('account-old-password');
+  if (first) setTimeout(() => first.focus(), 30);
+}
+
+function closeAccountSecurity() {
+  const modal = document.getElementById('account-security-modal');
+  if (modal) modal.classList.remove('show');
+  ['old', 'new', 'confirm'].forEach(part => {
+    const input = document.getElementById('account-' + part + '-password');
+    if (input) input.value = '';
+  });
+}
+
+function accountSecurityBusy(busy) {
+  ['account-password-submit', 'account-logout-others', 'account-rotate-recovery'].forEach(id => {
+    const button = document.getElementById(id);
+    if (button) button.disabled = !!busy;
+  });
+}
+
+function setRecoveryStatus(id, text, isError) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = isError ? 'var(--red)' : 'var(--green)';
+}
+
+/** 恢复码按 4 位分组展示，便于用户抄写；服务端接收时忽略分隔符。 */
+function formatRecoveryCode(code) {
+  return (code || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase().replace(/(.{4})/g, '$1-').replace(/-$/, '');
+}
+
+function showRecoveryCode(code) {
+  const value = document.getElementById('recovery-code-value');
+  if (value) value.textContent = formatRecoveryCode(code);
+  setRecoveryStatus('recovery-code-status', '');
+  const modal = document.getElementById('recovery-code-modal');
+  if (modal) modal.classList.add('show');
+}
+
+function closeRecoveryCode() {
+  const modal = document.getElementById('recovery-code-modal');
+  if (modal) modal.classList.remove('show');
+  const value = document.getElementById('recovery-code-value');
+  if (value) value.textContent = '';
+}
+
+async function copyRecoveryCode() {
+  const value = document.getElementById('recovery-code-value');
+  const code = value ? value.textContent.trim() : '';
+  if (!code) return;
+  try {
+    await navigator.clipboard.writeText(code);
+    setRecoveryStatus('recovery-code-status', '已复制。请粘贴到安全的地方保存。');
+  } catch (_) {
+    setRecoveryStatus('recovery-code-status', '复制失败，请手动抄写。', true);
+  }
+}
+
+function openPasswordRecovery() {
+  const onboarding = document.getElementById('onboard-overlay');
+  if (onboarding) onboarding.classList.remove('show');
+  const modal = document.getElementById('account-recovery-modal');
+  if (!modal) return;
+  const username = document.getElementById('account-username').value.trim();
+  const target = document.getElementById('account-recovery-username');
+  if (username) target.value = username;
+  ['recovery-code', 'recovery-password', 'recovery-confirm'].forEach(part => {
+    const input = document.getElementById('account-' + part);
+    if (input) input.value = '';
+  });
+  setRecoveryStatus('account-recovery-status', '');
+  modal.classList.add('show');
+  setTimeout(() => (target.value ? document.getElementById('account-recovery-code') : target).focus(), 30);
+}
+
+function closePasswordRecovery() {
+  const modal = document.getElementById('account-recovery-modal');
+  if (modal) modal.classList.remove('show');
+  ['recovery-code', 'recovery-password', 'recovery-confirm'].forEach(part => {
+    const input = document.getElementById('account-' + part);
+    if (input) input.value = '';
+  });
+  setRecoveryStatus('account-recovery-status', '');
+}
+
+async function recoverAccountWithCode() {
+  const username = document.getElementById('account-recovery-username').value.trim();
+  const recoveryCode = document.getElementById('account-recovery-code').value.trim();
+  const password = document.getElementById('account-recovery-password').value || '';
+  const confirm = document.getElementById('account-recovery-confirm').value || '';
+  if (!username) return setRecoveryStatus('account-recovery-status', '请输入用户名', true);
+  if (!recoveryCode) return setRecoveryStatus('account-recovery-status', '请输入恢复码', true);
+  const problem = accountPasswordProblem(password);
+  if (problem) return setRecoveryStatus('account-recovery-status', problem, true);
+  if (password !== confirm) return setRecoveryStatus('account-recovery-status', '两次输入的新密码不一致', true);
+
+  const button = document.getElementById('account-recovery-submit');
+  if (button) button.disabled = true;
+  setRecoveryStatus('account-recovery-status', '正在验证恢复码…');
+  try {
+    const response = await fetch('/api/account/recover-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(15000),
+      body: JSON.stringify({ username, recoveryCode, newPassword: password })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || '找回失败，请重试');
+    adoptAccountSession(data);
+    closePasswordRecovery();
+    switchAuthTab('guest');
+    setLoginStatus('密码已重置，所有旧设备已退出');
+    if (data.recoveryCode) showRecoveryCode(data.recoveryCode);
+    loadFriends();
+  } catch (error) {
+    setRecoveryStatus('account-recovery-status', error.message || '找回失败，请重试', true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+/** 已登录时轮换恢复码：旧码立即失效，新码只展示一次。 */
+async function rotateRecoveryCode() {
+  if (!guestToken) return;
+  const password = window.prompt('请输入当前密码以生成新的恢复码（旧恢复码将立即失效）');
+  if (password === null) return;
+  if (!password) return setAccountSecurityStatus('请输入当前密码', true);
+  setAccountSecurityStatus('正在生成新的恢复码…');
+  try {
+    const data = await accountSecurityRequest('/api/account/rotate-recovery-code', { password });
+    if (data.recoveryCode) showRecoveryCode(data.recoveryCode);
+    setAccountSecurityStatus('新的恢复码已生成，旧码已失效');
+  } catch (error) {
+    setAccountSecurityStatus(error.message || '生成失败，请重试', true);
+  }
+}
+
+function accountPasswordProblem(password) {
+  if (!password || password.length < 8) return '新密码至少 8 位';
+  if (!/[A-Za-z]/.test(password) || !/[0-9]/.test(password)) {
+    return '新密码需同时包含字母和数字';
+  }
+  return '';
+}
+
+async function accountSecurityRequest(path, body) {
+  if (!guestToken) throw new Error('请先登录账号');
+  const options = {
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+    signal: AbortSignal.timeout(10000)
+  };
+  if (body) options.body = JSON.stringify(body);
+  const response = await fetch(path, options);
+  let data = {};
+  try { data = await response.json(); } catch (_) {}
+  if (!response.ok) throw new Error(data.message || '操作失败，请重试');
+  return data;
+}
+
+function adoptAccountSession(data) {
+  if (!data || !data.token) return;
+  guestToken = data.token;
+  savePreference('gomoku_guest', guestToken);
+  if (data.username) {
+    accountInfo = Object.assign({}, accountInfo || {}, data);
+    document.getElementById('account-state').textContent =
+      '已登录：' + (accountInfo.nickname || accountInfo.username);
+    renderAccountSecurityIdentity();
+  }
+}
+
+async function changeAccountPassword() {
+  const oldPassword = document.getElementById('account-old-password').value || '';
+  const newPassword = document.getElementById('account-new-password').value || '';
+  const confirmPassword = document.getElementById('account-confirm-password').value || '';
+  if (!oldPassword) return setAccountSecurityStatus('请输入当前密码', true);
+  const problem = accountPasswordProblem(newPassword);
+  if (problem) return setAccountSecurityStatus(problem, true);
+  if (newPassword !== confirmPassword) return setAccountSecurityStatus('两次输入的新密码不一致', true);
+  if (newPassword === oldPassword) return setAccountSecurityStatus('新密码不能与当前密码相同', true);
+  accountSecurityBusy(true);
+  setAccountSecurityStatus('正在更新…');
+  try {
+    const data = await accountSecurityRequest('/api/account/password', {
+      oldPassword, newPassword
+    });
+    adoptAccountSession(data);
+    ['old', 'new', 'confirm'].forEach(part => {
+      const input = document.getElementById('account-' + part + '-password');
+      if (input) input.value = '';
+    });
+    setAccountSecurityStatus('密码已更新，其他设备已退出');
+    setLoginStatus('密码已更新，其他设备已退出');
+    if (data.recoveryCode) showRecoveryCode(data.recoveryCode);
+  } catch (error) {
+    setAccountSecurityStatus(error.message || '改密失败，请重试', true);
+  } finally {
+    accountSecurityBusy(false);
+  }
+}
+
+async function logoutOtherAccountSessions() {
+  accountSecurityBusy(true);
+  setAccountSecurityStatus('正在撤销其他设备…');
+  try {
+    const data = await accountSecurityRequest('/api/account/logout-others');
+    const count = Number(data.revoked || 0);
+    setAccountSecurityStatus(count > 0 ? '已退出 ' + count + ' 个其他会话' : '当前没有其他会话');
+  } catch (error) {
+    setAccountSecurityStatus(error.message || '撤销失败，请重试', true);
+  } finally {
+    accountSecurityBusy(false);
+  }
+}
+
 function switchAuthTab(mode) {
+  authTabTouched = true;
   authMode = mode;
   ['guest', 'login', 'register'].forEach(m => {
     const tab = document.getElementById('tab-' + m);
@@ -1251,18 +1720,37 @@ function switchAuthTab(mode) {
 
 /** 页面加载时恢复登录态：有账号 token 就把它显示出来 */
 async function restoreAccount() {
-  if (!guestToken) return;
+  const tokenAtRequest = guestToken;
+  if (!tokenAtRequest) { restoreAccountDone = true; return; }
   try {
-    const response = await fetch('/api/account/me', { headers: authHeaders() });
+    const response = await fetch('/api/account/me', {
+      headers: { Authorization: 'Bearer ' + tokenAtRequest }
+    });
+    // 请求期间用户可能已登录、退出或换号，旧响应不能覆盖新会话。
+    if (guestToken !== tokenAtRequest) return;
     if (!response.ok) return;
-    accountInfo = await response.json();
+    const data = await response.json();
+    if (guestToken !== tokenAtRequest) return;
+    accountInfo = data;
     document.getElementById('player-name').value = accountInfo.nickname || accountInfo.username;
     document.getElementById('account-state').textContent = '已登录：' + (accountInfo.nickname || accountInfo.username);
+    document.getElementById('account-security').hidden = false;
     document.getElementById('account-logout').hidden = false;
     document.getElementById('player-name').readOnly = true;
-    switchAuthTab('guest');
-    setAccountHint('账号已登录，直接进入即可延续战绩。');
+    if (accountInfo.passwordScheme && accountInfo.passwordScheme !== 'pbkdf2-sha256') {
+      passwordAutoUpgradeNotice = true;
+    }
+    // restoreAccount 是异步的：若用户在请求返回前已经点了「注册/登录」，
+    // 不能把它切回游客态，否则输入框会突然消失。authMode 的初始值本来就是
+    // 'guest'，因此必须看用户是否真的操作过页签，而不是看当前模式。
+    if (!authTabTouched) {
+      switchAuthTab('guest');
+      setAccountHint(passwordAutoUpgradeNotice
+        ? '账号已登录。下次登录会自动升级密码保护，无需操作。'
+        : '账号已登录，直接进入即可延续战绩。');
+    }
   } catch (_) { /* 网络异常时仍可按游客进入 */ }
+  finally { restoreAccountDone = true; }
 }
 
 /** 注册或登录，成功后把返回的 token 作为统一身份凭证 */
@@ -1294,12 +1782,18 @@ async function authenticateAccount() {
     accountInfo = data;
     document.getElementById('player-name').value = data.nickname || data.username;
     document.getElementById('account-state').textContent = '已登录：' + (data.nickname || data.username);
+    document.getElementById('account-security').hidden = false;
     document.getElementById('account-logout').hidden = false;
     document.getElementById('player-name').readOnly = true;
+    passwordAutoUpgradeNotice = data.passwordScheme && data.passwordScheme !== 'pbkdf2-sha256';
     const successMessage = authMode === 'register' ? '注册成功，战绩已保留' : '登录成功';
     // 凭证已落 localStorage，切回游客态：否则按钮仍是「注册并进入」，再点会重复注册报 409。
     switchAuthTab('guest');
-    setLoginStatus(successMessage);
+    setLoginStatus(passwordAutoUpgradeNotice
+      ? successMessage + '，密码保护已升级'
+      : successMessage);
+    // 恢复码只在注册时明文返回一次；登录不会重复下发，避免长期留着可被截获的凭证。
+    if (data.recoveryCode) showRecoveryCode(data.recoveryCode);
     // 身份变了（游客升级为账号或换号登录），好友列表按新身份重取
     loadFriends();
     return true;
@@ -1310,10 +1804,23 @@ async function authenticateAccount() {
 }
 
 async function accountLogout() {
+  const token = guestToken;
+  if (accountInfo && token) {
+    try {
+      await fetch('/api/account/logout', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token },
+        signal: AbortSignal.timeout(5000)
+      });
+    } catch (_) {
+      // 网络中断时仍清掉本机凭证；服务端会按会话过期/后续撤销处理。
+    }
+  }
   guestToken = null;
   accountInfo = null;
   try { localStorage.removeItem('gomoku_guest'); } catch (_) {}
   document.getElementById('account-state').textContent = '当前：游客身份（战绩仅存在本浏览器）';
+  document.getElementById('account-security').hidden = true;
   document.getElementById('account-logout').hidden = true;
   document.getElementById('player-name').readOnly = false;
   switchAuthTab('guest');
@@ -1440,7 +1947,9 @@ function showLobby() {
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('lobby-screen').style.display = 'block';
   document.getElementById('game-screen').style.display = 'none';
+  closeRules();
   gameState = 'LOBBY';
+  updateRematchState(null);
   stopMatchWait(true);
   // 回到大厅时立刻刷新战绩（刚打完的那局应该马上出现在列表里）
   loadMyStats();
@@ -1459,8 +1968,11 @@ function showGame() {
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('lobby-screen').style.display = 'none';
   document.getElementById('game-screen').style.display = 'grid';
+  closeRules();
   document.getElementById('chat-messages').innerHTML = '<div class="chat-msg system">欢迎来到' + mod().name + '对战！</div>';
   drawBoard();
+  // 好友面板位于大厅下方；切屏后从顶部展示棋盘，避免沿用大厅滚动位置而落到聊天区。
+  window.scrollTo(0, 0);
 }
 
 function refreshRooms() {
@@ -1637,8 +2149,33 @@ function maybeShowOnboarding() {
 
 function quickMatch() {
   matchRoomIsPublic = true;
-  send({ type: 'JOIN', playerName: myName, gameType: selectedGameType, createRoom: false, playerCount: selectedPlayerCount() });
+  currentRoomPrivate = false;
+  send({ type: 'JOIN', playerName: myName, gameType: selectedGameType, createRoom: false, playerCount: selectedPlayerCount(), entryMode: 'QUICK' });
   initGameModule(selectedGameType);
+  lastMatchGameType = selectedGameType;
+  showGame();
+  setStatusMsg('正在匹配同玩法的在线玩家…', 'waiting');
+}
+
+/** 结算页直接沿用刚才的公开匹配玩法，省掉返回大厅重选的折返。 */
+function quickMatchNext() {
+  if (gameState !== 'OVER' && gameState !== 'WAITING') return;
+  matchRoomIsPublic = true;
+  currentRoomPrivate = false;
+  const type = lastMatchGameType || selectedGameType;
+  // LEAVE 先清空旧席位，随后 JOIN 才能进入队列；后端按连接顺序处理两条消息。
+  send({ type: 'LEAVE' });
+  send({ type: 'JOIN', playerName: myName, gameType: type, createRoom: false,
+    playerCount: selectedPlayerCount(type), entryMode: 'QUICK' });
+  clearSessionBackup();
+  roomId = null;
+  players = {};
+  myStone = 0;
+  currentTurn = 1;
+  winLine = null;
+  updateRematchState(null);
+  hideSettlementEntry();
+  initGameModule(type);
   showGame();
   setStatusMsg('正在匹配同玩法的在线玩家…', 'waiting');
 }
@@ -1647,7 +2184,8 @@ function createRoom() {
   // createRoom=true：强制新建私有房间，不把我匹配进别人的等待房间。
   // 之前这里只是普通 JOIN，点「创建房间」有可能直接坐进陌生人的房间。
   matchRoomIsPublic = false;
-  send({ type: 'JOIN', playerName: myName, gameType: selectedGameType, createRoom: true, playerCount: selectedPlayerCount() });
+  currentRoomPrivate = true;
+  send({ type: 'JOIN', playerName: myName, gameType: selectedGameType, createRoom: true, playerCount: selectedPlayerCount(), entryMode: 'PRIVATE' });
   initGameModule(selectedGameType);
   showGame();
 }
@@ -1701,12 +2239,29 @@ function startMatchWait() {
   renderMatchWait();
   matchWaitTimer = setInterval(renderMatchWait, 1000);
   loadMatchOverview();
+
+  // 公开匹配 20 秒仍无对手：主动给出「补电脑立即开局」出口。
+  // 低人口时段玩家最容易在这里流失；不强制、不自动开局，只把选择摆到眼前。
+  if (matchRoomIsPublic) {
+    matchTimeoutTimer = setTimeout(function () {
+      matchTimeoutTimer = null;
+      if (gameState !== 'WAITING' || !matchWaitStartedAt) return;
+      if (document.getElementById('confirm-dialog')?.classList.contains('show')) return;
+      showConfirm('暂时没有匹配到其他玩家，是否补入电脑立即开局？', function () {
+        fillSeatsWithAI();
+      });
+    }, 20000);
+  }
 }
 
 function stopMatchWait(hide) {
   if (matchWaitTimer) {
     clearInterval(matchWaitTimer);
     matchWaitTimer = null;
+  }
+  if (matchTimeoutTimer) {
+    clearTimeout(matchTimeoutTimer);
+    matchTimeoutTimer = null;
   }
   matchWaitStartedAt = 0;
   if (hide) {
@@ -1785,7 +2340,8 @@ function joinByCode() {
 /** 按归一化后的房号加入（邀请链接也会走这里） */
 function doJoinByCode(code) {
   matchRoomIsPublic = false;
-  send({ type: 'JOIN', playerName: myName, gameType: selectedGameType, roomId: code });
+  currentRoomPrivate = true;
+  send({ type: 'JOIN', playerName: myName, gameType: selectedGameType, roomId: code, entryMode: 'CODE' });
   initGameModule(selectedGameType);
   showGame();
 }
@@ -1819,7 +2375,8 @@ function fallbackCopy(text) {
 
 function joinSpecificRoom(id, gameType) {
   matchRoomIsPublic = false;
-  send({ type: 'JOIN', playerName: myName, roomId: id, gameType: gameType || selectedGameType });
+  currentRoomPrivate = true;
+  send({ type: 'JOIN', playerName: myName, roomId: id, gameType: gameType || selectedGameType, entryMode: 'CODE' });
   initGameModule(gameType || selectedGameType);
   showGame();
 }
@@ -1844,7 +2401,8 @@ function leaveRoom() {
   currentTurn = 1;
   winLine = null;
   gameState = 'LOBBY';
-  document.getElementById('gameover-overlay').classList.remove('show');
+  updateRematchState(null);
+  hideSettlementEntry();
   document.getElementById('move-count').textContent = '落子数: 0';
   // 回到大厅后隐藏邀请入口（房间已离开）
   const inviteBtnLeave = document.getElementById('invite-btn');
@@ -1887,7 +2445,8 @@ function sendMove(row, col, fromRow, fromCol) {
 // 非棋盘玩法：按行动序号出招（RPG 技能栏按下标发送）
 function sendAction(actionIndex) {
   if (gameState !== 'PLAYING' || myStone <= 0 || myId === 'SPECTATOR') return;
-  if (currentGameType === 'QUIZ' || currentGameType === 'HIGH_CARD' || currentGameType === 'DICE_RACE' || currentGameType === 'GEM_AUCTION') {
+  if (currentGameType === 'QUIZ' || currentGameType === 'HIGH_CARD' || currentGameType === 'DICE_RACE'
+      || currentGameType === 'GEM_AUCTION') {
     const mine = rpgView?.players?.find(p => p.side === myStone);
     if (!mine || mine.answered || mine.active === false || rpgView.over) return;
   } else if (currentTurn !== myStone) return;
@@ -1902,6 +2461,7 @@ function sendUnoCatch() {
 
 function sendPass() {
   if (gameState !== 'PLAYING' || currentTurn !== myStone) return;
+  if (currentGameType === 'FLIGHT_CHESS' && !(rpgView?.canSkip === true)) return;
   send({ type: 'PASS' });
 }
 
@@ -1959,19 +2519,22 @@ function showConfirm(message, onOk) {
 }
 
 function dismissOverlay() {
-  document.getElementById('gameover-overlay').classList.remove('show');
-  // 在棋盘下方显示再来一局按钮
+  hideSettlementEntry();
+  // 关闭结算浮层后，底部仍要保留重开进度和两个出口。
   const bar = document.getElementById('restart-bar');
   if (bar && myId !== 'SPECTATOR') bar.style.display = 'flex';
+  renderRematchState();
 }
 
 function requestRestart() {
-  document.getElementById('gameover-overlay').classList.remove('show');
-  document.getElementById('restart-bar').style.display = 'none';
   if (myId === 'SPECTATOR') return;
 
   if (gameState === 'OVER') {
-    send({ type: 'RESTART' });
+    if (rematchState && rematchState.readyPlayerIds && rematchState.readyPlayerIds.includes(myId)) {
+      send({ type: 'CANCEL_RESTART' });
+    } else {
+      send({ type: 'RESTART' });
+    }
   } else if (gameState === 'WAITING') {
     initGameModule(currentGameType);
     moveCount = 0;
@@ -1982,12 +2545,87 @@ function requestRestart() {
   }
 }
 
+/** 服务端下发的再来一局状态：准备名单、真人数量与截止时间。 */
+function updateRematchState(value) {
+  rematchState = value || null;
+  renderRematchState();
+}
+
+function rematchNameOf(playerId) {
+  const p = players && players[playerId];
+  return p && p.name ? p.name : '玩家';
+}
+
+function renderRematchState() {
+  const gameoverBtn = document.getElementById('gameover-restart');
+  const barBtn = document.getElementById('restart-bar-restart');
+  const readyList = rematchState && Array.isArray(rematchState.readyPlayerIds)
+    ? rematchState.readyPlayerIds : [];
+  const waitingList = rematchState && Array.isArray(rematchState.waitingPlayerIds)
+    ? rematchState.waitingPlayerIds : [];
+  const iAmReady = !!myId && readyList.includes(myId);
+  const pending = !!(rematchState && rematchState.pending);
+  const humans = (rematchState && rematchState.humanPlayers) || 0;
+  const waitingForOthers = !iAmReady && waitingList.length > 0 && readyList.length > 0;
+
+  [gameoverBtn, barBtn].forEach(function (btn) {
+    if (!btn) return;
+    btn.textContent = iAmReady ? '撤回准备' : waitingForOthers ? '接受再来一局' : '再来一局';
+    btn.setAttribute('aria-pressed', iAmReady ? 'true' : 'false');
+  });
+
+  if (rematchTimer) { clearInterval(rematchTimer); rematchTimer = null; }
+  ['rematch-status', 'restart-rematch-status'].forEach(function (id) {
+    const status = document.getElementById(id);
+    if (!status) return;
+    status.className = 'rematch-status' + (id === 'restart-rematch-status' ? ' rematch-status-bar' : '')
+      + (pending ? ' pending' : '');
+    status.replaceChildren();
+    if (!pending) {
+      status.hidden = true;
+      return;
+    }
+    status.hidden = false;
+    const title = document.createElement('div');
+    title.className = 'rematch-title';
+    title.textContent = iAmReady ? '已准备，等待其他人确认' : '有人想再来一局';
+    const detail = document.createElement('div');
+    detail.className = 'rematch-detail';
+    detail.textContent = '已准备 ' + readyList.length + '/' + humans
+      + (waitingList.length ? ' · 等待 ' + waitingList.map(rematchNameOf).join('、') : '');
+    const countdown = document.createElement('div');
+    countdown.className = 'rematch-countdown';
+    countdown.dataset.statusId = id;
+    status.append(title, detail, countdown);
+  });
+  if (pending) startRematchCountdown();
+}
+
+function startRematchCountdown() {
+  if (rematchTimer) { clearInterval(rematchTimer); rematchTimer = null; }
+  const tick = function () {
+    const elements = document.querySelectorAll('.rematch-countdown');
+    if (!elements.length || !rematchState || !rematchState.expiresAt) return;
+    const seconds = Math.max(0, Math.ceil((Number(rematchState.expiresAt) - Date.now()) / 1000));
+    const text = seconds > 0
+      ? '倒计时 ' + Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0')
+      : '已超时，可重新发起';
+    elements.forEach(function (el) { el.textContent = text; });
+    if (seconds <= 0) {
+      if (rematchTimer) { clearInterval(rematchTimer); rematchTimer = null; }
+    }
+  };
+  tick();
+  rematchTimer = setInterval(tick, 1000);
+}
+
 // ============================================================
 // 大厅：游戏选择
 // ============================================================
 const GAME_CATEGORY = {
-  GOMOKU: 'board', REVERSI: 'board', GO9: 'board', XIANGQI: 'board', CONNECT4: 'board',
-  CARD: 'card', UNO: 'card', HIGH_CARD: 'card', BLACKJACK: 'card',
+  GOMOKU: 'board', REVERSI: 'board', GO9: 'board', XIANGQI: 'board', CHECKERS: 'board', JUNGLE: 'board', DARK_CHESS: 'board',
+  FLIGHT_CHESS: 'party', CONNECT4: 'board',
+  CARD: 'card', UNO: 'card', HIGH_CARD: 'card', BLACKJACK: 'card', BOMB_CAT: 'card',
   DICE_RACE: 'party', GEM_AUCTION: 'party',
   RPG: 'duel', NIM: 'duel', QUIZ: 'duel'
 };
@@ -2027,6 +2665,9 @@ function buildGameSelector() {
     const card = document.createElement('div');
     card.className = 'game-card' + (selected ? ' selected' : '');
     card.dataset.gameType = type;
+    card.tabIndex = 0;
+    card.setAttribute('role', 'button');
+    card.setAttribute('aria-label', m.name + '：' + (m.footer || ''));
     // 选中卡片直接放「人机对战」按钮 —— 这是单机模式的唯一入口。
     // 之前只能先「快速开始」进房间、再等对手、再找「添加电脑」按钮，
     // 而那个按钮因为渲染 bug 从来没出现过，等于一个人完全没法开局。
@@ -2034,8 +2675,15 @@ function buildGameSelector() {
       <div class="game-card-name">${m.name}</div>
       <div class="game-card-desc">${m.footer}</div>
       <span class="game-card-activity" data-activity="${type}" style="display:none"></span>
+      <button class="btn-rules" data-rules="${type}" aria-label="查看${m.name}规则">规则</button>
       ${selected ? `<button class="btn-solo" data-solo="${type}">▶ 人机对战</button>` : ''}`;
     card.onclick = function (e) {
+      const rulesBtn = e.target.closest ? e.target.closest('[data-rules]') : null;
+      if (rulesBtn) {
+        e.stopPropagation();
+        openRules(rulesBtn.dataset.rules);
+        return;
+      }
       const soloBtn = e.target.closest ? e.target.closest('[data-solo]') : null;
       if (soloBtn) {
         e.stopPropagation();
@@ -2047,10 +2695,117 @@ function buildGameSelector() {
       updatePlayerCountSelector();
       refreshRooms();
     };
+    card.onkeydown = function (e) {
+      // 卡片里嵌了「规则」「人机对战」两个原生按钮。浏览器对嵌套按钮的键盘激活
+      // 行为不一致（外层 role=button 会让部分版本吞掉 Enter/Space），这里统一兜底：
+      // 焦点在卡片本身时选中玩法；焦点在内部按钮时明确触发对应动作。
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const rulesBtn = e.target.closest ? e.target.closest('[data-rules]') : null;
+      const soloBtn = e.target.closest ? e.target.closest('[data-solo]') : null;
+      if (rulesBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        openRules(rulesBtn.dataset.rules);
+        return;
+      }
+      if (soloBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        startSoloGame(soloBtn.dataset.solo);
+        return;
+      }
+      if (e.target !== card) return;
+      e.preventDefault();
+      selectedGameType = type;
+      buildGameSelector();
+      updatePlayerCountSelector();
+      refreshRooms();
+    };
     container.appendChild(card);
   });
   updateGameActivityBadges();
 }
+
+// ============================================================
+// 玩法规则：大厅卡片与对局内共用；内容来自 GameModules[type].rules
+// ============================================================
+let rulesGameType = null;
+let rulesReturnFocus = null;
+let rulesOpen = false;
+
+/** 打开规则弹层；大厅与对局都可用，同一份模块元数据保证不会出现两套教程。 */
+function openRules(type) {
+  const game = GameModules[type];
+  const modal = document.getElementById('rules-modal');
+  if (!game || !modal) return;
+  const rules = game.rules || {};
+  const steps = rules.steps || [];
+  rulesGameType = type;
+  rulesReturnFocus = document.activeElement;
+  rulesOpen = true;
+
+  document.getElementById('rules-title').textContent = game.name + (game.icon ? ' ' + game.icon : '');
+  document.getElementById('rules-sub').textContent = game.footer || '';
+  document.getElementById('rules-body').innerHTML =
+    '<div class="rules-goal"><span class="rules-label">目标</span><p>' + escHtml(rules.goal || '—') + '</p></div>'
+    + '<div class="rules-section"><span class="rules-label">怎么玩</span><ol class="rules-steps">'
+    + steps.map(s => '<li>' + escHtml(s) + '</li>').join('')
+    + '</ol></div>'
+    + ((rules.tips && rules.tips.length)
+      ? '<div class="rules-section"><span class="rules-label">小提示</span><ul class="rules-tips">'
+        + rules.tips.map(s => '<li>' + escHtml(s) + '</li>').join('') + '</ul></div>'
+      : '');
+  const minutes = Math.round((game.totalTime || 300) / 60);
+  const minPlayers = game.minPlayers || 2;
+  const maxPlayers = game.maxPlayers || 2;
+  document.getElementById('rules-meta').textContent = '每步 ' + (game.stepTime || 30) + ' 秒 · 每方约 '
+    + minutes + ' 分钟 · ' + (minPlayers === maxPlayers ? maxPlayers : minPlayers + '–' + maxPlayers) + ' 人';
+  // 对局中已经坐在房间里：隐藏「人机练习」，避免把当前对局跳出到新房间的误导入口。
+  const soloBtn = document.getElementById('rules-solo');
+  const inGame = typeof gameState !== 'undefined' && ['WAITING', 'PLAYING', 'OVER'].includes(gameState);
+  soloBtn.style.display = inGame ? 'none' : 'inline-block';
+  if (inGame) document.getElementById('rules-meta').textContent += ' · 当前对局进行中';
+  modal.classList.add('show');
+  document.body.classList.add('modal-open');
+  const closeBtn = document.getElementById('rules-close');
+  if (closeBtn) closeBtn.focus({ preventScroll: true });
+}
+
+/** 对局内「查看玩法规则」：读取当前房间玩法，而不是大厅选中项。 */
+function openRulesFromGame() {
+  openRules(currentGameType || selectedGameType || 'GOMOKU');
+}
+
+/** 从规则弹层直接开始人机练习：关掉弹层后走正常难度选择流程。 */
+function startSoloFromRules() {
+  const type = rulesGameType;
+  closeRules();
+  if (type) startSoloGame(type);
+}
+
+function closeRules() {
+  const modal = document.getElementById('rules-modal');
+  if (modal) modal.classList.remove('show');
+  document.body.classList.remove('modal-open');
+  rulesGameType = null;
+  if (rulesOpen && rulesReturnFocus && typeof rulesReturnFocus.focus === 'function') {
+    const target = rulesReturnFocus;
+    // 触发元素可能位于重绘后的卡片中；不存在时焦点回到 body，不强行聚焦已移除节点。
+    if (document.contains(target)) target.focus({ preventScroll: true });
+  }
+  rulesOpen = false;
+  rulesReturnFocus = null;
+}
+
+// Esc 关闭；点遮罩关闭；移动端底部按钮仍可操作，不锁滚动。
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape' && document.getElementById('rules-modal')?.classList.contains('show')) {
+    closeRules();
+  }
+});
+document.getElementById('rules-modal')?.addEventListener('click', function (e) {
+  if (e.target === e.currentTarget) closeRules();
+});
 
 /**
  * 单机模式：建房 + 立刻加入电脑，一步开局。
@@ -2068,13 +2823,14 @@ function startSoloGame(type) {
   askSoloDifficulty(type, function (difficulty, deck, deckCards) {
     selectedGameType = type;
     matchRoomIsPublic = false;
+    currentRoomPrivate = true;
     initGameModule(type);
     showGame();
     setStatusMsg('正在准备人机对战…', 'waiting');
     addChat('人机对战：正在创建房间…' + (deck ? '（套牌：' + deckLabel(deck) + '）' : ''), 'system');
 
     // JOIN 里带 deck：套牌必须开局前定下来（服务端建库时读取）。
-    const joinMsg = { type: 'JOIN', playerName: myName, gameType: type, createRoom: true, playerCount: selectedPlayerCount(type) };
+    const joinMsg = { type: 'JOIN', playerName: myName, gameType: type, createRoom: true, playerCount: selectedPlayerCount(type), entryMode: 'AI' };
     if (deck) joinMsg.deck = deck;
     // 自定义套牌：把配比 JSON 一起带上（服务端会独立校验）
     if (deckCards) joinMsg.deckCards = JSON.stringify(deckCards);
@@ -2461,10 +3217,14 @@ function handleMessage(msg) {
       break;
 
     case 'RESTART_REQUEST':
-      if (msg.playerId ? msg.playerId === myId : msg.playerName === myName) { addChat(msg.message, 'system'); break; }
-      showConfirm(msg.message || '对手请求再来一局', function() {
-        send({ type: 'RESTART' });
-      });
+      // 多人局不能只弹一次「对手请求」：先点的人看不到后来者，
+      // 也无法在结算浮层里确认进度。服务端把准备名单与截止时间放在 data 里，
+      // 这里统一渲染成持续状态；老服务端没有 data 时仍按旧提示处理。
+      try {
+        const payload = msg.data ? JSON.parse(msg.data) : null;
+        if (payload) updateRematchState(payload);
+      } catch (_) { }
+      if (msg.message) addChat(msg.message, 'system');
       break;
 
     case 'TIMER_SYNC':
@@ -2550,7 +3310,7 @@ function handleWaiting(msg) {
   moveCount = 0;
   lastMove = null;
   winLine = null;
-  document.getElementById('gameover-overlay').classList.remove('show');
+  hideSettlementEntry();
   document.getElementById('move-count').textContent = '落子数: 0';
   showSurrenderBtn();
   let wMsg = msg.message;
@@ -2579,12 +3339,14 @@ function handleRoomInfo(msg) {
       if (data.gameType !== currentGameType) initGameModule(data.gameType);
     }
     targetPlayers = data.targetPlayers || targetPlayers;
+    applyRoomVisibility(data);
     if (data.actionVersion) actionVersion = data.actionVersion;
     if (data.view) rpgView = data.view;
     players = {};
     if (data.players && Array.isArray(data.players)) {
       data.players.forEach(p => { players[p.id] = p; });
     }
+    updateRematchState(data.rematch);
     renderSpectatorLine(data.spectatorCount, data.spectators);
 
     updatePlayerPanel();
@@ -2724,14 +3486,18 @@ function handleGameSync(msg) {
     // 恢复玩家信息
     players = {};
     targetPlayers = data.roomData.targetPlayers || targetPlayers;
+    applyRoomVisibility(data.roomData);
     actionVersion = data.roomData.actionVersion || null;
     data.roomData.players.forEach(p => { players[p.id] = p; });
+    updateRematchState(data.roomData.rematch);
     currentTurn = data.roomData.currentTurn;
     renderSpectatorLine(data.roomData.spectatorCount, data.roomData.spectators);
 
     // 非棋盘玩法没有盘面，view 才是真正的状态来源
     if (data.roomData.view) rpgView = data.roomData.view;
     if (data.view) rpgView = data.view;
+    // 暗棋：view 里带 legalFlips / legalMoves，重连后必须恢复提示
+    if (data.gameType === 'DARK_CHESS' && data.view) rpgView = data.view;
 
     // 恢复棋盘（RPG 这类玩法 board 为 null，不能直接解引用）
     board = data.board || (mod().html ? null : mod().initialBoard());
@@ -2755,8 +3521,7 @@ function handleGameSync(msg) {
 
   document.getElementById('room-id').textContent = '房号: ' + roomId.replace(/^ROOM-/, '') + (myId === 'SPECTATOR' ? ' (观战中)' : '');
   document.getElementById('move-count').textContent = '落子数: ' + moveCount;
-  document.getElementById('gameover-overlay').classList.remove('show');
-  document.getElementById('restart-bar').style.display = 'none';
+  hideSettlementEntry();
 
   // 重连成功：隐藏登录页
   reconnectAttempts = 0;
@@ -2778,6 +3543,7 @@ function handleGameSync(msg) {
 function handleGameStart(msg) {
   myId = msg.playerId;
   myStone = msg.stone;
+  updateRematchState(null);
   if (msg.sessionId) { mySessionId = msg.sessionId; sessionStorage.setItem('gomoku_session', mySessionId); clearSessionBackup(); }
   roomId = msg.roomId;
   // 开局后不再需要邀请入口
@@ -2797,6 +3563,7 @@ function handleGameStart(msg) {
   try {
     const data = JSON.parse(msg.data);
     targetPlayers = data.targetPlayers || targetPlayers;
+    applyRoomVisibility(data);
     actionVersion = data.actionVersion || null;
     players = {};
     data.players.forEach(p => { players[p.id] = p; });
@@ -2804,11 +3571,12 @@ function handleGameStart(msg) {
     renderSpectatorLine(data.spectatorCount, data.spectators);
     // 非棋盘玩法：开局就带上完整战斗状态，面板不用等第一手才出内容
     if (data.view) rpgView = data.view;
+    // 暗棋开局需要 legalFlips 才能标记哪些暗子可以翻
+    if (msg.gameType === 'DARK_CHESS' && data.view) rpgView = data.view;
   } catch(e) {}
 
   document.getElementById('room-id').textContent = '房号: ' + roomId.replace(/^ROOM-/, '');
-  document.getElementById('gameover-overlay').classList.remove('show');
-  document.getElementById('restart-bar').style.display = 'none';
+  hideSettlementEntry();
   document.getElementById('replay-bar').style.display = 'none';
   replayMode = false;
 
@@ -2851,7 +3619,8 @@ function handleGameMove(msg) {
   // 停一手广播（围棋 PASS：row === -2）
   if (r === -2) {
     const passer = players[msg.playerId];
-    addChat((passer ? passer.name : msg.playerName || '对手') + ' 停一手', 'system');
+    addChat((passer ? passer.name : msg.playerName || '对手')
+      + (currentGameType === 'FLIGHT_CHESS' ? ' 跳过本回合' : ' 停一手'), 'system');
     lastMove = null;
   } else if (m.usePieceValues) {
     // 棋子移动类游戏（象棋）：盘面由 effects 权威更新（清起点 + 落终点）
@@ -2862,10 +3631,14 @@ function handleGameMove(msg) {
     lastMove = [r, c];
     moveCount++;
   }
+  // 新一手开始后清掉上一手遗留的选中格；否则被吃掉/移走的起点仍会显示选框。
+  selectedFrom = null;
 
   // 解析轮次 + 效果（提子/翻转/棋子移动/自动停一手）
+  let moveData = null;
   try {
     const data = JSON.parse(msg.data);
+    moveData = data;
     currentTurn = data.turn;
     if (data.timers) timerData = data.timers;
     if (data.actionVersion) actionVersion = data.actionVersion;
@@ -2888,6 +3661,25 @@ function handleGameMove(msg) {
     moveSeq = msg.moveSeq;
   }
 
+  // 跳棋的合法走法与强制吃子信息随 MOVE 一起下发；保留给画布高亮。
+  if ((currentGameType === 'CHECKERS' || currentGameType === 'JUNGLE'
+      || currentGameType === 'DARK_CHESS'
+      || currentGameType === 'FLIGHT_CHESS') && moveData && moveData.view) rpgView = moveData.view;
+
+    // 暗棋翻子会把新棋子身份放进 effects；走子/吃子也要同步最新公开盘面。
+    // 服务端 MOVE 目前只带坐标与 effects，三阶段吃子需要清目标/落终点，
+    // applyEffects 已按顺序处理。此处只补聊天日志。
+  if (currentGameType === 'DARK_CHESS' && moveData?.view?.log) {
+    const lastText = moveData.view.log[moveData.view.log.length - 1];
+    if (lastText) addChat(lastText, 'system');
+  }
+
+  if (currentGameType === 'FLIGHT_CHESS' && moveData?.view) {
+    const lastText = Array.isArray(moveData.view.log) && moveData.view.log.length
+      ? moveData.view.log[moveData.view.log.length - 1] : '';
+    if (lastText) addChat(lastText, 'system');
+  }
+
   document.getElementById('move-count').textContent = '手数: ' + moveCount;
   updateTurnStatus();
   drawBoard();
@@ -2897,6 +3689,170 @@ function handleGameMove(msg) {
 /** 本局结算时生效的限时活动（由 GAME_OVER 下发，用于在结算页解释额外经验） */
 let lastGameOverEvent = null;
 
+/**
+ * 每种玩法的结算解释：胜负结果仍由服务端权威判定，这里只根据结果给出规则相关的原因和下一步提示。
+ * 不把随机胜负包装成操作技巧，也不把特定终局条件说成所有对局都适用。
+ */
+const GAME_OVER_GUIDES = {
+  GOMOKU: {
+    win: '先连成五子，抢到第一条无法被同时封堵的线路。',
+    lose: '对手先连成五子；下一次留意活三和两条同时进攻的线路。',
+    draw: '棋盘已经下满，双方都没能连成五子。',
+    tip: '尝试从边线和斜线制造双重威胁，同时优先封堵对手的活三。'
+  },
+  REVERSI: {
+    win: '终局时你的棋子更多。',
+    lose: '终局时对手的棋子更多；前期吃子多不等于最终领先。',
+    draw: '黑白双方最终棋子数相同。',
+    tip: '先看角、边和稳定子；不要为了眼前的一两枚子让对手占角。'
+  },
+  GO9: {
+    win: '数子后你的地盘更多。',
+    lose: '数子后对手的地盘更多；官子阶段的小目数也会决定结果。',
+    draw: '双方数子结果相同。',
+    tip: '先抢大场，再处理官子；局部吃亏时可以用弃子换取外势。'
+  },
+  XIANGQI: {
+    win: '你将死了对手的将帅。',
+    lose: '你的将帅被将死；下一次先检查自己的王前防线。',
+    draw: '对局以和棋结束。',
+    tip: '让车、马、炮互相保护，进攻前先确认将帅没有被抽将。'
+  },
+  CHECKERS: {
+    win: '你吃光了对手的棋子，或让对手无子可走。',
+    lose: '你的棋子被吃光或无子可走；注意强制吃子的连跳路线。',
+    draw: '双方在这局没有分出胜负。',
+    tip: '优先保住能升王的兵，并避免把棋子停在对面的连吃路线上。'
+  },
+  JUNGLE: {
+    win: '你进入对方兽穴，或吃光、困住了对手。',
+    lose: '对手先进入兽穴，或让你的棋子无路可走；下一次注意鼠与陷阱。',
+    draw: '连续 120 个半回合无吃子，本局判和。',
+    tip: '用鼠守住河流跳点，低战力棋子先探陷阱；高战力棋子不要把自己送进对方兽穴口。'
+  },
+  DARK_CHESS: {
+    win: '你吃光了对方棋子，或让对手无子可翻、无子可走。',
+    lose: '对手吃光了你的棋子或让你无路可走；下一次优先翻靠近己方的暗子，别把大子送到炮口。',
+    draw: '连续 120 个半回合没有吃子也没有翻子，本局判和。',
+    tip: '暗棋的核心是信息差：先翻自己的半场，用兵试探，炮留到中盘做致命一击。'
+  },
+  FLIGHT_CHESS: {
+    win: '你先把 4 枚棋子全部送进了中心终点。',
+    lose: '对手先完成了 4 枚棋子；下一次更早起飞并保护接近终点的棋子。',
+    draw: '本局没有产生胜者。',
+    tip: '优先起飞扩大场上棋子数，快到终点时计算点数，避免超出后停在对手的射程内。'
+  },
+  CONNECT4: {
+    win: '你先连成了四子。',
+    lose: '对手先连成四子；注意竖直、横线和斜线同时出现的威胁。',
+    draw: '棋盘下满，双方都没能连成四子。',
+    tip: '中路能通向更多线路；优先制造上、中、下三层的双重威胁。'
+  },
+  RPG: {
+    win: '对手生命值先归零，或终局时你的生命值更高。',
+    lose: '你的生命值先归零，或终局时低于对手。',
+    draw: '双方同归于尽，或达到回合上限时生命值相同。',
+    tip: '观察对手血量和技能节奏，在保命与输出之间留出一次反转机会。'
+  },
+  CARD: {
+    win: '对手生命归零，或在回合上限时你的生命更高。',
+    lose: '你的生命归零，或在回合上限时低于对手。',
+    draw: '双方同归于尽，或剩余生命相同。',
+    tip: '留意法力曲线与场面交换；保留解场和直接伤害牌处理关键回合。'
+  },
+  NIM: {
+    win: '你拿走了最后一颗石子。',
+    lose: '对手拿走了最后一颗石子；试着把局面留给对手的必败态。',
+    draw: '对局在限定手数内没有分出胜负。',
+    tip: '把每堆石子数量做异或；能留下异或和为 0 的局面就占主动。'
+  },
+  QUIZ: {
+    win: '你的答题得分高于对手。',
+    lose: '你的答题得分低于对手；连对和答对速度都会影响比分。',
+    draw: '双方最终得分相同。',
+    tip: '不确定时先排除明显错误项；把握大的题再争速度。'
+  },
+  DICE_RACE: {
+    win: '你的累计总分最高。',
+    lose: '你的累计总分没有领先；每轮的选择会改变最终得分。',
+    draw: '最高总分出现并列。',
+    tip: '领先时选稳、落后时再冒险；不要把一次高点数当成整局优势。'
+  },
+  GEM_AUCTION: {
+    win: '五轮拍卖后你的宝石分最高。',
+    lose: '你的宝石分没有领先；暗投时既要考虑收益，也要计算剩余金币。',
+    draw: '最高宝石分出现并列。',
+    tip: '前几轮控制出价，最后高价值宝石轮次留足金币再竞争。'
+  },
+  BLACKJACK: {
+    win: '你的点数比庄家更接近 21 点，或庄家爆点。',
+    lose: '庄家更接近 21 点，或你的手牌爆点。',
+    draw: '你的点数与庄家相同。',
+    tip: '先看庄家明牌再决定要牌；接近爆点时要及时停牌。'
+  },
+  HIGH_CARD: {
+    win: '五轮结束后你的累计得分最高。',
+    lose: '你的累计得分没有领先；大牌和王牌的使用轮次很关键。',
+    draw: '最高得分出现并列。',
+    tip: '决胜轮分数翻倍；前面的轮次可以留牌，关键时刻再使用王牌。'
+  },
+  UNO: {
+    win: '你先清空手牌。',
+    lose: '对手先清空手牌；保留可应对颜色变化的牌会更稳。',
+    draw: '对局在限定手数内没有分出胜负。',
+    tip: '剩一张时先喊 UNO；万能牌留到卡手或改变颜色时再用。'
+  },
+  BOMB_CAT: {
+    win: '你存活到了最后。',
+    lose: '你在抽到炸弹时没有拆弹器，或对手更早耗尽了你的机会。',
+    draw: '牌库和弃牌堆耗尽，本局没有产生唯一胜者。',
+    tip: '把预知留给高风险阶段，用攻击让下家承受额外抽牌；拆弹器放在牌库里时也无法保护你。'
+  }
+};
+
+/** 房间数据是可见性的唯一来源；本地按钮标记只覆盖发出 JOIN 到首条服务端消息之间的空窗。 */
+function applyRoomVisibility(data) {
+  if (!data) return;
+  if (typeof data.privateRoom === 'boolean') {
+    currentRoomPrivate = data.privateRoom;
+    matchRoomIsPublic = !data.privateRoom;
+  }
+  if (Number.isInteger(data.aiSeats)) currentRoomAiSeats = Math.max(0, data.aiSeats);
+}
+
+/**
+ * 结算原因文案：服务端 finishReason 优先，旧服务端回退到原有胜负文案。
+ * 认输/超时/断线/离场都不能被说成「对手先连成五子」。
+ */
+function gameOverReasonText(finishReason, outcome) {
+  const reason = String(finishReason || '').toUpperCase();
+  const texts = {
+    SURRENDER: '你主动认输了本局。',
+    TIMEOUT: '你方用完了步时或总时间，本局判负。',
+    DISCONNECT: '有一方掉线且未在宽限期内重连，本局结束。',
+    LEFT: '有玩家提前离开房间，本局结束。',
+    DRAW: '双方都未能分出胜负，本局为平局。'
+  };
+  if (texts[reason]) return texts[reason];
+  return '';
+}
+
+/** 离开结算态时同步收起所有结算入口，避免旧按钮停留在新等待页。 */
+function hideSettlementEntry() {
+  document.getElementById('gameover-overlay').classList.remove('show');
+  document.getElementById('restart-bar').style.display = 'none';
+  const overlayNext = document.getElementById('gameover-nextmatch');
+  const barNext = document.getElementById('restart-bar-nextmatch');
+  if (overlayNext) overlayNext.style.display = 'none';
+  if (barNext) barNext.style.display = 'none';
+}
+
+function gameOverGuide(type, outcome) {
+  const guide = GAME_OVER_GUIDES[String(type || 'GOMOKU').toUpperCase()]
+    || GAME_OVER_GUIDES.GOMOKU;
+  return { text: guide[outcome] || '', tip: guide.tip || '' };
+}
+
 function handleGameOver(msg) {
   gameState = 'OVER';
   showSurrenderBtn();
@@ -2904,6 +3860,9 @@ function handleGameOver(msg) {
   const result = document.getElementById('gameover-result');
   const sub = document.getElementById('gameover-sub');
   const scores = document.getElementById('gameover-scores');
+  const insight = document.getElementById('gameover-insight');
+  const nextMatchBtn = document.getElementById('gameover-nextmatch');
+  const barNextMatchBtn = document.getElementById('restart-bar-nextmatch');
 
   // 复盘按钮只对棋盘玩法有意义：RPG 没有盘面，文字战报在「最近对局」里看
   const enterReplayBtn = document.getElementById('btn-enter-replay');
@@ -2911,6 +3870,7 @@ function handleGameOver(msg) {
 
   const isSpectator = myId === 'SPECTATOR';
   const overData = JSON.parse(msg.data || '{}');
+  applyRoomVisibility(overData);
   lastGameOverEvent = overData.event || null;
   const winningSides = overData.winningSides || [];
   const drawingSides = overData.drawingSides || [];
@@ -2930,10 +3890,11 @@ function handleGameOver(msg) {
     if (data.moveHistory && data.moveHistory.length > 0) {
       replayMoves = data.moveHistory;
       replayEffects = data.moveEffects || [];
+      replayInitialBoard = Array.isArray(data.initialBoard) ? data.initialBoard : null;
     }
     // 分数（含 ELO）
     let scoresHtml = '';
-    data.scores.forEach(p => {
+    (data.scores || []).forEach(p => {
       const changeStr = p.eloChange ? (p.eloChange > 0 ? `+${p.eloChange}` : `${p.eloChange}`) : '';
       scoresHtml += `<div class="score-item">
         <div class="score-num">${p.wins}</div>
@@ -2970,8 +3931,36 @@ function handleGameOver(msg) {
 
   sub.textContent = msg.message || '';
 
+  const outcome = isDraw ? 'draw' : isWin ? 'win' : 'lose';
+  const guide = gameOverGuide(currentGameType, outcome);
+  const reasonText = gameOverReasonText(overData.finishReason, outcome);
+  if (insight) {
+    insight.hidden = isSpectator || !guide.text;
+    insight.replaceChildren();
+    if (!isSpectator && guide.text) {
+      const label = document.createElement('span');
+      label.className = 'gameover-insight-label';
+      // 玩法名放在标签里：认输/超时等原因会替换正文，但玩家仍知道这是哪套规则的复盘。
+      label.textContent = (mod().name || '本局') + ' · 本局解释';
+      const text = document.createElement('span');
+      text.className = 'gameover-insight-text';
+      // 正常终局给规则解释；认输/超时等非规则终局只说明真实原因，
+      // 不能把「对手先连成五子」这类胜负模板句套到主动认输上。
+      text.textContent = reasonText || guide.text;
+      const tip = document.createElement('span');
+      tip.className = 'gameover-insight-tip';
+      tip.textContent = '下次可以：' + guide.tip;
+      insight.append(label, text, tip);
+    }
+  }
+
+  // 只有通过公开快速匹配进入的房间才提供「匹配下一局」；私人房、约战和人机房保持原有出口。
+  const canQuickMatchNext = !isSpectator && !currentRoomPrivate && currentRoomAiSeats === 0;
+  if (nextMatchBtn) nextMatchBtn.style.display = canQuickMatchNext ? 'inline-block' : 'none';
+  if (barNextMatchBtn) barNextMatchBtn.style.display = canQuickMatchNext ? 'inline-block' : 'none';
+
   // 按钮控制：overlay 中有 btn-review 和 btn-restart 两个
-  const restartBtn = overlay.querySelector('.btn-restart');
+  const restartBtn = overlay.querySelector('#gameover-restart');
   const reviewBtn = overlay.querySelector('.btn-review');
   if (isSpectator) {
     // 观战者：只显示"查看棋盘"，隐藏"再来一局"
@@ -3111,7 +4100,11 @@ function updateTurnStatus() {
   // 停一手按钮：仅围棋且轮到自己
   var passBtn = document.getElementById('pass-btn');
   if (passBtn) {
-    passBtn.style.display = (currentGameType === 'GO9' && gameState === 'PLAYING'
+    const flightCanSkip = currentGameType === 'FLIGHT_CHESS' && rpgView?.phase === 'SKIP'
+      && rpgView?.canSkip === true;
+    const canPass = currentGameType === 'GO9' || flightCanSkip;
+    passBtn.textContent = currentGameType === 'FLIGHT_CHESS' ? '跳过本回合' : '停一手';
+    passBtn.style.display = (canPass && gameState === 'PLAYING'
       && currentTurn === myStone && myId !== 'SPECTATOR') ? 'inline-block' : 'none';
   }
   // 隐藏所有 turn badge
@@ -3131,16 +4124,21 @@ function updateTurnStatus() {
   });
 
   if (isMyTurn) {
+    const flightPhase = currentGameType === 'FLIGHT_CHESS' ? rpgView?.phase : null;
     const hint = simultaneous ? '同时选择中 · 提交后停止计时'
       : currentGameType === 'GO9' ? '你的回合（点击落子或停一手）'
-      : currentGameType === 'XIANGQI' ? '你的回合（先点己方棋子，再点目标点）'
+      : flightPhase === 'SKIP' ? '掷出 ' + (rpgView?.dice || '—') + ' 点，无棋可走，请点「跳过本回合」'
+      : flightPhase === 'MOVE' ? '掷出 ' + (rpgView?.dice || '—') + ' 点，选择要点亮的棋子，再点目标格'
+      : mod().moveSelect ? '你的回合（先点己方棋子，再点目标点）'
       : mod().html ? '你的回合，选择一个行动' : '你的回合，请落子';
     setStatusMsg(hint, 'your-turn');
-    if (!mod().html) canvas.style.cursor = 'crosshair';
+    if (!mod().html) canvas.style.cursor = flightPhase === 'SKIP' ? 'default' : 'crosshair';
   } else {
+    const flightTurn = currentGameType === 'FLIGHT_CHESS' && rpgView?.players
+      ? rpgView.players.find(p => p.side === currentTurn) : null;
     setStatusMsg(simultaneous
       ? myId === 'SPECTATOR' ? '观战中 · 等待玩家提交' : '已提交或已退出，等待其他玩家'
-      : '等待对方行棋...', 'opponent-turn');
+      : flightTurn ? '等待 ' + flightTurn.name + ' 掷骰或走子...' : '等待对方行棋...', 'opponent-turn');
     if (!mod().html) canvas.style.cursor = 'not-allowed';
   }
   // 大厅/等待态下页脚展示当前游戏说明
@@ -3260,8 +4258,7 @@ function enterReplay() {
   if (replayMoves.length === 0) return;
   // 非棋盘玩法没有盘面可回放，复盘走对局记录弹窗里的文字战报
   if (!board) { alert('该玩法没有棋盘，请在「最近对局」里查看文字战报'); return; }
-  document.getElementById('gameover-overlay').classList.remove('show');
-  document.getElementById('restart-bar').style.display = 'none';
+  hideSettlementEntry();
 
   replayMode = true;
   replayIndex = 0;
@@ -3316,11 +4313,16 @@ function replaySeek(val) {
 
 function replayDraw() {
   const m = mod();
-  board = m.initialBoard(); // 从初始局面开始重建（黑白棋含中央四子）
+  // 随机开局玩法（暗棋）使用服务端保存的开局盘面；固定开局用模块自带布局。
+  board = replayInitialBoard ? deepCopyBoard(replayInitialBoard) : m.initialBoard();
   lastMove = null;
   for (let i = 0; i < replayIndex; i++) {
     const mv = replayMoves[i];
-    if (mv[0] < 0) continue; // 停一手
+      if (m.usePieceValues && currentGameType === 'FLIGHT_CHESS' && mv[1] < 0) {
+        lastMove = null;
+        continue;
+      }
+      if (mv[0] < 0) continue; // 停一手
     if (!m.usePieceValues) {
       board[mv[0]][mv[1]] = mv[2];
     }
@@ -3380,6 +4382,7 @@ function changeReplaySpeed() {
 // ============================================================
 let rmMoves = [];         // 复盘棋谱
 let rmEffects = [];       // 与棋谱对齐的每手效果
+let rmInitialBoard = null; // 随机开局玩法（暗棋）的开局盘面
 let rmGameType = 'GOMOKU';
 let rmShareId = null;
 let rmIndex = 0;
@@ -3392,6 +4395,10 @@ const GAME_TYPE_LABEL = {
   REVERSI: '黑白棋',
   GO9: '围棋',
   XIANGQI: '象棋',
+  CHECKERS: '西洋跳棋',
+  JUNGLE: '斗兽棋',
+  DARK_CHESS: '暗棋',
+  FLIGHT_CHESS: '飞行棋',
   CONNECT4: '四子棋',
   RPG: '回合制对战',
   // 之前漏了这三个，记录页会显示「CARD 复盘」这种英文标题
@@ -3400,7 +4407,8 @@ const GAME_TYPE_LABEL = {
   HIGH_CARD: '比大小',
   UNO: 'UNO 对战',
   QUIZ: '答题对战',
-  BLACKJACK: '21 点'
+  BLACKJACK: '21 点',
+  BOMB_CAT: '炸弹猫'
   ,DICE_RACE: '骰子竞速'
   ,GEM_AUCTION: '宝石拍卖'
 };
@@ -3581,10 +4589,202 @@ function loadFriends() {
   const listEl = document.getElementById('friends-list');
   if (!listEl || !guestToken) return;
   loadParty();
+  loadDuels();
   fetch('/api/friends', { headers: { Authorization: 'Bearer ' + guestToken } })
     .then(r => r.ok ? r.json() : Promise.reject(new Error('unauthorized')))
     .then(data => renderFriends(data))
     .catch(() => { if (!friendsLoadedOnce) listEl.textContent = '好友服务暂不可用'; });
+}
+
+// ============ 好友约战（邀请不占座，接受后由服务端原子安排双人私房） ============
+
+let duelData = { incoming: [], outgoing: [] };
+let duelGameType = null;
+let duelClockOffset = 0;
+let duelLoadVersion = 0;
+let duelTimer = null;
+let duelOwnerToken = null;
+const duelActions = new Set();
+
+function setDuelStatus(text, isError = false) {
+  const status = document.getElementById('duel-status');
+  if (!status) return;
+  status.textContent = text || '';
+  status.classList.toggle('error', isError);
+}
+
+function loadDuels() {
+  const token = guestToken;
+  if (!token) return;
+  // 切换身份不能短暂展示上一个账号的邀请或接受按钮。
+  if (duelOwnerToken !== token) {
+    duelOwnerToken = token;
+    duelData = { incoming: [], outgoing: [] };
+    setDuelStatus('');
+    renderDuels();
+  }
+  const version = ++duelLoadVersion;
+  fetch('/api/duels', { headers: { Authorization: 'Bearer ' + token }, cache: 'no-store' })
+    .then(async response => {
+      if (!response.ok) throw new Error('约战邀请暂时无法刷新，请稍后重试');
+      return response.json();
+    })
+    .then(data => {
+      if (token !== guestToken || version !== duelLoadVersion) return;
+      duelData = { incoming: data.incoming || [], outgoing: data.outgoing || [] };
+      if (Number.isFinite(data.serverTime)) duelClockOffset = data.serverTime - Date.now();
+      renderDuels();
+      if (lastFriendsData) renderFriends(lastFriendsData);
+    })
+    .catch(() => {
+      // 保留最后一次成功结果；到期仍由本地计时隐藏，操作时服务端再次校验。
+    });
+}
+
+function duelGameChanged() {
+  const picker = document.getElementById('duel-game');
+  if (picker) duelGameType = picker.value;
+}
+
+function renderDuels() {
+  const panel = document.getElementById('duel-panel');
+  const picker = document.getElementById('duel-game');
+  const container = document.getElementById('duel-invites');
+  if (!panel || !picker || !container) return;
+  panel.hidden = !guestToken;
+  if (!picker.options.length) {
+    Object.entries(GameModules).forEach(([type, game]) => {
+      if ((game.minPlayers || 2) > 2 || (game.maxPlayers || 2) < 2) return;
+      const option = document.createElement('option');
+      option.value = type;
+      option.textContent = game.name;
+      picker.appendChild(option);
+    });
+  }
+  if (!duelGameType || !GameModules[duelGameType] || !picker.querySelector('option[value="' + duelGameType + '"]')) {
+    duelGameType = selectedGameType;
+  }
+  if (!picker.querySelector('option[value="' + duelGameType + '"]')) duelGameType = picker.options[0]?.value || 'GOMOKU';
+  picker.value = duelGameType;
+  container.replaceChildren();
+  const now = Date.now() + duelClockOffset;
+  const pending = [].concat(
+    duelData.incoming.map(invite => ({ invite, incoming: true })),
+    duelData.outgoing.map(invite => ({ invite, incoming: false }))
+  ).filter(item => inviteIsLive(item.invite, now));
+  for (const { invite, incoming } of pending) {
+    const row = document.createElement('div');
+    row.className = 'duel-row';
+    row.dataset.inviteId = invite.id;
+    const detail = document.createElement('div');
+    detail.className = 'duel-detail';
+    const title = document.createElement('strong');
+    title.textContent = incoming ? (invite.fromName || '好友') + ' 邀你来一局' : '已邀请 ' + (invite.toName || '好友');
+    const meta = document.createElement('div');
+    meta.className = 'duel-meta';
+    meta.appendChild(document.createTextNode((invite.gameLabel || invite.gameType) + ' · '));
+    const remaining = document.createElement('span');
+    remaining.dataset.duelExpiry = String(invite.expiresAt);
+    meta.appendChild(remaining);
+    detail.append(title, meta);
+    const actions = document.createElement('div');
+    actions.className = 'duel-actions';
+    const busy = duelActions.size > 0;
+    const button = (label, action, primary) => {
+      const element = document.createElement('button');
+      element.type = 'button';
+      element.textContent = label;
+      element.className = primary ? 'btn-outline duel-accept' : 'leave-btn';
+      element.disabled = busy || (action === 'accept' && gameState !== 'LOBBY');
+      element.title = action === 'accept' && gameState !== 'LOBBY' ? '请先返回大厅' : '';
+      element.addEventListener('click', () => respondDuel(invite.id, action));
+      actions.appendChild(element);
+    };
+    if (incoming) {
+      button('接受并开局', 'accept', true);
+      button('拒绝', 'decline', false);
+    } else {
+      button('撤回', 'cancel', false);
+    }
+    row.append(detail, actions);
+    container.appendChild(row);
+  }
+  if (duelTimer) { clearInterval(duelTimer); duelTimer = null; }
+  updateDuelTimers();
+  if (pending.length) duelTimer = setInterval(updateDuelTimers, 1000);
+}
+
+function inviteIsLive(invite, now) {
+  return invite && Number(invite.expiresAt) > now;
+}
+
+function updateDuelTimers() {
+  const now = Date.now() + duelClockOffset;
+  const expired = [].concat(duelData.incoming || [], duelData.outgoing || [])
+    .some(invite => !inviteIsLive(invite, now));
+  if (expired) {
+    duelData.incoming = (duelData.incoming || []).filter(invite => inviteIsLive(invite, now));
+    duelData.outgoing = (duelData.outgoing || []).filter(invite => inviteIsLive(invite, now));
+    renderDuels();
+    if (lastFriendsData) renderFriends(lastFriendsData);
+    return;
+  }
+  document.querySelectorAll('[data-duel-expiry]').forEach(element => {
+    const seconds = Math.max(0, Math.ceil((Number(element.dataset.duelExpiry) - now) / 1000));
+    element.textContent = '剩余 ' + Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
+  });
+}
+
+function challengeFriend(friendId) {
+  if (!guestToken || duelActions.size) return;
+  if (gameState !== 'LOBBY') { setDuelStatus('请先返回大厅再发起约战', true); return; }
+  const picker = document.getElementById('duel-game');
+  const gameType = (picker && picker.value) || selectedGameType;
+  performDuelAction('invite:' + friendId, '/api/duels', 'POST', { target: friendId, gameType });
+}
+
+function respondDuel(inviteId, action) {
+  if (!guestToken || duelActions.size || !['accept', 'decline', 'cancel'].includes(action)) return;
+  if (action === 'accept' && gameState !== 'LOBBY') {
+    setDuelStatus('请先离开当前房间，再接受约战', true);
+    return;
+  }
+  const path = '/api/duels/' + encodeURIComponent(inviteId);
+  performDuelAction(inviteId, path + (action === 'cancel' ? '' : '/' + action), action === 'cancel' ? 'DELETE' : 'POST');
+}
+
+async function performDuelAction(key, path, method, body) {
+  const token = guestToken;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  duelActions.add(key);
+  renderDuels();
+  if (lastFriendsData) renderFriends(lastFriendsData);
+  setDuelStatus(method === 'POST' && path.endsWith('/accept') ? '正在为双方开局…' : '正在处理…');
+  try {
+    const response = await fetch(path, {
+      method,
+      signal: controller.signal,
+      headers: Object.assign({ Authorization: 'Bearer ' + token }, body ? { 'Content-Type': 'application/json' } : {}),
+      body: body ? JSON.stringify(body) : undefined
+    });
+    const result = await response.json().catch(() => ({}));
+    if (token !== guestToken) return;
+    if (!response.ok) throw new Error(result.message || '约战操作失败，请稍后重试');
+    setDuelStatus(result.message || '已处理');
+  } catch (error) {
+    if (token === guestToken) setDuelStatus(error.name === 'AbortError'
+      ? '请求超时，正在刷新邀请，请确认当前状态后重试'
+      : (error.message || '连接失败，请稍后重试'), true);
+  } finally {
+    clearTimeout(timeout);
+    duelActions.delete(key);
+    if (token === guestToken) {
+      renderDuels();
+      loadDuels();
+      if (lastFriendsData) renderFriends(lastFriendsData);
+    }
+  }
 }
 
 // ============ 队伍（在线好友组队：队长选玩法，全队由服务端一次安排进同一房间） ============
@@ -3778,12 +4978,19 @@ function renderFriends(data) {
     const inviteBtn = (f.online && !sameParty)
       ? '<button class="btn-outline friend-mini" title="邀请组队" onclick="inviteToParty(\'' + f.id + '\')">👥</button>'
       : '';
+    const pendingDuel = duelData.outgoing.some(invite => invite.toId === f.id)
+      || duelData.incoming.some(invite => invite.fromId === f.id);
+    const duelButton = f.online && !f.roomId
+      ? '<button class="btn-outline friend-mini friend-duel" title="邀请好友进行双人对局" onclick="challengeFriend(\'' + f.id + '\')"'
+        + (pendingDuel || duelActions.size ? ' disabled' : '') + '>' + (pendingDuel ? '等待回应' : '约战') + '</button>'
+      : '';
     return '<div class="friend-row">'
       + '<span class="friend-dot ' + (f.online ? 'online' : 'offline') + '"></span>'
       + '<span class="friend-name" title="' + escHtml(f.id) + '">' + escHtml(f.name || '玩家') + '</span>'
       + partyChip + badge
       + '<span class="friend-room">' + roomLabel + '</span>'
       + '<button class="btn-outline friend-mini" title="私聊" onclick="openFriendChat(\'' + f.id + '\')">💬</button>'
+      + duelButton
       + inviteBtn
       + '<button class="leave-btn friend-mini" onclick="removeFriendById(\'' + f.id + '\')">✕</button>'
       + '</div>';
@@ -3896,6 +5103,18 @@ function handleFriendEvent(msg) {
   let payload = null;
   try { payload = JSON.parse(msg.data); } catch (_) { return; }
   if (!payload || !payload.kind) return;
+  if (payload.kind.startsWith('duel_')) {
+    loadDuels();
+    const who = payload.name || '好友';
+    const messages = {
+      duel_invite: who + ' 邀请你约战，接受后双方自动开局',
+      duel_decline: who + ' 拒绝了约战邀请',
+      duel_cancel: who + ' 撤回了约战邀请',
+      duel_started: '约战已开始'
+    };
+    if (messages[payload.kind]) setDuelStatus(messages[payload.kind]);
+    return;
+  }
   if (payload.kind.startsWith('party_')) {
     // 队伍事件只驱动面板与提示：开局由服务端直接给全队下发 GAME_START，客户端不自行进房。
     loadParty();
@@ -4196,9 +5415,74 @@ function loadOps() {
     renderOpsBars('ops-hours', (metrics.hourly || []).map(r => ({
       label: r.slot, value: r.games
     })));
-    document.getElementById('ops-definitions').innerHTML = (metrics.definitions || [])
+    renderOpsFunnel(body.funnel || {});
+    const funnelDefinitions = (body.funnel && body.funnel.definitions) || [];
+    document.getElementById('ops-definitions').innerHTML = (metrics.definitions || []).concat(funnelDefinitions)
       .map(d => '<div class="ops-definition">· ' + escHtml(d) + '</div>').join('');
   });
+}
+
+/** 产品漏斗：阶段条 + 入口模式表 + 匹配质量。所有数值来自服务端真实边界事件。 */
+function renderOpsFunnel(funnel) {
+  const stagesEl = document.getElementById('ops-funnel');
+  if (stagesEl) {
+    const stages = funnel.stages || [];
+    if (!stages.length) {
+      stagesEl.innerHTML = '<div class="friends-empty">暂无漏斗数据</div>';
+    } else {
+      stagesEl.innerHTML = stages.map(s => {
+        const width = Math.max(0, Math.min(100, Number(s.conversion) || 0));
+        return '<div class="ops-funnel-row" title="' + escHtml(s.label + '：' + s.users + ' 人 / ' + s.events + ' 次') + '">'
+          + '<span class="ops-funnel-label">' + escHtml(s.label) + '</span>'
+          + '<span class="ops-funnel-track"><span class="ops-funnel-fill" style="width:' + width + '%"></span></span>'
+          + '<span class="ops-funnel-value">' + (s.users || 0) + '<small>人 · ' + (s.conversion || 0) + '%</small></span>'
+          + '</div>';
+      }).join('');
+    }
+  }
+
+  const modesEl = document.getElementById('ops-modes');
+  if (modesEl) {
+    const modes = funnel.gameModes || [];
+    if (!modes.length) {
+      modesEl.innerHTML = '<div class="friends-empty">暂无开局数据</div>';
+    } else {
+      modesEl.innerHTML = '<table class="ops-table"><thead><tr>'
+        + '<th>入口</th><th>开局</th><th>完局</th><th>完局率</th><th>再来一局</th></tr></thead><tbody>'
+        + modes.map(m => '<tr><td>' + escHtml(m.label || m.mode) + '</td>'
+          + '<td>' + (m.starts || 0) + '</td><td>' + (m.finishes || 0) + '</td>'
+          + '<td>' + (m.finishRate || 0) + '%</td><td>' + (m.rematchRate || 0) + '%</td></tr>').join('')
+        + '</tbody></table>';
+    }
+  }
+
+  const qualityEl = document.getElementById('ops-quality');
+  if (qualityEl) {
+    const fail = funnel.matchFail || {};
+    const reconnect = funnel.reconnect || {};
+    qualityEl.innerHTML = [
+      ['匹配失败', fail.count == null ? '—' : fail.count, fail.rate == null ? '' : fail.rate + '%'],
+      ['匹配尝试', fail.attempts || 0, ''],
+      ['重连成功', reconnect.success || 0, reconnect.rate == null ? '' : reconnect.rate + '%'],
+      ['重连失败', reconnect.failure || 0, '']
+    ].map(([label, value, unit]) =>
+      '<div class="ops-card"><div class="ops-card-value">' + escHtml(String(value))
+      + '<small>' + escHtml(String(unit)) + '</small></div>'
+      + '<div class="ops-card-label">' + escHtml(label) + '</div></div>').join('');
+  }
+
+  const waitEl = document.getElementById('ops-wait');
+  if (waitEl) {
+    const wait = funnel.wait || {};
+    const summaryEl = document.getElementById('ops-wait-summary');
+    if (summaryEl) {
+      summaryEl.textContent = '平均等待 ' + Math.round((wait.avgMs || 0) / 100) / 10 + ' 秒 · '
+        + (wait.samples || 0) + ' 个开局样本';
+    }
+    renderOpsBars('ops-wait', (wait.buckets || []).map(b => ({
+      label: b.label, value: b.count || 0
+    })));
+  }
 }
 
 /** 横向条形图：纯 DOM，不引图表库（看板只给管理员看，够用即可） */
@@ -4583,6 +5867,7 @@ function openRecordReplay(id, gameType) {
     .then(rec => {
       rmMoves = rec.moveHistory || [];
       rmEffects = rec.moveEffects || [];
+      rmInitialBoard = Array.isArray(rec.initialBoard) ? rec.initialBoard : null;
       rmGameType = rec.gameType || gameType || 'GOMOKU';
       rmShareId = /^[A-Za-z0-9-]+$/.test(String(id)) ? id : null;
       const shareBtn = document.getElementById('rm-share');
@@ -4699,6 +5984,62 @@ function replayActionText(type, mv) {
     if (mv[1] === 1) return '停牌（' + (mv[4] || 0) + ' 点）';
     return '退出本局';
   }
+  if (type === 'BOMB_CAT') {
+    const names = ['拆弹器', '跳过', '攻击', '预知', '洗牌', '偷牌', '炸弹'];
+    const card = names[mv[2]] || '牌';
+    if (mv[1] === 100) {
+      if (mv[3] === 1) return '抽牌 · 抽到炸弹，使用拆弹器';
+      if (mv[3] === 2) return '抽牌 · 这是被放回的炸弹';
+      return mv[2] === 6 ? '抽牌 · 抽到炸弹并出局' : '抽牌 · 结束回合';
+    }
+    if (mv[1] === 110) return '把炸弹放回牌库顶';
+    if (mv[1] === 111) return '把炸弹放回牌库中间';
+    if (mv[1] === 112) return '把炸弹放回牌库底';
+    if (mv[2] === 5) return '偷取 ' + (mv[2] > 0 ? '其他玩家' : '') + '一张手牌';
+    return '打出 ' + card;
+  }
+  if (type === 'CHECKERS') {
+    // 棋谱：{toRow, toCol, side, fromRow, fromCol, promoted}
+    const cols = 'ABCDEFGH';
+    const from = (cols[mv[4]] || '?') + (8 - mv[3]);
+    const to = (cols[mv[1]] || '?') + (8 - mv[0]);
+    return from + ' → ' + to + (mv[5] ? '（升王）' : '');
+  }
+  if (type === 'JUNGLE') {
+    // 棋谱：{toRow, toCol, side, fromRow, fromCol, capturedType, jump}
+    const names = ['', '鼠', '猫', '狗', '狼', '豹', '虎', '狮', '象'];
+    const from = 'ABCDEFG'[mv[4]] + (mv[3] + 1);
+    const to = 'ABCDEFG'[mv[1]] + (mv[0] + 1);
+    const capture = mv[5] ? '，吃' + (names[mv[5]] || '子') : '';
+    return from + ' → ' + to + capture + (mv[6] ? '（跳河）' : '');
+  }
+  if (type === 'DARK_CHESS') {
+    // 棋谱：[toRow, toCol, side, fromRow, fromCol, kind(0翻/1走/2吃), movedPiece, capturedPiece]
+    const redNames = ['', '帅', '仕', '相', '车', '马', '炮', '兵'];
+    const blackNames = ['', '将', '士', '象', '车', '马', '炮', '卒'];
+    const cols = 'ABCDEFGH';
+    const at = (r, c) => (cols[c] || '?') + ((r || 0) + 1);
+    const nameOf = piece => {
+      const side = Math.floor(piece / 10), type = piece % 10;
+      return (side === 1 ? redNames[type] : blackNames[type]) || '棋子';
+    };
+    if (mv[5] === 0) {
+      const revealed = nameOf(mv[6] || 0);
+      return '翻开 ' + at(mv[0], mv[1]) + '：' + revealed;
+    }
+    const mover = nameOf(mv[6] || 0);
+    const head = at(mv[3], mv[4]) + ' → ' + at(mv[0], mv[1]) + '（' + mover + '）';
+    if (mv[5] !== 2) return head;
+    const captured = mv[7] ? nameOf(mv[7]) : '暗棋';
+    return head + ' 吃 ' + captured;
+  }
+  if (type === 'FLIGHT_CHESS') {
+    // 棋谱：{side, pieceIndex, fromPos, toPos, dice, finished, kickedSide}
+    const piece = '第 ' + ((mv[1] || 0) + 1) + ' 枚';
+    const kick = mv[6] ? '，撞回 ' + mv[6] + ' 号玩家' : '';
+    return '掷出 ' + (mv[4] || 0) + ' 点 · ' + piece + ' '
+      + (mv[2] === 0 ? '起飞' : (mv[3] >= 57 ? '到达终点' : '前进到第 ' + mv[3] + ' 格')) + kick;
+  }
   return '';
 }
 
@@ -4735,10 +6076,14 @@ function rmDraw() {
 
   const c2d = cvs.getContext('2d');
 
-  let b = m.initialBoard();
+  let b = rmInitialBoard ? deepCopyBoard(rmInitialBoard) : m.initialBoard();
   let last = null;
   for (let i = 0; i < rmIndex; i++) {
     const mv = rmMoves[i];
+    if (rmGameType === 'FLIGHT_CHESS' && mv[1] < 0) {
+      last = null;
+      continue;
+    }
     if (mv[0] < 0) continue;          // 停一手
     if (!m.usePieceValues) {
       b[mv[0]][mv[1]] = mv[2];

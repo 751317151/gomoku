@@ -46,6 +46,11 @@ public class GameRecord {
     private List<int[]> moveHistory;
     /** 与 moveHistory 对齐的每手盘面变化（提子/翻转/移动） */
     private List<List<int[]>> moveEffects;
+    /**
+     * 随机开局玩法的初始盘面（暗棋等）；固定开局为 null。
+     * 没有它，复盘只能从模块默认空盘重建，暗棋会丢失全部底牌位置。
+     */
+    private int[][] initialBoard;
 
     /**
      * 一方的对局结果与 ELO 变化
@@ -169,4 +174,7 @@ public class GameRecord {
 
     public List<List<int[]>> getMoveEffects() { return moveEffects; }
     public void setMoveEffects(List<List<int[]>> moveEffects) { this.moveEffects = moveEffects; }
+
+    public int[][] getInitialBoard() { return initialBoard; }
+    public void setInitialBoard(int[][] initialBoard) { this.initialBoard = initialBoard; }
 }

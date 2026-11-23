@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: gomoku-game:local
+    image: "${GOMOKU_IMAGE:-gomoku-game:local}"
     restart: unless-stopped
     environment:
       SERVER_PORT: "9000"
@@ -12,6 +12,9 @@ services:
       COACH_ENDPOINT: "${COACH_ENDPOINT:-https://api.openai.com/v1/chat/completions}"
       COACH_API_KEY: "${COACH_API_KEY:-}"
       COACH_MODEL: "${COACH_MODEL:-}"
+      # 治理后台令牌；留空时管理接口整体 503（安全默认）。此前该变量未传递，
+      # 导致按 .env 配置后线上仍无法进入治理后台。
+      ADMIN_TOKEN: "${ADMIN_TOKEN:-}"
       JAVA_OPTS: "${JAVA_OPTS:--Xms128m -Xmx512m}"
     ports:
       - "${HTTP_PORT:-9000}:9000"
@@ -20,9 +23,24 @@ services:
       - gomoku-data:/app/data
     read_only: true
     tmpfs:
-      - /tmp:size=64m
+      # SQLite JDBC 会把原生库解压到 java.io.tmpdir 再 dlopen；tmpfs 默认 noexec
+      # 会导致生产容器启动即报 NativeLibraryNotFoundException。这里显式允许执行。
+      - /tmp:size=64m,exec
     security_opt:
       - no-new-privileges:true
+    # 应用只监听 9000/9001（>1024），不需要任何 Linux capabilities。
+    cap_drop:
+      - ALL
+    # 防止进程/线程失控拖垮宿主机；1g 上限对应 512m 堆，留出元空间与直接内存。
+    pids_limit: 512
+    mem_limit: 1g
+    # 比 Spring 的 20s 优雅停机窗口更宽，确保容器不会被提前 SIGKILL。
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/actuator/health | grep -q 'UP'"]
       interval: 10s

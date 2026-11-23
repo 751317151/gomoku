@@ -13,6 +13,8 @@ public class PlayerInfoDto {
     private String tier;
     /** 队伍标识（PTY-XXXX）；不在队伍时为 null。同一队伍的队员在座位上显示同一徽标 */
     private String partyId;
+    /** 电脑席位：结算页据此隐藏「匹配下一局」等真人入口，座位本身仍要可见。 */
+    private boolean ai;
 
     public PlayerInfoDto() {}
 
@@ -45,4 +47,7 @@ public class PlayerInfoDto {
 
     public String getPartyId() { return partyId; }
     public void setPartyId(String partyId) { this.partyId = partyId; }
+
+    public boolean isAi() { return ai; }
+    public void setAi(boolean ai) { this.ai = ai; }
 }

@@ -12,6 +12,12 @@ public enum GameType {
     REVERSI("黑白棋", 8, 8, true),
     GO9("围棋 9路", 9, 9, true),
     XIANGQI("中国象棋", 10, 9, true),
+    /** 西洋跳棋：8×8，强制吃子、连吃与升王，双人回合制 */
+    CHECKERS("西洋跳棋", 8, 8, true),
+    /** 飞行棋：2-4人经典玩法，投骰子走棋，碰撞打回起点 */
+    FLIGHT_CHESS("飞行棋", 15, 15, true, 2, 4, 2),
+    /** 斗兽棋：9×7 双人棋子移动，八兽相克、河流与陷阱 */
+    JUNGLE("斗兽棋", 9, 7, true),
     CONNECT4("四子棋", 6, 7, true),
     /** 回合制 RPG 对战：HP/MP + 技能，第一个非棋牌玩法 */
     RPG("回合制对战", 0, 0, false),
@@ -28,7 +34,11 @@ public enum GameType {
     /** 21 点：2–8 人对庄家，依次要牌/停牌 */
     BLACKJACK("21 点", 0, 0, false, 2, 8, 4),
     HIGH_CARD("比大小", 0, 0, false, 2, 8, 4),
-    UNO("UNO 对战", 0, 0, false, 2, 8, 4);
+    UNO("UNO 对战", 0, 0, false, 2, 8, 4),
+    /** 暗棋：4×8 全暗随机开局，翻子与走子二选一，背面棋子对双方隐藏 */
+    DARK_CHESS("暗棋", 4, 8, true),
+    /** 炸弹猫：2–8 人轮流出牌/抽牌，抽到炸弹且无拆弹器即出局 */
+    BOMB_CAT("炸弹猫", 0, 0, false, 2, 8, 4);
 
     private final String displayName;
     private final int rows;
