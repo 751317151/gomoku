@@ -412,6 +412,7 @@ public class DoudizhuEngine implements GameEngine {
         view.put("lastPlaySide", lastPlaySide);
         view.put("lastCombo", lastCombo == null ? null : lastPlayLabel());
         view.put("availableBids", availableBids());
+        view.put("remainingByRank", remainingByRank());
         // 只给当前行动者本人下发提示，观战者/对手不应看到任何建议。
         if (!over && !bidding && viewerSide == turn) {
             view.put("hintIndices", DoudizhuAI.suggest(this, viewerSide));
@@ -456,6 +457,30 @@ public class DoudizhuEngine implements GameEngine {
         if (value == 12) return "Q";
         if (value == 11) return "J";
         return String.valueOf(value);
+    }
+
+    /**
+     * 记牌器：只统计「已经打出去的牌」，因此是完全公开信息。
+     * 手牌与底牌仍各自保密，不会因为这项辅助被推断出来。
+     */
+    public Map<String, Integer> remainingByRank() {
+        int[] total = new int[18];
+        for (int v = 3; v <= 15; v++) total[v] = 4;
+        total[16] = 1;
+        total[17] = 1;
+        for (int[] move : history) {
+            if (move.length < 3 || move[1] != PLAY_MARKER) continue;
+            int size = move[2];
+            for (int i = 0; i < size && 3 + i < move.length; i++) {
+                int value = move[3 + i];
+                if (value >= 3 && value <= 17 && total[value] > 0) total[value]--;
+            }
+        }
+        Map<String, Integer> result = new LinkedHashMap<>();
+        for (int value = 3; value <= 17; value++) {
+            result.put(cardLabel(value), total[value]);
+        }
+        return result;
     }
 
     public static String cardText(List<Integer> cards) {

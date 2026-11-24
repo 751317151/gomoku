@@ -2842,6 +2842,9 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 .doudizhu-stake b { color:#f2d38c; font:1.2rem Georgia,serif; }
 .doudizhu-stake span { color:#9fb3a2; font-size:.7rem; }
 .doudizhu-bottom { min-height:28px; padding:7px 10px; border:1px dashed #6d8067; border-radius:8px; color:#d9c99f; font-size:.78rem; }
+.doudizhu-counts { display:flex; flex-wrap:wrap; gap:6px; font-size:.72rem; color:#b9c9b7; }
+.doudizhu-counts span { padding:3px 7px; border:1px solid #355243; border-radius:6px; background:#0b2118; }
+.doudizhu-counts span.is-gone { opacity:.4; text-decoration:line-through; }
 .doudizhu-players { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; }
 .doudizhu-player { display:flex; flex-direction:column; gap:4px; padding:9px 10px; border:1px solid #3e5c4b; border-radius:9px; background:#10271e; font-size:.78rem; overflow-wrap:anywhere; }
 .doudizhu-player.is-you { border-color:#e4ca8d; }

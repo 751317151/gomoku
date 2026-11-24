@@ -1195,6 +1195,7 @@ function renderDoudizhuPanel() {
   const statusEl = document.getElementById('ddz-status');
   const multiEl = document.getElementById('ddz-multiplier');
   const bottomEl = document.getElementById('ddz-bottom');
+  const countsEl = document.getElementById('ddz-counts');
   const playersEl = document.getElementById('ddz-players');
   const tableEl = document.getElementById('ddz-table');
   const handEl = document.getElementById('ddz-hand');
@@ -1232,6 +1233,13 @@ function renderDoudizhuPanel() {
   bottomEl.textContent = bottom.length
     ? '底牌：' + bottom.map(doudizhuDisplayLabel).join(' ')
     : '底牌将在叫地主结束后公开';
+  if (countsEl) {
+    const counts = v.remainingByRank || {};
+    countsEl.innerHTML = Object.keys(counts)
+      .filter(label => ['2', 'A', 'K', 'Q', 'J', '小王', '大王'].includes(label))
+      .map(label => '<span class="' + (counts[label] === 0 ? 'is-gone' : '') + '">' + escHtml(label) + ' · ' + counts[label] + '</span>')
+      .join('');
+  }
   playersEl.innerHTML = v.players.map(p =>
     '<div class="doudizhu-player ' + (p.side === myStone ? 'is-you ' : '')
       + (p.side === v.turn && !v.over ? 'is-turn' : '') + '">'

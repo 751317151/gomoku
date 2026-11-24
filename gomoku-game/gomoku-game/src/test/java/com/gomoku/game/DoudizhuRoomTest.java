@@ -14,7 +14,9 @@ import static org.junit.jupiter.api.Assertions.*;
 class DoudizhuRoomTest {
 
     private static Player player(String id) {
-        return new Player(id, id, new EmbeddedChannel());
+        EmbeddedChannel channel = new EmbeddedChannel();
+        channel.pipeline().fireChannelActive();
+        return new Player(id, id, channel);
     }
 
     @Test
@@ -47,5 +49,36 @@ class DoudizhuRoomTest {
         assertEquals(2, engine.getLandlord());
         assertEquals(2, engine.getCurrentTurn(), "地主先手");
         assertEquals(20, engine.getHand(2).size());
+    }
+
+    @Test
+    void landlordSurrenderEndsRoomWithBothFarmersWinning() {
+        GameRoom room = new GameRoom("DDZ-QUIT", GameType.DOUDIZHU, true, 3);
+        Player one = player("one");
+        Player two = player("two");
+        Player three = player("three");
+        assertTrue(room.addPlayer(one));
+        assertTrue(room.addPlayer(two));
+        assertTrue(room.addPlayer(three));
+        assertTrue(room.handleCommand(one, MoveCommand.action(3), -1));
+        DoudizhuEngine engine = (DoudizhuEngine) room.getEngine();
+        assertEquals(1, engine.getLandlord());
+        room.surrender(one);
+        assertEquals(GameRoom.State.FINISHED, room.getState());
+        assertEquals(List.of(2, 3), engine.getWinningSides());
+        ((EmbeddedChannel) two.getConnection()).runPendingTasks();
+        String endMessage = null;
+        Object message;
+        java.util.List<String> outbound = new java.util.ArrayList<>();
+        while ((message = ((EmbeddedChannel) two.getConnection()).readOutbound()) != null) {
+            String text = message instanceof io.netty.handler.codec.http.websocketx.TextWebSocketFrame
+                    ? ((io.netty.handler.codec.http.websocketx.TextWebSocketFrame) message).text() : String.valueOf(message);
+            outbound.add(text);
+            if (text.contains("\"type\":\"GAME_OVER\"")) endMessage = text;
+        }
+        assertNotNull(endMessage, "农民应收到终局广播");
+        assertFalse(endMessage.contains("\"winner\":\"draw\""), endMessage);
+        assertTrue(endMessage.contains("winningSides"), endMessage);
+        assertTrue(endMessage.contains("[2,3]"), endMessage);
     }
 }

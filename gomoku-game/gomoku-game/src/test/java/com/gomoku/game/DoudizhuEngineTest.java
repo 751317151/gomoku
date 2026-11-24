@@ -160,4 +160,21 @@ class DoudizhuEngineTest {
         assertEquals(before, engine.getHand(1), "提示不能改变手牌");
         assertEquals(1, engine.getCurrentTurn());
     }
+
+    @Test
+    void remainingRankCountsOnlySubtractPublicPlays() {
+        DoudizhuEngine engine = engine();
+        engine.setBiddingForTest(1, 2, 1);
+        Map<?, ?> before = (Map<?, ?>) ((Map<?, ?>) engine.getViewState(1)).get("remainingByRank");
+        List<Integer> hand = engine.getHand(1);
+        assertFalse(hand.isEmpty());
+        int playedValue = hand.get(0);
+        String label = DoudizhuEngine.cardLabel(playedValue);
+        int beforeCount = (Integer) before.get(label);
+        assertTrue(engine.playByIndices(1, List.of(0)));
+        Map<?, ?> after = (Map<?, ?>) ((Map<?, ?>) engine.getViewState(2)).get("remainingByRank");
+        assertEquals(beforeCount - 1, after.get(label), "已打出的牌应计入公开记牌器");
+        assertTrue(((Map<?, ?>) engine.getViewState(2)).get("remainingByRank") != null,
+                "记牌器对所有座位公开");
+    }
 }

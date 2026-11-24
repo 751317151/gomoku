@@ -1042,6 +1042,12 @@ public class GameRoom {
     /** 引擎终局（五连/子数/数子）驱动的结束 */
     private void endGameByEngine() {
         Integer winnerSide = engine.getWinner();
+        // 斗地主农民胜时引擎用 0 表示「农民阵营」，没有单个胜者座位。
+        // 结算消息仍需要一个代表座位，否则前端会把三名玩家都显示成失败/平局。
+        if ((winnerSide == null || winnerSide == 0) && engine.isOver()) {
+            java.util.List<Integer> sides = engine.getWinningSides();
+            if (!sides.isEmpty()) winnerSide = sides.get(0);
+        }
         Player winnerPlayer = winnerSide == null ? null : findPlayerByStone(winnerSide);
         String reason;
         if (winnerSide == null) {
