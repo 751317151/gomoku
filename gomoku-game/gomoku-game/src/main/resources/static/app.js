@@ -1202,6 +1202,7 @@ function renderDoudizhuPanel() {
   const bidsEl = document.getElementById('ddz-bids');
   const playBtn = document.getElementById('ddz-play');
   const passBtn = document.getElementById('ddz-pass');
+  const hintBtn = document.getElementById('ddz-hint-btn');
   const logEl = document.getElementById('ddz-log');
   if (!statusEl || !playersEl || !handEl || !logEl) return;
   const v = rpgView;
@@ -1273,6 +1274,7 @@ function renderDoudizhuPanel() {
     : '等待其他玩家行动';
   if (playBtn) playBtn.disabled = !myTurn || bidding || doudizhuSelected.size === 0;
   if (passBtn) passBtn.disabled = !myTurn || bidding || !v.lastCombo;
+  if (hintBtn) hintBtn.disabled = !myTurn || bidding || !(v.hintIndices || []).length;
   logEl.innerHTML = (v.log || []).map(line => '<div>' + escHtml(line) + '</div>').join('');
   logEl.scrollTop = logEl.scrollHeight;
 }
@@ -1288,6 +1290,15 @@ function playDoudizhuSelection() {
 function passDoudizhu() {
   if (currentGameType !== 'DOUDIZHU' || gameState !== 'PLAYING' || myId === 'SPECTATOR') return;
   send({ type: 'MOVE', action: 100, moveSeq });
+}
+
+/** 提示只在本人视角存在；不自动出牌，只帮玩家选好推荐的手牌。 */
+function hintDoudizhu() {
+  const v = rpgView;
+  const indices = v && Array.isArray(v.hintIndices) ? v.hintIndices : [];
+  if (!indices.length) return;
+  doudizhuSelected = new Set(indices);
+  renderDoudizhuPanel();
 }
 
 function sendBombCatAction(action) {

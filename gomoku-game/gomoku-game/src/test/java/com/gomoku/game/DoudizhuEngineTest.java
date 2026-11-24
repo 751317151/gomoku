@@ -128,4 +128,36 @@ class DoudizhuEngineTest {
         assertTrue(engine.isOver());
         assertEquals(List.of(1, 3), engine.getWinningSides());
     }
+
+    @Test
+    void landlordForfeitGivesBothFarmersTheWin() {
+        DoudizhuEngine engine = engine();
+        engine.setBiddingForTest(1, 2, 1);
+        assertTrue(engine.forfeit(1));
+        assertTrue(engine.isOver());
+        assertEquals(List.of(2, 3), engine.getWinningSides());
+        assertTrue(engine.getScoreSummary().contains("农民"));
+    }
+
+    @Test
+    void farmerForfeitGivesLandlordTheWin() {
+        DoudizhuEngine engine = engine();
+        engine.setBiddingForTest(1, 2, 1);
+        assertTrue(engine.forfeit(2));
+        assertTrue(engine.isOver());
+        assertEquals(List.of(1), engine.getWinningSides());
+    }
+
+    @Test
+    void hintIsOnlyVisibleToCurrentPlayerAndDoesNotChangeTurn() {
+        DoudizhuEngine engine = engine();
+        engine.setBiddingForTest(1, 2, 1);
+        List<Integer> before = engine.getHand(1);
+        Map<?, ?> mine = (Map<?, ?>) engine.getViewState(1);
+        Map<?, ?> other = (Map<?, ?>) engine.getViewState(2);
+        assertTrue(((List<?>) mine.get("hintIndices")).size() > 0, "当前行动者应看到提示");
+        assertEquals(0, ((List<?>) other.get("hintIndices")).size(), "对手不应看到提示");
+        assertEquals(before, engine.getHand(1), "提示不能改变手牌");
+        assertEquals(1, engine.getCurrentTurn());
+    }
 }

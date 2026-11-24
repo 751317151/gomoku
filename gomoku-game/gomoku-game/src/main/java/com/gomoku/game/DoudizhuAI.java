@@ -98,6 +98,18 @@ public final class DoudizhuAI implements GameAI {
         return value == null ? Collections.emptyList() : value;
     }
 
+    /**
+     * 给真人玩家的提示：复用同一套启发式，但只返回牌下标，不改变对局。
+     * 调用方必须传入当前待行动座位。
+     */
+    public static List<Integer> suggest(DoudizhuEngine game, int side) {
+        if (game == null || !game.isAwaitingAction(side) || game.isBidding()) return Collections.emptyList();
+        MoveCommand command = INSTANCE.decide(game, side, 4);
+        if (command == null || !command.hasAction()) return Collections.emptyList();
+        if (command.getAction() == DoudizhuEngine.PLAY_MARKER) return pendingIndices();
+        return Collections.emptyList();
+    }
+
     private static int bestBid(DoudizhuEngine game, int side) {
         List<Integer> hand = game.getHand(side);
         int score = 0;

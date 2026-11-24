@@ -17,6 +17,7 @@ public class UnoBattleEngine implements GameEngine {
     private int count = 2, turn = 1, seq, direction = 1, activeColor, pendingDraw, unoPendingSide, unoPendingSteps, drawnPendingSide, drawnCardIndex;
     private boolean over;
     private Integer winner;
+    private boolean[] active = new boolean[9];
     private Card top;
     private final List<Card> deck = new ArrayList<>();
     private final List<Card> discard = new ArrayList<>();
@@ -50,10 +51,12 @@ public class UnoBattleEngine implements GameEngine {
 
     public void reset() {
         turn = 1; seq = 0; direction = 1; activeColor = 0; pendingDraw = 0; unoPendingSide = 0; unoPendingSteps = 0; drawnPendingSide = 0; drawnCardIndex = -1; over = false; winner = null;
+        active = new boolean[9];
         history.clear(); log.clear(); deck.clear(); discard.clear(); hands = new ArrayList<>(); hands.add(Collections.emptyList());
         roundScores = new int[count + 1];
         names = new String[count + 1];
         for (int s = 1; s <= count; s++) { names[s] = "玩家 " + s; hands.add(new ArrayList<>()); }
+        for (int s = 1; s <= count; s++) active[s] = true;
         for (int color = 0; color < COLORS; color++) {
             for (int value = 0; value <= 12; value++) {
                 deck.add(new Card(color, value));
@@ -190,15 +193,54 @@ public class UnoBattleEngine implements GameEngine {
         return score;
     }
     private void rotateHands() {
-        List<List<Card>> snapshot = new ArrayList<>(hands);
-        for (int side = 1; side <= count; side++) {
-            int source = ((side - 1 - direction + count) % count) + 1;
-            hands.set(side, snapshot.get(source));
+        List<Integer> activeSides = new ArrayList<>();
+        for (int side = 1; side <= count; side++) if (active[side]) activeSides.add(side);
+        if (activeSides.size() < 2) return;
+        List<List<Card>> snapshot = new ArrayList<>();
+        for (int side : activeSides) snapshot.add(hands.get(side));
+        for (int i = 0; i < activeSides.size(); i++) {
+            int sourceIndex = (i - direction + activeSides.size()) % activeSides.size();
+            hands.set(activeSides.get(i), snapshot.get(sourceIndex));
         }
     }
     private void advance(int steps) {
         if (seq >= MAX_MOVES) { over = true; winner = null; log.add("达到手数上限，判为平局"); return; }
-        for (int i = 0; i < steps; i++) turn = ((turn - 1 + direction + count) % count) + 1;
+        for (int i = 0; i < steps; i++) turn = nextActive(turn);
+    }
+    private int nextActive(int from) {
+        int candidate = from;
+        for (int step = 0; step < count; step++) {
+            candidate = ((candidate - 1 + direction + count) % count) + 1;
+            if (active[candidate]) return candidate;
+        }
+        return from;
+    }
+    private int activeCount() {
+        int result = 0;
+        for (int side = 1; side <= count; side++) if (active[side]) result++;
+        return result;
+    }
+
+    /** 退出只淘汰该座位；剩最后一人时直接判胜，不能让 4 人局因一人离开整局作废。 */
+    @Override
+    public boolean forfeit(int side) {
+        if (over || side < 1 || side > count || !active[side]) return false;
+        active[side] = false;
+        hands.get(side).clear();
+        if (unoPendingSide == side) { unoPendingSide = 0; unoPendingSteps = 0; }
+        if (drawnPendingSide == side) { drawnPendingSide = 0; drawnCardIndex = -1; }
+        if (pendingDraw > 0 && turn == side) pendingDraw = 0;
+        log.add(names[side] + " 退出本局");
+        if (activeCount() <= 1) {
+            over = true;
+            winner = 0;
+            for (int s = 1; s <= count; s++) if (active[s]) winner = s;
+            if (winner != null && winner > 0) log.add(names[winner] + " 成为最后留在场上的玩家，获胜");
+            else { winner = null; log.add("所有玩家都已退出，本局平局"); }
+            return true;
+        }
+        if (turn == side) advance(1);
+        return true;
     }
     public boolean canPlay(int side, int index) { return side > 0 && side <= count && index >= 0 && index < hands.get(side).size() && playable(hands.get(side).get(index)); }
     public List<Card> getHand(int side) { return side > 0 && side <= count ? new ArrayList<>(hands.get(side)) : Collections.emptyList(); }
@@ -237,7 +279,7 @@ public class UnoBattleEngine implements GameEngine {
         Map<String,Object> t = new LinkedHashMap<>(); t.put("color", top.color); t.put("value", top.value); t.put("label", top.label()); view.put("top", t);
         List<Map<String,Object>> ps = new ArrayList<>();
         for (int s = 1; s <= count; s++) {
-            Map<String,Object> p = new LinkedHashMap<>(); p.put("side", s); p.put("name", names[s]); p.put("handCount", hands.get(s).size()); p.put("score", roundScores[s]);
+            Map<String,Object> p = new LinkedHashMap<>(); p.put("side", s); p.put("name", names[s]); p.put("handCount", hands.get(s).size()); p.put("score", roundScores[s]); p.put("active", active[s]);
             if (s == viewerSide) {
                 List<Map<String,Object>> h = new ArrayList<>();
                 for (int i = 0; i < hands.get(s).size(); i++) { Card c = hands.get(s).get(i); Map<String,Object> x = new LinkedHashMap<>(); x.put("index", i); x.put("color", c.color); x.put("value", c.value); x.put("label", c.label()); x.put("special", c.special()); x.put("playable", playable(c)); h.add(x); }

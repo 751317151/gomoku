@@ -44,6 +44,7 @@ public class DoudizhuEngine implements GameEngine {
     private int multiplier = 1;
     private boolean landlordPlayed, farmerPlayed;
     private int landlordPlayCount;
+    private boolean[] active = new boolean[4];
     private int bidTurns;
 
     public DoudizhuEngine() { this(new Random()); }
@@ -79,11 +80,13 @@ public class DoudizhuEngine implements GameEngine {
         multiplier = 1;
         landlordPlayed = false;
         landlordPlayCount = 0;
+        active = new boolean[4];
         farmerPlayed = false;
         bidTurns = 0;
         for (int side = 1; side <= count; side++) {
             names[side] = "玩家 " + side;
             hands.add(new ArrayList<>());
+            active[side] = true;
         }
         deal();
         log.add("斗地主开始：先叫地主，地主获得三张底牌");
@@ -113,7 +116,7 @@ public class DoudizhuEngine implements GameEngine {
     }
 
     @Override public boolean isAwaitingAction(int side) {
-        return !over && side >= 1 && side <= count && turn == side;
+        return !over && side >= 1 && side <= count && active[side] && turn == side;
     }
 
     /** 叫地主阶段；出牌阶段返回 0。 */
@@ -288,6 +291,41 @@ public class DoudizhuEngine implements GameEngine {
         return side % count + 1;
     }
 
+    /**
+     * 退出/超时：地主离场则两名农民共同获胜；农民离场则地主获胜。
+     * 不能沿用默认「整局终止」——三人牌局少一个人还能判定阵营胜负。
+     */
+    @Override
+    public boolean forfeit(int side) {
+        if (over || side < 1 || side > count || !active[side]) return false;
+        active[side] = false;
+        hands.get(side).clear();
+        log.add(names[side] + " 退出本局");
+        over = true;
+        winner = 0;
+        if (side == landlord) {
+            winner = 0;
+            log.add("地主退出，两名农民共同获胜");
+        } else {
+            winner = landlord;
+            log.add("农民退出，地主获胜");
+        }
+        return true;
+    }
+
+    @Override
+    public List<Integer> getWinningSides() {
+        if (!over || winner == null) return Collections.emptyList();
+        if (winner == 0 || winner != landlord) {
+            List<Integer> farmers = new ArrayList<>();
+            for (int side = 1; side <= count; side++) {
+                if (side != landlord && (winner == 0 || active[side])) farmers.add(side);
+            }
+            if (!farmers.isEmpty()) return farmers;
+        }
+        return Collections.singletonList(winner);
+    }
+
     private void finish(int side) {
         over = true;
         winner = side;
@@ -303,17 +341,9 @@ public class DoudizhuEngine implements GameEngine {
     }
 
     @Override
-    public List<Integer> getWinningSides() {
-        if (!over || winner == null) return Collections.emptyList();
-        if (winner == landlord) return Collections.singletonList(landlord);
-        List<Integer> farmers = new ArrayList<>();
-        for (int side = 1; side <= count; side++) if (side != landlord) farmers.add(side);
-        return farmers;
-    }
-
-    @Override
     public String getScoreSummary() {
         if (!over) return null;
+        if (winner == 0) return "地主退出 · 两名农民共同获胜 · 倍数 ×" + multiplier;
         String role = winner == landlord ? "地主" : "农民";
         return role + "获胜 · 倍数 ×" + multiplier
                 + " · 底牌 " + cardText(bottom);
@@ -382,6 +412,12 @@ public class DoudizhuEngine implements GameEngine {
         view.put("lastPlaySide", lastPlaySide);
         view.put("lastCombo", lastCombo == null ? null : lastPlayLabel());
         view.put("availableBids", availableBids());
+        // 只给当前行动者本人下发提示，观战者/对手不应看到任何建议。
+        if (!over && !bidding && viewerSide == turn) {
+            view.put("hintIndices", DoudizhuAI.suggest(this, viewerSide));
+        } else {
+            view.put("hintIndices", Collections.emptyList());
+        }
         // 叫地主阶段底牌必须保密；确定地主后才公开。
         view.put("bottom", bidding ? Collections.emptyList() : new ArrayList<>(bottom));
         List<Map<String, Object>> players = new ArrayList<>();

@@ -1,10 +1,27 @@
 package com.gomoku.game;
 
 import org.junit.jupiter.api.Test;
+import java.util.List;
 import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 class UnoBattleEngineTest {
+    @Test
+    void forfeitRemovesSeatAndContinuesUntilLastPlayer() {
+        UnoBattleEngine engine = new UnoBattleEngine();
+        engine.configurePlayers(4);
+        engine.reset();
+        assertTrue(engine.forfeit(2));
+        assertFalse(engine.isOver(), "4 人局一人退出后应继续");
+        assertTrue(engine.getHand(2).isEmpty(), "退出者手牌清空");
+        assertTrue(engine.forfeit(3));
+        assertFalse(engine.isOver());
+        assertTrue(engine.forfeit(4));
+        assertTrue(engine.isOver(), "只剩一人时终局");
+        assertEquals(1, engine.getWinner());
+        assertEquals(List.of(1), engine.getWinningSides());
+    }
+
     @Test
     void dealsHiddenHandsAndAcceptsAction() {
         UnoBattleEngine engine = new UnoBattleEngine();
