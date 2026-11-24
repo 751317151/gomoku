@@ -1255,11 +1255,12 @@ function renderDoudizhuPanel() {
     : '<span class="doudizhu-table-label">自由出牌</span>';
   handEl.innerHTML = hand.map(c => {
     const selected = doudizhuSelected.has(c.index);
+    const face = c.value === 16 ? '王' : c.value === 17 ? '大' : doudizhuDisplayLabel(c.value);
     return '<button class="doudizhu-card ' + (selected ? 'is-selected ' : '')
       + (c.value >= 16 ? 'is-red' : '') + '" data-ddz-index="' + c.index + '"'
       + (!myTurn || bidding || v.over ? ' disabled' : '') + '>'
-      + '<strong>' + escHtml(doudizhuDisplayLabel(c.value)) + '</strong>'
-      + (c.value >= 16 ? '<small>王</small>' : '') + '</button>';
+      + '<strong>' + escHtml(face) + '</strong>'
+      + (c.value === 16 ? '<small>小</small>' : c.value === 17 ? '<small>王</small>' : '') + '</button>';
   }).join('');
   handEl.querySelectorAll('[data-ddz-index]').forEach(button => button.onclick = () => {
     const index = Number(button.dataset.ddzIndex);

@@ -2853,8 +2853,8 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 .doudizhu-player em { color:#9fb3a2; font-style:normal; font-size:.7rem; }
 .doudizhu-table { display:flex; flex-wrap:wrap; gap:7px; min-height:68px; padding:10px; border:1px solid #355243; border-radius:10px; background:#0b2118; align-items:center; }
 .doudizhu-table-label { color:#9fb3a2; font-size:.76rem; }
-.doudizhu-card { display:flex; flex-direction:column; align-items:center; justify-content:center; flex:0 0 48px; height:68px; padding:3px; color:#1d2a22; background:#f5efdc; border:2px solid #d9cba5; border-radius:7px; box-shadow:0 4px 0 #06140e; cursor:pointer; transition:transform .14s,background .14s; }
-.doudizhu-card strong { font:700 1.25rem Georgia,serif; }
+.doudizhu-card { display:flex; flex-direction:column; align-items:center; justify-content:center; flex:0 0 56px; height:68px; padding:3px; color:#1d2a22; background:#f5efdc; border:2px solid #d9cba5; border-radius:7px; box-shadow:0 4px 0 #06140e; cursor:pointer; transition:transform .14s,background .14s; }
+.doudizhu-card strong { font:700 1.25rem Georgia,serif; white-space:nowrap; }
 .doudizhu-card small { color:#88534a; font-size:.6rem; }
 .doudizhu-card.is-red small { color:#b3261e; }
 .doudizhu-card.is-selected { transform:translateY(-8px); background:#fff6d5; border-color:#e8c466; }
@@ -2885,8 +2885,13 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
   .bomb-cat-card { flex-basis:66px; min-height:90px; }
   .bomb-cat-special > div { grid-template-columns:1fr; }
   .doudizhu-panel { padding:14px; border-radius:12px; min-height:480px; }
-  .doudizhu-players { grid-template-columns:1fr; }
-  .doudizhu-card { flex-basis:42px; height:62px; }
+  .doudizhu-players { grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; }
+  .doudizhu-player { padding:7px 6px; min-height:76px; }
+  .doudizhu-player strong { font-size:1.05rem; }
+  .doudizhu-player em { font-size:.63rem; }
+  .doudizhu-counts { gap:4px; }
+  .doudizhu-counts span { padding:2px 5px; }
+  .doudizhu-card { flex-basis:48px; height:62px; }
 }
 @media (max-width: 600px) {
   body { padding-bottom: env(safe-area-inset-bottom); }
