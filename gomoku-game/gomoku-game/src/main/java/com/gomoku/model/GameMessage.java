@@ -85,6 +85,10 @@ public class GameMessage {
     private String entryMode;
     public String getEntryMode() { return entryMode; }
     public void setEntryMode(String entryMode) { this.entryMode = entryMode; }
+    /** 斗地主出牌：逗号分隔的手牌下标，如 "0,2,3"；仅 MOVE 使用。 */
+    private String handIndices;
+    public String getHandIndices() { return handIndices; }
+    public void setHandIndices(String handIndices) { this.handIndices = handIndices; }
 
     public GameMessage() {}
 

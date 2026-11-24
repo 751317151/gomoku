@@ -38,7 +38,9 @@ public enum GameType {
     /** 暗棋：4×8 全暗随机开局，翻子与走子二选一，背面棋子对双方隐藏 */
     DARK_CHESS("暗棋", 4, 8, true),
     /** 炸弹猫：2–8 人轮流出牌/抽牌，抽到炸弹且无拆弹器即出局 */
-    BOMB_CAT("炸弹猫", 0, 0, false, 2, 8, 4);
+    BOMB_CAT("炸弹猫", 0, 0, false, 2, 8, 4),
+    /** 斗地主：3 人经典牌局，地主获得底牌，农民协作对抗地主 */
+    DOUDIZHU("斗地主", 0, 0, false, 3, 3, 3);
 
     private final String displayName;
     private final int rows;

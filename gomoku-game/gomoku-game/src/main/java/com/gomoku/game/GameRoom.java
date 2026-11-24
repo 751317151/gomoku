@@ -172,6 +172,7 @@ public class GameRoom {
             case BLACKJACK: return new BlackjackEngine();
             case UNO:       return new UnoBattleEngine();
             case BOMB_CAT:  return new BombCatEngine();
+            case DOUDIZHU:  return new DoudizhuEngine();
             case REVERSI:  return new ReversiBoard();
             case GO9:      return new GoBoard();
             case XIANGQI:  return new XiangqiBoard();
@@ -197,6 +198,7 @@ public class GameRoom {
             case BLACKJACK: return BlackjackAI.INSTANCE;
             case UNO:       return UnoAI.INSTANCE;
             case BOMB_CAT:  return BombCatAI.INSTANCE;
+            case DOUDIZHU:  return DoudizhuAI.INSTANCE;
             case REVERSI:  return ReversiAI.INSTANCE;
             case GO9:      return GoAI.INSTANCE;
             case XIANGQI:  return XiangqiAI.INSTANCE;
@@ -601,6 +603,52 @@ public class GameRoom {
         }
     }
 
+    /**
+     * 斗地主专用出牌入口：手牌下标可任意长，无法塞进通用 MoveCommand。
+     *
+     * 通用路径已负责房间/座位/行动版本校验；这里只在持有写锁时把下标交给引擎，
+     * 由引擎校验牌型与压牌。网络协议仍使用 action = -3 + targetSide = 3 的 MOVE，
+     * 下标通过逗号分隔的 data? 不走消息扩展，避免影响旧客户端字段。
+     */
+    public boolean playDoudizhu(Player player, List<Integer> indices, String expectedVersion) {
+        lock.writeLock().lock();
+        try {
+            if (!canMove() || !acceptsAction(player, expectedVersion)) return false;
+            if (!(engine instanceof DoudizhuEngine)) return false;
+            if (!player.getId().equals(currentPlayer.getId())) return false;
+            if (player.getStone() != currentPlayer.getStone()) return false;
+            DoudizhuEngine game = (DoudizhuEngine) engine;
+            int previousTurn = game.getCurrentTurn();
+            if (!game.playByIndices(player.getStone(), indices)) return false;
+            touchActivity();
+            moveEffectsHistory.add(new ArrayList<>(engine.getLastMoveEffects()));
+            refreshActionClocks(game.getActionRound(), game.autoEndsTurn() || previousTurn != game.getCurrentTurn());
+            broadcastMove(player, -1, -1, false);
+            logger.info("[AUDIT] doudizhu_play roomId={} playerId={} cards={} seq={}",
+                    roomId, player.getId(), indices, engine.getMoveSeq());
+            if (engine.isOver()) {
+                endGameByEngine();
+            } else {
+                currentPlayer = findPlayerByStone(engine.getCurrentTurn());
+                triggerAIMove();
+            }
+            return true;
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * 斗地主 AI 的最终出牌：AI 决定「出什么牌」时只能返回通用动作，
+     * 手牌下标不能塞进 MoveCommand。这里在同一个 AI 线程里取出刚算好的下标，
+     * 再走与真人相同的引擎校验和广播路径。
+     */
+    private boolean handleDoudizhuAiPlay(Player actor, int action) {
+        List<Integer> chosen = DoudizhuAI.pendingIndices();
+        if (chosen.isEmpty()) return false;
+        return playDoudizhu(actor, chosen, null);
+    }
+
     public boolean handleMove(Player player, int row, int col) {
         return handleMove(player, row, col, -1);
     }
@@ -728,6 +776,11 @@ public class GameRoom {
         }
     }
 
+    /** 斗地主叫地主/不叫：复用通用行动入口，engine 自行区分阶段。 */
+    public boolean handleDoudizhuBid(Player player, int action, String expectedVersion) {
+        return handleCommand(player, MoveCommand.action(action), -1, expectedVersion);
+    }
+
     /**
      * 结算原因由服务端区分，客户端不能仅凭胜负猜测是五连、认输还是超时。
      * 保留原有 reason 文案供存档/日志使用，另下发稳定的机器可读枚举。
@@ -754,12 +807,13 @@ public class GameRoom {
 
     private void scheduleAIAction(Player actor) {
         if (!pendingAI.add(actor.getId())) return;
+        final int slot = actor.getStone();
         int scheduledRound = roundCount;
         aiExecutor.schedule(() -> {
             lock.writeLock().lock();
             try {
-                if (roundCount != scheduledRound) return;
                 pendingAI.remove(actor.getId());
+                if (roundCount != scheduledRound) return;
                 if (state != State.PLAYING || !players.contains(actor)
                         || forfeited.contains(actor.getId()) || !engine.isAwaitingAction(actor.getStone())) return;
                 GameAI ai = aiFor();
@@ -768,10 +822,24 @@ public class GameRoom {
                     handleEndTurn(actor); return;
                 }
                 MoveCommand command = ai.decide(engine, actor.getStone(), aiDifficulty);
-                if (command != null && handleCommand(actor, command, -1)) return;
+                if (command != null) {
+                    if (engine instanceof DoudizhuEngine
+                            && command.hasAction()
+                            && command.getAction() == DoudizhuEngine.PLAY_MARKER) {
+                        if (handleDoudizhuAiPlay(actor, command.getAction())) return;
+                    } else if (handleCommand(actor, command, -1)) return;
+                }
                 if (gameType == GameType.GO9) handlePass(actor);
                 else if (engine instanceof FlightChessBoard) autoSkipIfStuck((FlightChessBoard) engine);
                 else if (!engine.autoEndsTurn() && !engine.simultaneousTurn()) handleEndTurn(actor);
+                else if (engine instanceof DoudizhuEngine) {
+                    // 斗地主的兜底：AI 没找到可压牌时必须过牌，不能把回合卡死。
+                    DoudizhuEngine ddz = (DoudizhuEngine) engine;
+                    if (ddz.isAwaitingAction(slot)) {
+                        if (ddz.isBidding()) handleCommand(actor, MoveCommand.action(DoudizhuEngine.NO_BID_ACTION), -1);
+                        else handleCommand(actor, MoveCommand.action(DoudizhuEngine.PASS_ACTION), -1);
+                    }
+                }
             } finally { lock.writeLock().unlock(); }
         }, AI_DELAY_MS, TimeUnit.MILLISECONDS);
     }

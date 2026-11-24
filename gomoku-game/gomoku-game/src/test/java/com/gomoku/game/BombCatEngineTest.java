@@ -133,6 +133,10 @@ class BombCatEngineTest {
         assertTrue(hand.stream().noneMatch(c -> Boolean.TRUE.equals(((Map<?, ?>) c).get("playable"))),
                 "行动次数用尽后所有手牌都应显示为不可出");
         assertTrue(engine.applyMove(MoveCommand.action(BombCatEngine.DRAW_ACTION), 1));
+        if (engine.getPendingReinsertSide() == 1) {
+            // 随机抽到炸弹且拆弹器生效：仍由本人放回，不能提前换手。
+            assertTrue(engine.applyMove(MoveCommand.action(BombCatEngine.REINSERT_MIDDLE), 1));
+        }
         assertEquals(2, engine.getCurrentTurn(), "抽牌后正常换手");
     }
 

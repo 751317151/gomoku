@@ -2000,6 +2000,30 @@
     drawGhost() {}, isLegal() { return false; }, applyEffects() {}, legalMoves() { return []; }
   };
 
-  window.GameModules = { HIGH_CARD, BLACKJACK, BOMB_CAT, GOMOKU, REVERSI, GO9, XIANGQI, CHECKERS, JUNGLE, DARK_CHESS, FLIGHT_CHESS, CONNECT4, RPG, CARD, NIM, QUIZ, DICE_RACE, GEM_AUCTION, UNO };
+  const DOUDIZHU = {
+    name: '斗地主', html: true, panel: 'doudizhu-panel', render: 'renderDoudizhuPanel',
+    minPlayers: 3, maxPlayers: 3, defaultPlayers: 3,
+    stepTime: 30, totalTime: 600, icon: '🀄',
+    footer: '3 人 · 叫地主 · 地主获得底牌 · 农民协作对抗地主',
+    rules: {
+      goal: '地主先出完手牌则地主胜；任意一名农民先出完，两名农民共同获胜。',
+      steps: [
+        '54 张牌，每人 17 张，留 3 张底牌。按座位依次叫地主，可叫 1–3 分或不叫。',
+        '叫分最高者成为地主并获得 3 张底牌，地主先出牌。',
+        '出牌必须与桌上牌型相同且更大；炸弹可压普通牌型，火箭（大小王）最大。',
+        '牌型：单张、对子、三张、三带一/二、顺子（≥5 张）、连对（≥3 对）、飞机、四带二、炸弹、火箭。',
+        '两名农民都过牌后，由最后出牌者重新自由领出。'
+      ],
+      tips: [
+        '农民不要压队友的牌；配合让队友先走完比抢出牌更重要。',
+        '炸弹与火箭会让倍数翻倍，留到关键回合再用。'
+      ]
+    },
+    actionLabels: ['出牌', '过牌'],
+    initialBoard() { return null; }, draw() {}, hitTest() { return null; },
+    drawGhost() {}, isLegal() { return false; }, applyEffects() {}, legalMoves() { return []; }
+  };
+
+  window.GameModules = { HIGH_CARD, BLACKJACK, BOMB_CAT, DOUDIZHU, GOMOKU, REVERSI, GO9, XIANGQI, CHECKERS, JUNGLE, DARK_CHESS, FLIGHT_CHESS, CONNECT4, RPG, CARD, NIM, QUIZ, DICE_RACE, GEM_AUCTION, UNO };
 })();
 

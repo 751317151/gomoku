@@ -1174,6 +1174,122 @@ function bombCatGlyph(type) {
   return ({DEFUSE:'✚', SKIP:'⏭', ATTACK:'⚔', SEE_FUTURE:'🔮', SHUFFLE:'🔀', FAVOR:'🫳', BOMB:'💣'})[type] || '?';
 }
 
+// ============================================================
+// 斗地主：叫地主 + 多选牌 + 出牌/过牌
+// ============================================================
+let doudizhuSelected = new Set();
+let doudizhuSelectionKey = '';
+
+function doudizhuDisplayLabel(value) {
+  if (value === 16) return '小王';
+  if (value === 17) return '大王';
+  if (value === 15) return '2';
+  if (value === 14) return 'A';
+  if (value === 13) return 'K';
+  if (value === 12) return 'Q';
+  if (value === 11) return 'J';
+  return String(value);
+}
+
+function renderDoudizhuPanel() {
+  const statusEl = document.getElementById('ddz-status');
+  const multiEl = document.getElementById('ddz-multiplier');
+  const bottomEl = document.getElementById('ddz-bottom');
+  const playersEl = document.getElementById('ddz-players');
+  const tableEl = document.getElementById('ddz-table');
+  const handEl = document.getElementById('ddz-hand');
+  const hintEl = document.getElementById('ddz-hint');
+  const bidsEl = document.getElementById('ddz-bids');
+  const playBtn = document.getElementById('ddz-play');
+  const passBtn = document.getElementById('ddz-pass');
+  const logEl = document.getElementById('ddz-log');
+  if (!statusEl || !playersEl || !handEl || !logEl) return;
+  const v = rpgView;
+  if (!v || !v.players) {
+    statusEl.textContent = '等待开局…';
+    playersEl.innerHTML = '';
+    tableEl.innerHTML = '';
+    handEl.innerHTML = '';
+    logEl.innerHTML = '';
+    return;
+  }
+  const me = v.players.find(p => p.side === myStone);
+  const current = v.players.find(p => p.side === v.turn);
+  const myTurn = gameState === 'PLAYING' && !v.over && v.turn === myStone && myId !== 'SPECTATOR';
+  const bidding = v.bidding === true;
+  const hand = (me && me.hand) || [];
+  const selectionKey = myStone + ':' + hand.map(c => c.index).join(',');
+  if (selectionKey !== doudizhuSelectionKey) {
+    doudizhuSelected = new Set();
+    doudizhuSelectionKey = selectionKey;
+  }
+  statusEl.textContent = v.over ? '本局结束'
+    : bidding ? (myTurn ? '轮到你叫地主' : '等待 ' + ((current && current.name) || '玩家') + ' 叫地主')
+    : myTurn ? '你的回合' : '轮到 ' + ((current && current.name) || '玩家');
+  multiEl.textContent = '×' + (v.multiplier || 1);
+  const bottom = v.bottom || [];
+  bottomEl.textContent = bottom.length
+    ? '底牌：' + bottom.map(doudizhuDisplayLabel).join(' ')
+    : '底牌将在叫地主结束后公开';
+  playersEl.innerHTML = v.players.map(p =>
+    '<div class="doudizhu-player ' + (p.side === myStone ? 'is-you ' : '')
+      + (p.side === v.turn && !v.over ? 'is-turn' : '') + '">'
+      + '<span>' + escHtml(p.name) + (p.landlord ? ' · 地主' : ' · 农民') + '</span>'
+      + '<strong>' + p.handCount + '<small> 张</small></strong>'
+      + '<em>' + (p.bid ? '叫 ' + p.bid + ' 分' : (bidding ? '等待叫分' : '未叫')) + '</em>'
+      + '</div>'
+  ).join('');
+  const table = v.lastPlay || [];
+  tableEl.innerHTML = v.lastCombo
+    ? '<span class="doudizhu-table-label">' + escHtml(v.lastCombo) + '</span>'
+      + table.map(value => '<span class="doudizhu-card is-played"><strong>' + escHtml(doudizhuDisplayLabel(value)) + '</strong></span>').join('')
+    : '<span class="doudizhu-table-label">自由出牌</span>';
+  handEl.innerHTML = hand.map(c => {
+    const selected = doudizhuSelected.has(c.index);
+    return '<button class="doudizhu-card ' + (selected ? 'is-selected ' : '')
+      + (c.value >= 16 ? 'is-red' : '') + '" data-ddz-index="' + c.index + '"'
+      + (!myTurn || bidding || v.over ? ' disabled' : '') + '>'
+      + '<strong>' + escHtml(doudizhuDisplayLabel(c.value)) + '</strong>'
+      + (c.value >= 16 ? '<small>王</small>' : '') + '</button>';
+  }).join('');
+  handEl.querySelectorAll('[data-ddz-index]').forEach(button => button.onclick = () => {
+    const index = Number(button.dataset.ddzIndex);
+    if (doudizhuSelected.has(index)) doudizhuSelected.delete(index);
+    else doudizhuSelected.add(index);
+    renderDoudizhuPanel();
+  });
+  const bidOptions = bidding ? (v.availableBids || [1, 2, 3].filter(b => b > (v.highestBid || 0))) : [];
+  bidsEl.hidden = !bidding || !myTurn;
+  bidsEl.innerHTML = bidding && myTurn
+    ? bidOptions.map(bid => '<button data-ddz-bid="' + bid + '">叫 ' + bid + ' 分</button>').join('')
+      + '<button data-ddz-bid="102">不叫</button>'
+    : '';
+  bidsEl.querySelectorAll('[data-ddz-bid]').forEach(button => button.onclick = () => {
+    send({ type: 'MOVE', action: Number(button.dataset.ddzBid), moveSeq });
+  });
+  hintEl.textContent = v.over ? '本局已结束'
+    : bidding ? '选择叫分；三家都不叫会重新发牌'
+    : myTurn ? (v.lastCombo ? '选择能压过场上牌型的牌' : '自由出牌：选择任意合法牌型')
+    : '等待其他玩家行动';
+  if (playBtn) playBtn.disabled = !myTurn || bidding || doudizhuSelected.size === 0;
+  if (passBtn) passBtn.disabled = !myTurn || bidding || !v.lastCombo;
+  logEl.innerHTML = (v.log || []).map(line => '<div>' + escHtml(line) + '</div>').join('');
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function playDoudizhuSelection() {
+  if (currentGameType !== 'DOUDIZHU' || gameState !== 'PLAYING' || myId === 'SPECTATOR') return;
+  if (!doudizhuSelected.size) return;
+  const indices = Array.from(doudizhuSelected).sort((a, b) => a - b);
+  send({ type: 'MOVE', handIndices: indices.join(','), moveSeq });
+  doudizhuSelected = new Set();
+}
+
+function passDoudizhu() {
+  if (currentGameType !== 'DOUDIZHU' || gameState !== 'PLAYING' || myId === 'SPECTATOR') return;
+  send({ type: 'MOVE', action: 100, moveSeq });
+}
+
 function sendBombCatAction(action) {
   if (currentGameType !== 'BOMB_CAT' || gameState !== 'PLAYING' || myId === 'SPECTATOR') return;
   send({ type: 'MOVE', action, moveSeq });
@@ -2625,7 +2741,7 @@ function startRematchCountdown() {
 const GAME_CATEGORY = {
   GOMOKU: 'board', REVERSI: 'board', GO9: 'board', XIANGQI: 'board', CHECKERS: 'board', JUNGLE: 'board', DARK_CHESS: 'board',
   FLIGHT_CHESS: 'party', CONNECT4: 'board',
-  CARD: 'card', UNO: 'card', HIGH_CARD: 'card', BLACKJACK: 'card', BOMB_CAT: 'card',
+  CARD: 'card', UNO: 'card', HIGH_CARD: 'card', BLACKJACK: 'card', BOMB_CAT: 'card', DOUDIZHU: 'card',
   DICE_RACE: 'party', GEM_AUCTION: 'party',
   RPG: 'duel', NIM: 'duel', QUIZ: 'duel'
 };
@@ -3807,6 +3923,12 @@ const GAME_OVER_GUIDES = {
     lose: '你在抽到炸弹时没有拆弹器，或对手更早耗尽了你的机会。',
     draw: '牌库和弃牌堆耗尽，本局没有产生唯一胜者。',
     tip: '把预知留给高风险阶段，用攻击让下家承受额外抽牌；拆弹器放在牌库里时也无法保护你。'
+  },
+  DOUDIZHU: {
+    win: '你所在的一方先出完了手牌。',
+    lose: '对方先出完手牌；检查是否在农民配合时压了队友。',
+    draw: '对局达到行动上限，本局判为平局。',
+    tip: '农民不要压队友的牌；炸弹与火箭会让倍数翻倍，留到关键回合再用。'
   }
 };
 
@@ -4408,7 +4530,8 @@ const GAME_TYPE_LABEL = {
   UNO: 'UNO 对战',
   QUIZ: '答题对战',
   BLACKJACK: '21 点',
-  BOMB_CAT: '炸弹猫'
+  BOMB_CAT: '炸弹猫',
+  DOUDIZHU: '斗地主'
   ,DICE_RACE: '骰子竞速'
   ,GEM_AUCTION: '宝石拍卖'
 };
@@ -5997,6 +6120,17 @@ function replayActionText(type, mv) {
     if (mv[1] === 112) return '把炸弹放回牌库底';
     if (mv[2] === 5) return '偷取 ' + (mv[2] > 0 ? '其他玩家' : '') + '一张手牌';
     return '打出 ' + card;
+  }
+  if (type === 'DOUDIZHU') {
+    if (mv[1] === 101) return '叫 ' + (mv[2] || 0) + ' 分地主';
+    if (mv[1] === 102) return '不叫地主';
+    if (mv[1] === 100) return '过牌';
+    if (mv[1] === 200) {
+      const labels = [];
+      for (let i = 3; i < mv.length; i++) labels.push(doudizhuDisplayLabel(mv[i]));
+      return '出牌：' + labels.join(' ');
+    }
+    return '斗地主行动';
   }
   if (type === 'CHECKERS') {
     // 棋谱：{toRow, toCol, side, fromRow, fromCol, promoted}

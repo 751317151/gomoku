@@ -1,4 +1,4 @@
-// 单机模式冒烟：19 个玩法逐个「建房 + 加电脑」，断言都能直接开局
+// 单机模式冒烟：20 个玩法逐个「建房 + 补满电脑」，断言都能直接开局
 // 这条覆盖的是一个曾经的致命缺陷：一个人进房间后「添加电脑」按钮从不渲染，
 // 导致所有玩法都只能干等另一个真人加入。
 const WS_URL = process.env.WS_URL || 'ws://127.0.0.1:19001';
@@ -24,6 +24,7 @@ const GAMES = [
   { type: 'HIGH_CARD', name: '比大小' },
   { type: 'UNO', name: 'UNO 对战' },
   { type: 'BOMB_CAT', name: '炸弹猫' },
+  { type: 'DOUDIZHU', name: '斗地主', players: 3 },
 ];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -42,11 +43,13 @@ function soloStart(gameType) {
     const st = { gameState: null, myStone: 0, view: null, gameType: null, errs: [] };
 
     ws.onopen = () => {
-      // 多人玩法默认 4 人，单机冒烟只需要验证「人 + 电脑」能开局，
-      // 因此显式要求 2 人容量；否则加 1 个电脑仍差 2 席，永远不开局。
-      ws.send(JSON.stringify({ type: 'JOIN', playerName: 'solo-' + gameType, gameType, playerCount: 2 }));
-      // 服务端需要房间先建好才接受 ADD_AI
-      setTimeout(() => ws.send(JSON.stringify({ type: 'ADD_AI', data: '4' })), 450);
+      const game = GAMES.find(g => g.type === gameType);
+      const players = game && game.players ? game.players : 2;
+      ws.send(JSON.stringify({ type: 'JOIN', playerName: 'solo-' + gameType, gameType, playerCount: players }));
+      // 服务端需要房间先建好才接受 ADD_AI；补满除自己外的所有座位。
+      for (let i = 0; i < players - 1; i++) {
+        setTimeout(() => ws.send(JSON.stringify({ type: 'ADD_AI', data: '4' })), 450 + i * 350);
+      }
     };
     ws.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data.toString()); } catch { return; }

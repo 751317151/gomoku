@@ -1,6 +1,7 @@
 package com.gomoku.server;
 
 import com.gomoku.game.CardBattleEngine;
+import com.gomoku.game.DoudizhuEngine;
 import com.gomoku.game.GameRoom;
 import com.gomoku.game.GameType;
 import com.gomoku.game.MoveCommand;
@@ -336,6 +337,16 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
         GameRoom room = roomManager.getRoomByPlayer(player);
         if (room == null) { sendError(conn, "房间不存在"); return; }
 
+        // 斗地主：手牌下标是变长列表，走单独的 JSON 字段，不塞进通用 action/target。
+        if (room.getEngine() instanceof DoudizhuEngine && msg.getHandIndices() != null) {
+            java.util.List<Integer> indices = parseHandIndices(msg.getHandIndices());
+            if (indices == null || !room.playDoudizhu(player, indices, msg.getActionVersion())) {
+                if (msg.getActionVersion() != null && indices != null && !indices.isEmpty()) sendActionSync(player, room);
+                else sendError(conn, "无效出牌");
+            }
+            return;
+        }
+
         // 卡牌攻击：用坐标字段表达「哪个随从打谁」
         //   row = 己方随从下标，col = 目标下标（-1 = 打英雄）
         // 单独走一条路径，因为它不消耗手牌、也不推进出牌阶段的语义
@@ -592,6 +603,24 @@ public class GameServerHandler extends SimpleChannelInboundHandler<Object> {
 
     private void sendError(Channel conn, String errorMsg) {
         sendError(conn, errorMsg, null);
+    }
+
+    /** 解析斗地主出牌下标；空串/非法整数返回 null，由调用方回同步或报错。 */
+    static java.util.List<Integer> parseHandIndices(String raw) {
+        if (raw == null || raw.trim().isEmpty()) return null;
+        String[] parts = raw.split(",");
+        if (parts.length == 0 || parts.length > 20) return null;
+        java.util.List<Integer> indices = new java.util.ArrayList<>();
+        for (String part : parts) {
+            try {
+                int index = Integer.parseInt(part.trim());
+                if (index < 0 || index > 19) return null;
+                indices.add(index);
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return indices;
     }
 
     /**

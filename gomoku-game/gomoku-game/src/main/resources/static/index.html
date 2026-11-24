@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="棋战大厅">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="style.css?v=97">
+<link rel="stylesheet" href="style.css?v=98">
 </head>
 <body>
 
@@ -221,7 +221,7 @@
 <div class="onboard-overlay" id="onboard-overlay">
   <div class="onboard-box">
     <div class="onboard-title">欢迎来到棋战大厅</div>
-    <div class="onboard-sub">19 种玩法 · 2–8 人在线同桌</div>
+    <div class="onboard-sub">20 种玩法 · 2–8 人在线同桌</div>
     <div class="onboard-steps">
       <div class="onboard-step"><span>1</span><div><b>选玩法</b><p>用分类找玩法；点「查看规则」先读懂目标与操作。</p></div></div>
       <div class="onboard-step"><span>2</span><div><b>一键开局</b><p>「人机对战」随时练习，「快速匹配」找在线玩家。</p></div></div>
@@ -697,6 +697,23 @@
         <div class="card-actions-row"><button class="btn-endturn" id="uno-draw" onclick="sendAction(100)">摸一张</button><button class="btn-endturn" id="uno-draw-end" onclick="sendAction(102)" disabled>结束摸牌</button><button class="btn-endturn" id="uno-call" onclick="sendAction(101)" disabled>喊 UNO</button><button class="btn-endturn" id="uno-catch" onclick="sendUnoCatch()" disabled>抓 UNO</button><span id="uno-hint"></span></div>
         <div id="uno-log" class="quiz-log"></div>
       </div>
+      <div id="doudizhu-panel" class="doudizhu-panel" style="display:none" aria-live="polite">
+        <div class="doudizhu-head">
+          <div><span>DOU DIZHU · 斗地主</span><h2 id="ddz-status">等待开局…</h2></div>
+          <div class="doudizhu-stake"><b id="ddz-multiplier">×1</b><span>倍数</span></div>
+        </div>
+        <div id="ddz-bottom" class="doudizhu-bottom"></div>
+        <div id="ddz-players" class="doudizhu-players"></div>
+        <div id="ddz-table" class="doudizhu-table"></div>
+        <div class="doudizhu-hand-label">我的手牌 <span id="ddz-hint"></span></div>
+        <div id="ddz-hand" class="doudizhu-hand"></div>
+        <div class="doudizhu-actions">
+          <div id="ddz-bids" class="doudizhu-bids" hidden></div>
+          <button class="btn-endturn" id="ddz-play" onclick="playDoudizhuSelection()" disabled>出牌</button>
+          <button class="btn-outline" id="ddz-pass" onclick="passDoudizhu()" disabled>过牌</button>
+        </div>
+        <div id="ddz-log" class="quiz-log"></div>
+      </div>
       <!-- 取石子博弈面板 -->
       <div id="nim-panel" class="nim-panel" style="display:none">
         <div class="nim-title" id="nim-title">取石子</div>
@@ -822,12 +839,7 @@
 
 </main>
 
-<script src="js/games.js?v=97"></script>
-<script src="app.js?v=97"></script>
+<script src="js/games.js?v=98"></script>
+<script src="app.js?v=98"></script>
 </body>
 </html>
-
-
-
-
-
