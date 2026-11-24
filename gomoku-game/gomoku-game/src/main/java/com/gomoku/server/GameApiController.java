@@ -3,6 +3,7 @@ package com.gomoku.server;
 import com.gomoku.dto.RoomListItemDto;
 import com.gomoku.game.GameRecord;
 import com.gomoku.game.GameRecordService;
+import com.gomoku.game.GameRecommendationService;
 import com.gomoku.game.GuestIdentityService;
 import com.gomoku.game.RoomManager;
 import com.gomoku.game.SeasonService;
@@ -30,14 +31,17 @@ public class GameApiController {
     private final GameRecordService recordService;
     private final SeasonService seasonService;
     private final GuestIdentityService guests;
+    private final GameRecommendationService recommendations;
 
     @Autowired
     public GameApiController(RoomManager roomManager, GameRecordService recordService,
-                             SeasonService seasonService, GuestIdentityService guests) {
+                             SeasonService seasonService, GuestIdentityService guests,
+                             GameRecommendationService recommendations) {
         this.roomManager = roomManager;
         this.recordService = recordService;
         this.seasonService = seasonService;
         this.guests = guests;
+        this.recommendations = recommendations;
     }
 
     /**
@@ -55,6 +59,20 @@ public class GameApiController {
     @GetMapping("/api/match/overview")
     public Map<String, Object> getMatchOverview() {
         return roomManager.getMatchOverview();
+    }
+
+    /**
+     * 大厅「下一局」建议：等待人数 → 新玩法/少玩 → 最近热门。
+     * 这是可解释的探索建议，不会修改玩家资产，也不承诺一定能匹配到人。
+     */
+    @GetMapping("/api/recommendations")
+    public ResponseEntity<Map<String, Object>> getRecommendations(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestParam(required = false, defaultValue = "3") int limit) {
+        String identityId = guests.resolve(token(authorization));
+        return ResponseEntity.ok()
+                .cacheControl(org.springframework.http.CacheControl.noStore())
+                .body(recommendations.nextGames(identityId, roomManager.getMatchOverview(), limit));
     }
 
     /**

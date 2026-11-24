@@ -2096,6 +2096,7 @@ function showLobby() {
   loadLeaderboard();
   loadFriends();
   loadMatchOverview();
+  loadRecommendations();
   loadAnnouncements();
   loadEvents();
 }
@@ -2338,6 +2339,41 @@ function loadMatchOverview() {
       updateGameActivityBadges();
     })
     .catch(() => {});
+}
+
+/** 服务端可解释的「下一局」推荐；只读，不改变匹配状态。 */
+function loadRecommendations() {
+  const headers = guestToken ? { Authorization: 'Bearer ' + guestToken } : {};
+  fetch('/api/recommendations?limit=3', { headers })
+    .then(r => r.ok ? r.json() : null)
+    .then(body => { if (body) renderRecommendations(body.recommendations || []); })
+    .catch(() => {});
+}
+
+function renderRecommendations(rows) {
+  const el = document.getElementById('recommendation-strip');
+  if (!el) return;
+  el.hidden = !rows.length;
+  if (!rows.length) { el.innerHTML = ''; return; }
+  el.innerHTML = '<div class="recommendation-head"><strong>下一局玩什么</strong>'
+    + '<span>按当前等待、你的体验与最近热度推荐</span></div>'
+    + '<div class="recommendation-list">' + rows.map(row => {
+      const module = GameModules[row.gameType] || {};
+      return '<button type="button" class="recommendation-card" data-recommend="' + escHtml(row.gameType) + '">'
+        + '<strong>' + escHtml(module.icon || '🎮') + ' ' + escHtml(row.name || row.gameType) + '</strong>'
+        + '<small>' + escHtml(row.reason || '推荐玩法') + '</small>'
+        + '</button>';
+    }).join('') + '</div>';
+  el.querySelectorAll('[data-recommend]').forEach(button => {
+    button.onclick = function () {
+      selectedGameType = button.dataset.recommend;
+      selectedCategory = 'ALL';
+      buildGameSelector();
+      updatePlayerCountSelector();
+      refreshRooms();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+  });
 }
 
 function scheduleMatchOverview() {

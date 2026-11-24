@@ -642,6 +642,25 @@ public class GameRecordService {
         return result;
     }
 
+    /** 推荐热度直接聚合索引，避免每位大厅访客反序列化窗口内所有摘要。 */
+    public synchronized Map<String, Long> getSocialGameCounts(long since, long until) {
+        init();
+        Map<String, Long> counts = new LinkedHashMap<>(archive.socialGameCounts(since, until));
+        for (PendingRecord record : pending.values()) {
+            GameRecord summary = record.summary;
+            long ended = summary.getEndedAt();
+            if (ended < since || ended >= until || summary.getGameType() == null) continue;
+            int humans = 0;
+            for (GameRecord.Participant participant : summary.getParticipants()) {
+                if (!participant.isAi() && ++humans >= 2) {
+                    counts.merge(summary.getGameType().toUpperCase(java.util.Locale.ROOT), 1L, Long::sum);
+                    break;
+                }
+            }
+        }
+        return counts;
+    }
+
     /**
      * 运营指标用的全量摘要快照（最新在前）。
      *

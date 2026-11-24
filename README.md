@@ -179,7 +179,7 @@ Actuator 仅暴露 `health,info,prometheus`（`metrics` 默认关闭），且 Ca
 
 ## 🎮 平台能力
 
-- **游戏大厅**：按游戏类型选择、匹配同类型房间、房间列表实时刷新
+- **游戏大厅**：按游戏类型选择、匹配同类型房间、房间列表实时刷新；新增服务端可解释的「下一局玩什么」推荐，优先展示真人正在等待的玩法，其次引导探索未体验或少量体验的玩法，并用最近 7 天真人热度兜底，匿名和已识别游客都可使用
 - **房号邀请**：创建**私有房间**（不出现在大厅列表、不参与自动匹配）拿 6 位房号，好友输入房号或直接打开 `/?room=XXXXXX` 自动进房；房号大小写、`ROOM-` 前缀都不敏感
 - **单机模式 / 人机对战**：卡片或大厅顶部一键进入，**界面内难度弹层**（简单/中等/困难），20 种玩法都能直接开局（人机局不计 ELO）
 - **观战模式**：实时同步棋盘（`GAME_SYNC`），房间内可见观战者昵称列表
@@ -231,6 +231,7 @@ Actuator 仅暴露 `health,info,prometheus`（`metrics` 默认关闭），且 Ca
 |------|------|
 | `GET /api/rooms` | 房间列表（含 gameType） |
 | `GET /api/match/overview` | 按玩法统计可匹配的公开等待房、等待人数与进行中对局（大厅徽标与等待提示） |
+| `GET /api/recommendations?limit=3` | 可解释的「下一局」推荐；可选游客 Bearer 身份，匿名也可用。优先级：真人等待 → 未体验/少玩 → 最近 7 天真人热门 |
 | `GET /api/announcements` | 大厅可见公告（生效且未过期，公开只读） |
 | `GET /api/admin/announcements` | 全部公告及级别/有效期选项（需 `X-Admin-Token`） |
 | `POST /api/admin/announcements` | 发布公告（`title/body/level/ttl`，需 `X-Admin-Token`） |
@@ -363,6 +364,7 @@ node docs/smoke/smoke-ui-events.mjs       # 活动发布→大厅胶囊→结算
 node docs/smoke/smoke-ui-account.mjs      # 登录/注册恢复与页签状态
 node docs/smoke/smoke-ui-account-security.mjs # 恢复码、找回、轮换与移动端层级
 node docs/smoke/smoke-ui-jungle.mjs       # 斗兽棋画布点选、规则与移动端
+node docs/smoke/smoke-ui-recommendations.mjs # 推荐 REST + 真人等待房 + 真实浏览器
 ```
 
 ---

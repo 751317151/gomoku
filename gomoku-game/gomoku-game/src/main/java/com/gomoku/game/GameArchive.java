@@ -17,7 +17,9 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.sql.*;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
 /**
@@ -278,6 +280,30 @@ final class GameArchive {
         List<GameRecord> records = new ArrayList<>(1);
         read("SELECT summary FROM games WHERE id=?", statement -> statement.setString(1, id), records::add);
         return records.isEmpty() ? null : records.get(0);
+    }
+
+    /**
+     * 按玩法返回最近窗口内真人局数，不把摘要 JSON 反序列化到内存。
+     * 一名真人对 AI 的练习不计入；至少两名真人的休闲局计入。
+     */
+    Map<String, Long> socialGameCounts(long since, long until) {
+        Map<String, Long> result = new LinkedHashMap<>();
+        String sql = "SELECT g.id, g.game_type, "
+                + "(SELECT COUNT(*) FROM participants p2 WHERE p2.game_id=g.id AND p2.ai=0) AS humans "
+                + "FROM games g WHERE g.ended_at>=? AND g.ended_at<? AND g.game_type IS NOT NULL";
+        try (Connection connection = open(); PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setLong(1, since);
+            statement.setLong(2, until);
+            try (ResultSet results = statement.executeQuery()) {
+                while (results.next()) {
+                    if (results.getInt(3) < 2) continue;
+                    result.merge(results.getString(2), 1L, Long::sum);
+                }
+            }
+        } catch (SQLException e) {
+            throw failure(e);
+        }
+        return result;
     }
 
     String lastName(String identityId) {

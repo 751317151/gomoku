@@ -1191,6 +1191,14 @@
   .game-category { flex: 0 0 auto; padding: 5px 12px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--text-dim); font-size: 0.75rem; cursor: pointer; transition: .15s; }
   .game-category:hover { color: var(--text); border-color: var(--accent); }
   .game-category.selected { background: var(--accent); border-color: var(--accent); color: #0b1512; font-weight: 700; }
+  .recommendation-strip { display: flex; flex-direction: column; gap: 8px; margin: 0 0 14px; padding: 12px; border: 1px solid #3f5d4f; border-radius: 10px; background: linear-gradient(135deg, #102820, #0d2119); }
+  .recommendation-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-dim); font-size: .78rem; }
+  .recommendation-head strong { color: #f0cf88; font: 1rem Georgia, 'Songti SC', serif; }
+  .recommendation-list { display: flex; flex-wrap: wrap; gap: 8px; }
+  .recommendation-card { display: flex; flex-direction: column; gap: 3px; min-width: 150px; padding: 8px 10px; color: #e8eedf; text-align: left; background: #173426; border: 1px solid #496652; border-radius: 8px; cursor: pointer; }
+  .recommendation-card:hover { border-color: var(--accent); background: #1d402f; }
+  .recommendation-card strong { color: #f2d38c; font-size: .88rem; }
+  .recommendation-card small { color: #a9b8aa; font-size: .7rem; line-height: 1.4; }
   .game-selector {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
