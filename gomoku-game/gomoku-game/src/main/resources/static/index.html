@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="棋战大厅">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="style.css?v=106">
+<link rel="stylesheet" href="style.css?v=107">
 </head>
 <body>
 
@@ -695,9 +695,11 @@
 
       <div id="high-card-panel" class="high-card-panel" style="display:none" aria-live="polite"></div>
       <div id="uno-panel" class="high-card-panel" style="display:none" aria-live="polite">
-        <div class="table-heading"><span>THE CARD TABLE</span><h2>UNO 对战</h2><p>按颜色或数字出牌 · 无牌可出时摸一张</p></div>
-        <div id="uno-top" class="quiz-question">等待开始…</div>
-        <div id="uno-players" class="high-card-score"></div>
+        <div class="table-heading"><span>COLOUR / NUMBER / STRATEGY</span><h2>UNO 对战</h2><p>同色或同数字接牌 · 0 轮转 · 7 换手</p></div>
+        <div class="uno-table-centre"><div id="uno-discard" aria-label="当前顶牌"></div><div><div id="uno-colour" class="uno-colour"></div><div id="uno-top" class="uno-status">等待开始…</div></div></div>
+        <div id="uno-players" class="uno-seats" aria-label="玩家手牌数量"></div>
+        <div id="uno-choice" class="uno-choice" role="group" aria-label="出牌选择" hidden></div>
+        <div id="uno-hand-hint" class="hand-caption">你的手牌 · 亮起的牌可以打出</div>
         <div id="uno-hand" class="high-card-hand"></div>
         <div class="card-actions-row"><button class="btn-endturn" id="uno-draw" onclick="sendAction(100)">摸一张</button><button class="btn-endturn" id="uno-draw-end" onclick="sendAction(102)" disabled>结束摸牌</button><button class="btn-endturn" id="uno-call" onclick="sendAction(101)" disabled>喊 UNO</button><button class="btn-endturn" id="uno-catch" onclick="sendUnoCatch()" disabled>抓 UNO</button><span id="uno-hint"></span></div>
         <div id="uno-log" class="quiz-log"></div>
@@ -853,7 +855,7 @@
 
 </main>
 
-<script src="js/games.js?v=106"></script>
-<script src="app.js?v=106"></script>
+<script src="js/games.js?v=107"></script>
+<script src="app.js?v=107"></script>
 </body>
 </html>

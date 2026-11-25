@@ -2774,6 +2774,42 @@
 .number-card span { font-size: .75rem; }
 .number-card:hover:enabled { transform: translateY(-6px); background: #fff9df; }
 .number-card:disabled { opacity: .45; cursor: default; }
+/* UNO 保留绿色牌桌；牌色同时使用文字与符号，低饱和纸牌在窄屏也能辨认。 */
+.uno-table-centre { display: flex; align-items: center; gap: 18px; padding: 16px; border: 1px solid #54766a; border-radius: 12px; background: #0c302a; }
+.uno-table-centre > div:last-child { min-width: 0; }
+.uno-status { margin-top: 8px; font-size: .9rem; line-height: 1.7; overflow-wrap: anywhere; }
+.uno-colour { color: #e4ca8d; font-weight: 700; font-size: .88rem; }
+.uno-seats { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px; }
+.uno-seat { display: flex; flex-direction: column; gap: 5px; padding: 10px; border: 1px solid #54766a; border-radius: 8px; background: #0c302a; font-size: .78rem; overflow-wrap: anywhere; min-width: 0; }
+.uno-seat strong { font: bold 1.5rem Georgia, serif; color: #e4ca8d; }
+.uno-seat small { font: .72rem sans-serif; color: #d3dcca; }
+.uno-seat.is-turn { border-color: #e4ca8d; box-shadow: inset 0 3px #e4ca8d; }
+.uno-seat.is-out { opacity: .65; }
+@media (max-width: 600px) { .uno-seats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.uno-card { display: flex; flex: 0 0 64px; flex-direction: column; align-items: center; justify-content: space-between; gap: 6px; width: 64px; min-height: 100px; padding: 8px 3px; border: 2px solid #d8c9a0; border-radius: 8px; color: #172820; background: #f2edda; box-shadow: 0 3px #06271f; cursor: pointer; }
+.uno-card strong { font: bold 1.45rem Georgia, 'Songti SC', serif; line-height: 1.25; }
+.uno-card small, .uno-card > span { font-size: .68rem; line-height: 1.3; }
+.uno-card[data-colour="0"] { background: #f5c5b9; border-color: #bd5a4c; color: #64291f; }
+.uno-card[data-colour="1"] { background: #f5df99; border-color: #ab8627; color: #584411; }
+.uno-card[data-colour="2"] { background: #bbdec5; border-color: #53875e; color: #254f32; }
+.uno-card[data-colour="3"] { background: #c3dcec; border-color: #5d8ea9; color: #24475c; }
+button.uno-card:disabled { opacity: .55; cursor: default; box-shadow: none; }
+button.uno-card:enabled:hover, .uno-card.is-selected { transform: translateY(-4px); outline: 2px solid #f2edda; outline-offset: 2px; }
+.uno-choice { padding: 14px; border: 1px solid #e4ca8d; border-radius: 10px; background: #f2edda; color: #172820; }
+.uno-choice[hidden] { display: none; }
+.uno-choice p { margin: 0 0 10px; font-size: .85rem; line-height: 1.6; }
+.uno-choice-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.uno-choice button { min-height: 44px; min-width: 56px; padding: 9px 12px; border: 1px solid #54766a; border-radius: 6px; background: #e2eadb; color: #173c30; font: inherit; font-size: .85rem; cursor: pointer; overflow-wrap: anywhere; max-width: 100%; }
+.uno-choice button:focus-visible { outline-color: #173c30; }
+.uno-choice .uno-colour-option { flex: 1 1 64px; color: #172820; font-weight: bold; }
+.uno-choice .uno-colour-option[data-colour="0"] { background: #f5c5b9; }
+.uno-choice .uno-colour-option[data-colour="1"] { background: #f5df99; }
+.uno-choice .uno-colour-option[data-colour="2"] { background: #bbdec5; }
+.uno-choice .uno-colour-option[data-colour="3"] { background: #c3dcec; }
+#uno-panel .card-actions-row { display: flex; flex-wrap: wrap; gap: 8px; }
+#uno-panel .card-actions-row button { min-height: 44px; }
+#uno-hint { flex-basis: 100%; color: #d3dcca; font-size: .8rem; line-height: 1.6; }
+#uno-panel .quiz-log { color: #d3dcca; }
 .table-log { max-height: 160px; overflow: auto; color: #c5d2bd; font-size: .8rem; line-height: 1.6; }
 .table-log p { margin: 4px 0; }
 button, select, input { touch-action: manipulation; }
@@ -3029,6 +3065,13 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
   input, select { font-size: 16px; }
   .game-selector { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .difficulty-box, .replay-modal-box, .confirm-box, .achv-box { width: calc(100vw - 24px); max-width: 100%; max-height: 90dvh; overflow-y: auto; box-sizing: border-box; }
+  .replay-modal-head > div { flex: 1; min-width: 0; }
+  .replay-modal-head .leave-btn { flex: 0 0 auto; white-space: nowrap; padding: 8px 10px; }
+  .replay-modal-sub { overflow-wrap: anywhere; }
+  .replay-modal-ctrl { display: grid; grid-template-columns: repeat(3, 44px) minmax(0, 1fr); }
+  .replay-modal-ctrl .btn-outline { min-width: 44px; padding: 0; white-space: nowrap; }
+  .replay-modal-ctrl input[type=range] { grid-column: 1 / -1; grid-row: 1; min-width: 0; width: 100%; }
+  .replay-modal-step { min-width: 0; white-space: nowrap; }
   .card-hand { gap: 8px; overflow-x: auto; padding-bottom: 10px; }
   .table-seats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .table-heading h2 { font-size: 1.6rem; }

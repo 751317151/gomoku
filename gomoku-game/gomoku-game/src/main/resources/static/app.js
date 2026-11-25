@@ -6260,6 +6260,17 @@ function copyReplayShare() {
 /** 把各玩法的历史编码翻译成可读行动（新玩法不再显示「行动 0」） */
 function replayActionText(type, mv) {
   if (!mv) return '';
+  if (type === 'UNO') {
+    if (mv[1] === 100) return '摸 ' + (mv[2] || 0) + ' 张牌';
+    if (mv[1] === 101) return '喊 UNO';
+    if (mv[1] === 102) return '保留摸到的牌，结束摸牌';
+    if (mv[1] === 103) return '抓到 ' + mv[2] + ' 号玩家未喊 UNO，罚摸 ' + (mv[3] || 2) + ' 张';
+    const colours = ['红', '黄', '绿', '蓝'];
+    const face = mv[2] <= 9 ? String(mv[2]) : ({ 10: '跳过', 11: '反转', 12: '+2', 13: '万能', 14: '万能 +4' }[mv[2]] || '牌');
+    return '打出 ' + (mv[1] >= 0 ? colours[mv[1]] || '' : '') + face
+      + (mv[1] < 0 ? '，选择' + (colours[mv[3]] || '未知') + '色' : '')
+      + (mv[5] === 1 ? '，最后一张获胜' : mv[2] === 0 ? '，轮转在场玩家手牌' : mv[2] === 7 ? mv[4] > 0 ? '，与 ' + mv[4] + ' 号玩家换手' : '，交换手牌' : '');
+  }
   if (type === 'HIGH_CARD') return mv[1] < 0 ? '退出本局' : '暗选 ' + mv[1] + '（第 ' + mv[2] + ' 轮）';
   if (type === 'DICE_RACE') {
     const names = ['稳健', '冒险', '追击', '收分', '加掷', '护盾加掷'];
@@ -6670,34 +6681,97 @@ setInterval(function () {
 })();
 
 
+let unoChoice = null;
+const UNO_COLOURS = ['红 ◆', '黄 ●', '绿 ▲', '蓝 ■'];
+
+function unoCardMarkup(card, interactive, disabled, selected) {
+  const colour = card.color >= 0 ? UNO_COLOURS[card.color] : '四色';
+  const face = card.value <= 9 ? String(card.value) : ({ 10: '跳过', 11: '反转', 12: '+2', 13: '万能', 14: '+4' }[card.value] || '?');
+  const detail = card.value === 0 ? '轮转手牌' : card.value === 7 ? '交换手牌' : card.color < 0 ? '选择颜色' : '同色 / 同数';
+  const tag = interactive ? 'button' : 'div';
+  return '<' + tag + ' class="uno-card' + (selected ? ' is-selected' : '') + '" data-colour="' + card.color + '"'
+    + (interactive ? ' type="button" data-uno-index="' + card.index + '" aria-label="打出 ' + escHtml(colour + ' ' + face) + '"' + (disabled ? ' disabled' : '') : ' aria-label="顶牌 ' + escHtml(colour + ' ' + face) + '"')
+    + '><span>' + escHtml(colour) + '</span><strong>' + escHtml(face) + '</strong><small>' + detail + '</small></' + tag + '>';
+}
+
+function submitUnoCard(index, targetSide, targetIndex) {
+  const view = rpgView, mine = view?.players?.find(p => p.side === myStone);
+  const card = mine?.hand?.find(c => c.index === index);
+  if (currentGameType !== 'UNO' || gameState !== 'PLAYING' || currentTurn !== myStone
+      || myId === 'SPECTATOR' || mine?.active === false || view?.over || !card?.playable) return;
+  if (card.color < 0 && (targetSide !== 1 || !Number.isInteger(targetIndex) || targetIndex < 0 || targetIndex > 3)) return;
+  if (card.value === 7 && mine.hand.length > 1 && (targetSide !== 2 || !view.players.some(p => p.side === targetIndex && p.side !== myStone && p.active !== false))) return;
+  unoChoice = null;
+  send({ type: 'MOVE', action: index, ...(targetSide ? { targetSide, targetIndex } : {}), moveSeq });
+  renderUnoPanel();
+}
+
 function renderUnoPanel() {
   const topEl = document.getElementById('uno-top'), playersEl = document.getElementById('uno-players'), handEl = document.getElementById('uno-hand'), logEl = document.getElementById('uno-log'), drawBtn = document.getElementById('uno-draw'), drawEndBtn = document.getElementById('uno-draw-end'), catchBtn = document.getElementById('uno-catch');
   if (!topEl || !playersEl || !handEl || !logEl) return;
   const v = rpgView;
-  if (!v || !v.players) { topEl.textContent = '等待开始…'; playersEl.innerHTML = ''; handEl.innerHTML = ''; logEl.innerHTML = ''; return; }
+  const choiceEl = document.getElementById('uno-choice'), discardEl = document.getElementById('uno-discard');
+  if (!v || !v.players) { unoChoice = null; topEl.textContent = '等待开始…'; playersEl.innerHTML = ''; handEl.innerHTML = ''; logEl.innerHTML = ''; if (choiceEl) choiceEl.hidden = true; if (discardEl) discardEl.innerHTML = ''; return; }
   const mine = v.players.find(p => p.side === myStone);
-  const myTurn = gameState === 'PLAYING' && !v.over && currentTurn === myStone && myId !== 'SPECTATOR';
+  const myTurn = gameState === 'PLAYING' && !v.over && currentTurn === myStone && myId !== 'SPECTATOR' && !!mine && mine.active !== false;
   const unoPending = v.unoPendingSide === myStone;
   const drawnPending = v.drawnPendingSide === myStone;
   let statusText;
-  if (drawnPending) statusText = '摸到了可出的牌：请选择立即打出或结束摸牌';
+  if (v.over) statusText = '本局结束';
+  else if (drawnPending) statusText = '摸到了可出的牌：只能打出新摸到的这张，或结束摸牌';
   else if (unoPending) statusText = '你只剩 1 张牌，请喊 UNO';
   else if (v.unoCatchable && v.unoPendingSide !== myStone) statusText = '有人忘了喊 UNO，可以抓牌';
-  else if (v.over) statusText = '本局结束';
   else statusText = (myTurn ? '你的回合' : '轮到 ' + ((v.players.find(p => p.side === v.turn) || {}).name || ('第 ' + v.turn + ' 方')))
     + ' · 顶牌：' + (v.top?.label || '—')
     + (v.pendingDraw ? ' · 需摸 ' + v.pendingDraw + ' 张' : '')
     + (v.discardLeft ? ' · 弃牌 ' + v.discardLeft : '')
     + (v.direction < 0 ? ' · 逆时针' : ' · 顺时针');
   topEl.textContent = statusText;
-  playersEl.innerHTML = v.players.map(p => '<span class="score-chip">' + escHtml(p.name) + ' · 手牌 ' + p.handCount + (p.score ? ' · ' + p.score + '分' : '') + (p.side === v.turn && !v.over ? ' · 行动中' : '') + '</span>').join('');
+  if (discardEl && v.top) discardEl.innerHTML = unoCardMarkup(v.top, false);
+  const colourEl = document.getElementById('uno-colour');
+  if (colourEl) colourEl.textContent = '当前颜色 · ' + (UNO_COLOURS[v.activeColor] || '—') + (v.direction < 0 ? ' · 逆时针 ↶' : ' · 顺时针 ↷');
+  playersEl.innerHTML = v.players.map(p => '<div class="uno-seat' + (p.side === v.turn && !v.over && p.active !== false ? ' is-turn' : '') + (p.active === false ? ' is-out' : '') + '"><span>' + p.side + ' 号 · ' + escHtml(p.name) + (p.side === myStone ? '（你）' : '') + '</span><strong>' + p.handCount + '<small> 张</small></strong><small>' + (p.active === false ? '已退出' : p.side === v.turn && !v.over ? '行动中' : p.handCount === 1 ? '剩一张！' : '等待回合') + (p.score ? ' · ' + p.score + '分' : '') + '</small></div>').join('');
   const hand = (mine && mine.hand) || [];
-  handEl.innerHTML = hand.map(c => '<button class="number-card" data-uno-index="' + c.index + '" ' + ((!myTurn || !c.playable) ? 'disabled' : '') + '><span>' + escHtml(c.label) + '</span></button>').join('');
-  handEl.querySelectorAll('[data-uno-index]').forEach(el => el.addEventListener('click', () => { const idx = Number(el.dataset.unoIndex); const card = hand.find(c => c.index === idx); if (card && card.color < 0) { const chosen = Number(window.prompt(card.value === 14 ? '万能 +4 选择颜色：0 红 / 1 黄 / 2 绿 / 3 蓝' : '万能牌选择颜色：0 红 / 1 黄 / 2 绿 / 3 蓝', String(v.activeColor || 0))); if (chosen >= 0 && chosen < 4) send({ type: 'MOVE', action: idx, targetSide: 1, targetIndex: chosen, moveSeq }); } else if (card && card.value === 7) { const target = Number(window.prompt('7 交换手牌：输入目标座位号（1-' + v.players.length + '）', '2')); if (target >= 1 && target <= v.players.length && target !== myStone) send({ type: 'MOVE', action: idx, targetSide: 2, targetIndex: target, moveSeq }); } else sendAction(idx); }));
-  if (drawBtn) drawBtn.disabled = !myTurn || unoPending || drawnPending || !!(mine && mine.hand && mine.hand.some(c => c.playable));
-  if (drawEndBtn) drawEndBtn.disabled = !drawnPending;
-  const unoButton = document.getElementById('uno-call'); if (unoButton) unoButton.disabled = !unoPending;
-  if (catchBtn) catchBtn.disabled = !v.unoCatchable || unoPending || v.over || myId === 'SPECTATOR';
+  const choiceVersion = roomId + ':' + actionVersion + ':' + moveSeq;
+  if (unoChoice && (!myTurn || unoChoice.version !== choiceVersion || !hand.some(c => c.index === unoChoice.index && c.playable))) unoChoice = null;
+  handEl.innerHTML = hand.map(c => unoCardMarkup(c, true, !myTurn || !c.playable, unoChoice?.index === c.index)).join('');
+  handEl.querySelectorAll('[data-uno-index]').forEach(el => el.addEventListener('click', () => {
+    const index = Number(el.dataset.unoIndex), card = hand.find(c => c.index === index);
+    if (!card?.playable || !myTurn) return;
+    if (card.color < 0 || card.value === 7 && hand.length > 1) {
+      unoChoice = { index, version: choiceVersion };
+      renderUnoPanel();
+      choiceEl?.querySelector('button')?.focus({ preventScroll: true });
+      choiceEl?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    } else submitUnoCard(index);
+  }));
+  if (choiceEl) {
+    choiceEl.hidden = !unoChoice;
+    choiceEl.innerHTML = '';
+    if (unoChoice) {
+      const selected = hand.find(c => c.index === unoChoice.index);
+      const wild = selected.color < 0;
+      choiceEl.innerHTML = '<p>' + (wild ? '万能牌 · 选择接下来的颜色' : '7 换手 · 选择一位仍在场的玩家，交换全部手牌') + '</p><div class="uno-choice-options">'
+        + (wild ? UNO_COLOURS.map((label, colour) => '<button type="button" class="uno-colour-option" data-colour="' + colour + '" data-uno-target="' + colour + '">' + label + '</button>').join('')
+          : v.players.filter(p => p.side !== myStone && p.active !== false).map(p => '<button type="button" data-uno-target="' + p.side + '">' + p.side + ' 号 · ' + escHtml(p.name) + ' · ' + p.handCount + ' 张</button>').join(''))
+        + '<button type="button" id="uno-cancel-choice">取消</button></div>';
+      const cancel = () => { const index = unoChoice?.index; unoChoice = null; renderUnoPanel(); handEl.querySelector('[data-uno-index="' + index + '"]')?.focus({ preventScroll: true }); };
+      choiceEl.querySelector('#uno-cancel-choice').onclick = cancel;
+      choiceEl.onkeydown = event => { if (event.key === 'Escape') { event.preventDefault(); cancel(); } };
+      choiceEl.querySelectorAll('[data-uno-target]').forEach(button => button.onclick = () => {
+        if (unoChoice?.version !== roomId + ':' + actionVersion + ':' + moveSeq) { unoChoice = null; renderUnoPanel(); return; }
+        submitUnoCard(unoChoice.index, wild ? 1 : 2, Number(button.dataset.unoTarget));
+      });
+    }
+  }
+  const handHint = document.getElementById('uno-hand-hint');
+  if (handHint) handHint.textContent = !mine ? '观战中 · 其他玩家的手牌保密' : mine.active === false ? '你已退出本局' : drawnPending ? '你的手牌 · 只有新摸到的牌可以打出' : unoPending ? '请先喊 UNO，再继续游戏' : '你的手牌 · 亮起的牌可以打出';
+  if (drawBtn) { drawBtn.disabled = !myTurn || !v.canDraw; drawBtn.textContent = v.pendingDraw ? '接受罚摸 ' + v.pendingDraw + ' 张' : '摸一张'; }
+  if (drawEndBtn) drawEndBtn.disabled = !myTurn || !v.canEndDraw;
+  const unoButton = document.getElementById('uno-call'); if (unoButton) unoButton.disabled = !myTurn || !v.canCallUno;
+  if (catchBtn) catchBtn.disabled = gameState !== 'PLAYING' || !v.canCatchUno || myId === 'SPECTATOR' || !mine || mine.active === false;
+  const hint = document.getElementById('uno-hint');
+  if (hint) hint.textContent = v.pendingDraw ? '+2 / +4 可叠加，也可以接受累计罚摸；有当前颜色的牌时不能出 +4。' : '0 轮转 · 7 换手 · 最后一张直接获胜；剩一张时记得喊 UNO。';
   logEl.innerHTML = (v.log || []).map(line => '<div>' + escHtml(line) + '</div>').join('');
 }
 function renderHighCardPanel() {

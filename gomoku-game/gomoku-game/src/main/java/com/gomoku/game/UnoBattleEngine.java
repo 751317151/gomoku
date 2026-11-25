@@ -87,7 +87,7 @@ public class UnoBattleEngine implements GameEngine {
     public void setPlayerName(int side, String name) { if (side > 0 && side <= count && name != null && !name.isEmpty()) names[side] = name; }
 
     public boolean applyMove(MoveCommand command, int side) {
-        if (over || command == null || side < 1 || side > count || !command.hasAction()) return false;
+        if (over || command == null || !isActive(side) || !command.hasAction()) return false;
         List<Card> hand = hands.get(side);
         int action = command.getAction();
         boolean catchingUno = action == CATCH_UNO_ACTION;
@@ -107,7 +107,12 @@ public class UnoBattleEngine implements GameEngine {
         boolean playingDrawnCard = false;
         if (drawnPendingSide != 0) {
             if (side != drawnPendingSide) return false;
-            if (action == END_DRAW_ACTION) { drawnPendingSide = 0; drawnCardIndex = -1; advance(1); return true; }
+            if (action == END_DRAW_ACTION) {
+                drawnPendingSide = 0; drawnCardIndex = -1;
+                history.add(new int[]{side, END_DRAW_ACTION, 0}); seq++;
+                log.add(names[side] + " 保留摸到的牌，结束摸牌");
+                advance(1); return true;
+            }
             if (action != drawnCardIndex) return false;
             playingDrawnCard = true;
         }
@@ -120,12 +125,13 @@ public class UnoBattleEngine implements GameEngine {
             advance(steps); return true;
         }
         if (action == DRAW_ACTION) {
-            int drawn = pendingDraw > 0 ? pendingDraw : 1;
-            for (int i = 0; i < drawn; i++) { Card c = draw(); if (c != null) hand.add(c); }
+            if (!canDraw(side)) return false;
+            int requested = pendingDraw > 0 ? pendingDraw : 1, drawn = 0;
+            for (int i = 0; i < requested; i++) { Card c = draw(); if (c != null) { hand.add(c); drawn++; } }
             history.add(new int[]{side, DRAW_ACTION, drawn}); seq++;
             log.add(names[side] + " 摸了 " + drawn + " 张牌");
             pendingDraw = 0;
-            if (drawn == 1 && !hand.isEmpty() && playable(hand.get(hand.size() - 1))) {
+            if (requested == 1 && drawn == 1 && playable(side, hand.get(hand.size() - 1))) {
                 drawnPendingSide = side; drawnCardIndex = hand.size() - 1;
                 log.add(names[side] + " 摸到可出的牌，可立即打出或结束摸牌");
                 return true;
@@ -134,34 +140,36 @@ public class UnoBattleEngine implements GameEngine {
         }
         if (action < 0 || action >= hand.size()) return false;
         Card c = hand.get(action);
-        if (!playable(c)) return false;
+        if (!canPlay(side, action)) return false;
         int chosenColor = activeColor;
         if (c.color < 0) {
-            if (c.wildDrawFour() && hasColorMatch(side)) return false;
             if (!command.hasTarget() || command.getTargetSide() != 1 || command.getTargetIndex() < 0 || command.getTargetIndex() >= COLORS) return false;
             chosenColor = command.getTargetIndex();
         }
         int exchangeTarget = -1;
-        if (c.value == 7) {
+        if (c.value == 7 && hand.size() > 1) {
             if (!command.hasTarget() || command.getTargetSide() != 2) return false;
             exchangeTarget = command.getTargetIndex();
-            if (exchangeTarget < 1 || exchangeTarget > count || exchangeTarget == side) return false;
+            if (!isActive(exchangeTarget) || exchangeTarget == side) return false;
         }
         if (playingDrawnCard) { drawnPendingSide = 0; drawnCardIndex = -1; }
         hand.remove(action);
         if (top != null) discard.add(top);
         top = c; activeColor = c.color >= 0 ? c.color : chosenColor;
-        if (c.value == 7) {
+        // 最后一张先结算胜利；否则 0/7 会把空手牌送给另一席，导致无人正常清空获胜。
+        boolean finalCard = hand.isEmpty();
+        if (!finalCard && c.value == 7) {
             List<Card> other = hands.get(exchangeTarget);
             hands.set(side, other); hands.set(exchangeTarget, hand);
             hand = hands.get(side);
             log.add(names[side] + " 与 " + names[exchangeTarget] + " 交换了手牌");
-        } else if (c.value == 0) {
+        } else if (!finalCard && c.value == 0) {
             rotateHands();
             hand = hands.get(side);
             log.add("所有玩家按方向轮转手牌");
         }
-        history.add(new int[]{side, c.color, c.value, activeColor}); seq++;
+        // 前四列兼容旧记录；新增实际换手目标与最后一张标志，不记录隐藏手牌。
+        history.add(new int[]{side, c.color, c.value, activeColor, !finalCard && c.value == 7 ? exchangeTarget : 0, finalCard ? 1 : 0}); seq++;
         log.add(names[side] + " 打出 " + c.label());
         if (hand.isEmpty()) {
             over = true; winner = side;
@@ -172,7 +180,7 @@ public class UnoBattleEngine implements GameEngine {
         }
         int steps = 1;
         if (c.value == 10) { log.add("跳过下一位"); steps = 2; }
-        else if (c.value == 11) { direction = -direction; log.add("出牌方向反转"); if (count == 2) steps = 2; }
+        else if (c.value == 11) { direction = -direction; log.add("出牌方向反转"); if (activeCount() == 2) steps = 2; }
         else if (c.value == 12) { pendingDraw += 2; steps = 1; log.add("下一位需摸 2 张牌"); }
         else if (c.value == 14) { pendingDraw += 4; steps = 1; log.add("下一位需摸 4 张牌"); }
         if (hand.size() == 1 && !over) {
@@ -183,7 +191,8 @@ public class UnoBattleEngine implements GameEngine {
         advance(steps); return true;
     }
 
-    private boolean playable(Card c) {
+    private boolean playable(int side, Card c) {
+        if (c.wildDrawFour() && hasColorMatch(side)) return false;
         if (pendingDraw > 0) return c.value == 12 || c.value == 14;
         return c.color < 0 || c.color == activeColor || c.value == top.value;
     }
@@ -242,10 +251,21 @@ public class UnoBattleEngine implements GameEngine {
         if (turn == side) advance(1);
         return true;
     }
-    public boolean canPlay(int side, int index) { return side > 0 && side <= count && index >= 0 && index < hands.get(side).size() && playable(hands.get(side).get(index)); }
+    public boolean isActive(int side) { return side > 0 && side <= count && active[side]; }
+    public int getHandCount(int side) { return side > 0 && side <= count ? hands.get(side).size() : 0; }
+    public boolean canPlay(int side, int index) {
+        return !over && isActive(side) && side == turn && unoPendingSide == 0
+                && index >= 0 && index < hands.get(side).size()
+                && (drawnPendingSide == 0 || drawnPendingSide == side && index == drawnCardIndex)
+                && playable(side, hands.get(side).get(index));
+    }
+    public boolean canDraw(int side) {
+        return !over && isActive(side) && side == turn && unoPendingSide == 0 && drawnPendingSide == 0
+                && (pendingDraw > 0 || !hasPlayable(side));
+    }
     public List<Card> getHand(int side) { return side > 0 && side <= count ? new ArrayList<>(hands.get(side)) : Collections.emptyList(); }
     public Card getTop() { return top; }
-    public boolean hasPlayable(int side) { for (int i = 0; i < hands.get(side).size(); i++) if (canPlay(side, i)) return true; return false; }
+    public boolean hasPlayable(int side) { for (int i = 0; i < getHandCount(side); i++) if (canPlay(side, i)) return true; return false; }
     private boolean hasColorMatch(int side) { for (Card c : hands.get(side)) if (c.color == activeColor) return true; return false; }
     public int getCount() { return count; }
     public int getActiveColor() { return activeColor; }
@@ -260,6 +280,7 @@ public class UnoBattleEngine implements GameEngine {
     public String getScoreSummary() {
         if (!over) return null;
         if (winner == null) return "平局（达到手数上限）";
+        if (activeCount() == 1) return names[winner] + " 成为最后留在场上的玩家，获胜";
         return names[winner] + " 清空手牌获胜，结算 " + roundScores[winner] + " 分";
     }
     public List<int[]> getMoveHistory() { return new ArrayList<>(history); }
@@ -275,6 +296,10 @@ public class UnoBattleEngine implements GameEngine {
     public Object getViewState(int viewerSide) {
         Map<String,Object> view = new LinkedHashMap<>();
         view.put("kind", "UNO"); view.put("turn", turn); view.put("over", over); view.put("winner", winner);
+        view.put("canDraw", canDraw(viewerSide));
+        view.put("canEndDraw", !over && isActive(viewerSide) && drawnPendingSide == viewerSide);
+        view.put("canCallUno", !over && isActive(viewerSide) && unoPendingSide == viewerSide);
+        view.put("canCatchUno", !over && isActive(viewerSide) && unoPendingSide != 0 && unoPendingSide != viewerSide);
         view.put("deckLeft", deck.size()); view.put("discardLeft", discard.size()); view.put("activeColor", activeColor); view.put("drawnPendingSide", drawnPendingSide); view.put("drawnCardIndex", drawnCardIndex); view.put("unoPendingSide", unoPendingSide); view.put("unoCatchable", unoPendingSide != 0); view.put("activeColorLabel", new String[]{"红","黄","绿","蓝"}[activeColor]); view.put("direction", direction); view.put("pendingDraw", pendingDraw);
         Map<String,Object> t = new LinkedHashMap<>(); t.put("color", top.color); t.put("value", top.value); t.put("label", top.label()); view.put("top", t);
         List<Map<String,Object>> ps = new ArrayList<>();
@@ -282,7 +307,7 @@ public class UnoBattleEngine implements GameEngine {
             Map<String,Object> p = new LinkedHashMap<>(); p.put("side", s); p.put("name", names[s]); p.put("handCount", hands.get(s).size()); p.put("score", roundScores[s]); p.put("active", active[s]);
             if (s == viewerSide) {
                 List<Map<String,Object>> h = new ArrayList<>();
-                for (int i = 0; i < hands.get(s).size(); i++) { Card c = hands.get(s).get(i); Map<String,Object> x = new LinkedHashMap<>(); x.put("index", i); x.put("color", c.color); x.put("value", c.value); x.put("label", c.label()); x.put("special", c.special()); x.put("playable", playable(c)); h.add(x); }
+                for (int i = 0; i < hands.get(s).size(); i++) { Card c = hands.get(s).get(i); Map<String,Object> x = new LinkedHashMap<>(); x.put("index", i); x.put("color", c.color); x.put("value", c.value); x.put("label", c.label()); x.put("special", c.special()); x.put("playable", canPlay(s, i)); h.add(x); }
                 p.put("hand", h);
             }
             ps.add(p);
