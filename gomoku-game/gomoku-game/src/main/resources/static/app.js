@@ -460,6 +460,7 @@ function drawBoard() {
     winLine,
     myStone,
     currentTurn,
+    playerCount: targetPlayers,
     selected: selectedFrom,
     replaying: replayMode,
     finished: gameState === 'OVER' && !replayMode,
@@ -2861,7 +2862,7 @@ function startRematchCountdown() {
 // ============================================================
 const GAME_CATEGORY = {
   GOMOKU: 'board', REVERSI: 'board', GO9: 'board', XIANGQI: 'board', CHECKERS: 'board', JUNGLE: 'board', DARK_CHESS: 'board',
-  FLIGHT_CHESS: 'party', CONNECT4: 'board', ULTIMATE_TTT: 'board',
+  FLIGHT_CHESS: 'party', CONNECT4: 'board', ULTIMATE_TTT: 'board', DOTS_BOXES: 'board',
   CARD: 'card', UNO: 'card', HIGH_CARD: 'card', BLACKJACK: 'card', BOMB_CAT: 'card', DOUDIZHU: 'card',
   DICE_RACE: 'party', GEM_AUCTION: 'party',
   RPG: 'duel', NIM: 'duel', QUIZ: 'duel'
@@ -3841,6 +3842,19 @@ function handleGameMove(msg) {
   const m = mod();
   const r = msg.row, c = msg.col;
 
+  // 多人棋盘离场广播只改变座位与行动方，没有新画边/落子，不能按负坐标写盘面。
+  if (!m.html && r === -1 && c === -1) {
+    const data = applyViewData(msg.data);
+    if (typeof data?.turn === 'number') currentTurn = data.turn;
+    if (data?.effects?.length) m.applyEffects(board, data.effects);
+    if (typeof msg.moveSeq === 'number' && msg.moveSeq >= 0) moveCount = moveSeq = msg.moveSeq;
+    selectedFrom = null;
+    document.getElementById('move-count').textContent = '手数: ' + moveCount;
+    updateTurnStatus();
+    drawBoard();
+    return;
+  }
+
   // 非棋盘玩法（RPG）：盘面在 view 里，不碰 board，也不做落子音效
   if (m.html) {
     const data = applyViewData(msg.data);
@@ -3902,7 +3916,7 @@ function handleGameMove(msg) {
   if ((currentGameType === 'CHECKERS' || currentGameType === 'JUNGLE'
       || currentGameType === 'DARK_CHESS'
       || currentGameType === 'FLIGHT_CHESS'
-      || currentGameType === 'ULTIMATE_TTT') && moveData && moveData.view) rpgView = moveData.view;
+      || currentGameType === 'ULTIMATE_TTT' || currentGameType === 'DOTS_BOXES') && moveData && moveData.view) rpgView = moveData.view;
 
     // 暗棋翻子会把新棋子身份放进 effects；走子/吃子也要同步最新公开盘面。
     // 服务端 MOVE 目前只带坐标与 effects，三阶段吃子需要清目标/落终点，
@@ -3991,6 +4005,12 @@ const GAME_OVER_GUIDES = {
     lose: '对手先赢下三个连线小盘；局部三连之外，还要看下一手会被送去哪里。',
     draw: '九个小盘全部封闭，双方都没有完成大盘连线。',
     tip: '落子前先看目的小盘是否会让对手立即获胜；关键时刻宁可放弃一个小盘，也要保住大盘防线。'
+  },
+  DOTS_BOXES: {
+    win: '你占有的方格最多，总分包含所有连续围格。',
+    lose: '对手占格更多；避免留下第三条边，特别留意后半盘的长链。',
+    draw: '最高占格数相同，本局平局。',
+    tip: '画边前先看是否会送出第三条边；围成一格还能继续，连续围格往往决定胜负。'
   },
   RPG: {
     win: '对手生命值先归零，或终局时你的生命值更高。',
@@ -4381,6 +4401,7 @@ function updateTurnStatus() {
     const hint = simultaneous ? '同时选择中 · 提交后停止计时'
       : currentGameType === 'GO9' ? '你的回合（点击落子或停一手）'
       : ultimateRegion ? '你的回合 · ' + ultimateRegion
+      : currentGameType === 'DOTS_BOXES' ? (rpgView?.continued ? '围成 ' + rpgView.lastCaptured + ' 格，继续画边！' : '你的回合，点击两点之间的空边')
       : flightPhase === 'SKIP' ? '掷出 ' + (rpgView?.dice || '—') + ' 点，无棋可走，请点「跳过本回合」'
       : flightPhase === 'MOVE' ? '掷出 ' + (rpgView?.dice || '—') + ' 点，选择要点亮的棋子，再点目标格'
       : mod().moveSelect ? '你的回合（先点己方棋子，再点目标点）'
@@ -4393,6 +4414,7 @@ function updateTurnStatus() {
     setStatusMsg(simultaneous
       ? myId === 'SPECTATOR' ? '观战中 · 等待玩家提交' : '已提交或已退出，等待其他玩家'
       : ultimateRegion ? (myId === 'SPECTATOR' ? '观战中 · ' : '等待对方 · ') + ultimateRegion
+      : currentGameType === 'DOTS_BOXES' ? (myId === 'SPECTATOR' ? '观战中 · ' : '等待 · ') + '第 ' + currentTurn + ' 号画边'
       : flightTurn ? '等待 ' + flightTurn.name + ' 掷骰或走子...' : '等待对方行棋...', 'opponent-turn');
     if (!mod().html) canvas.style.cursor = 'not-allowed';
   }
@@ -4639,6 +4661,7 @@ let rmMoves = [];         // 复盘棋谱
 let rmEffects = [];       // 与棋谱对齐的每手效果
 let rmInitialBoard = null; // 随机开局玩法（暗棋）的开局盘面
 let rmGameType = 'GOMOKU';
+let rmPlayerCount = 2;
 let rmShareId = null;
 let rmIndex = 0;
 let rmTimer = null;
@@ -4656,6 +4679,7 @@ const GAME_TYPE_LABEL = {
   FLIGHT_CHESS: '飞行棋',
   CONNECT4: '四子棋',
   ULTIMATE_TTT: '终极井字棋',
+  DOTS_BOXES: '点格棋',
   RPG: '回合制对战',
   // 之前漏了这三个，记录页会显示「CARD 复盘」这种英文标题
   CARD: '卡牌对战',
@@ -6140,6 +6164,7 @@ function openRecordReplay(id, gameType) {
       rmEffects = rec.moveEffects || [];
       rmInitialBoard = Array.isArray(rec.initialBoard) ? rec.initialBoard : null;
       rmGameType = rec.gameType || gameType || 'GOMOKU';
+      rmPlayerCount = rec.participants?.length || 2;
       rmShareId = /^[A-Za-z0-9-]+$/.test(String(id)) ? id : null;
       const shareBtn = document.getElementById('rm-share');
       if (shareBtn) shareBtn.style.display = rmShareId ? '' : 'none';
@@ -6386,7 +6411,7 @@ function rmDraw() {
     last = [mv[0], mv[1]];
   }
 
-  m.draw(c2d, b, { lastMove: last, winLine: null, myStone: 0, currentTurn: 0, hint: false });
+  m.draw(c2d, b, { lastMove: last, winLine: null, myStone: 0, currentTurn: 0, hint: false, playerCount: rmPlayerCount, replaying: true });
 
   const slider = document.getElementById('rm-slider');
   if (slider) slider.value = rmIndex;

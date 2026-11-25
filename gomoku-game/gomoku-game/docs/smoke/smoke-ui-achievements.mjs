@@ -5,7 +5,7 @@ const APP = process.env.APP_URL || 'http://127.0.0.1:19000/';
 const REST = process.env.REST_URL || 'http://127.0.0.1:19000';
 const WS_URL = process.env.WS_URL || 'ws://127.0.0.1:19001';
 const OUT = process.env.OUT_DIR || 'F:/tmp/shot';
-const TOTAL = 33;
+const TOTAL = 34;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0, failed = 0;
 function check(name, cond, detail) {

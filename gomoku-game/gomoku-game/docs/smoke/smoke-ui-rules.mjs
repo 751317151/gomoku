@@ -24,7 +24,7 @@ async function waitUntil(fn, label, timeout = 12000) {
 }
 
 const EXPECTED = ['HIGH_CARD', 'BLACKJACK', 'GOMOKU', 'REVERSI', 'GO9', 'XIANGQI', 'CHECKERS', 'JUNGLE', 'DARK_CHESS', 'FLIGHT_CHESS', 'CONNECT4',
-  'RPG', 'CARD', 'NIM', 'QUIZ', 'DICE_RACE', 'GEM_AUCTION', 'UNO', 'BOMB_CAT', 'DOUDIZHU', 'ULTIMATE_TTT'];
+  'RPG', 'CARD', 'NIM', 'QUIZ', 'DICE_RACE', 'GEM_AUCTION', 'UNO', 'BOMB_CAT', 'DOUDIZHU', 'ULTIMATE_TTT', 'DOTS_BOXES'];
 const NAME = '规则UI' + Math.floor(Math.random() * 10000);
 
 async function getWsUrl() {

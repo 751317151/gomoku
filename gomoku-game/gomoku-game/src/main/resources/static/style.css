@@ -3015,6 +3015,7 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 #replay-slider { flex:1 1 100px; min-width:80px; max-width:100%; }
 @media (max-width: 600px) {
   .replay-controls { gap:6px; }
+  .replay-controls button { min-width:44px; }
   #replay-slider { flex-basis:100%; order:-1; }
   body { padding-bottom: env(safe-area-inset-bottom); }
   header { flex-wrap: wrap; gap: 8px; }

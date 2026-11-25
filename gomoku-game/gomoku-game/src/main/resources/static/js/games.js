@@ -1562,6 +1562,104 @@
   }
 
   // ============================================================
+  // 点格棋
+  // ============================================================
+  // 点格棋：9×9 编码中只接受边的坐标；方格归属由服务端 effects 更新。
+  const DOTS_BOXES = {
+    name: '点格棋', rows: 9, cols: 9, cell: 60, padding: 40, top: 136,
+    minPlayers: 2, maxPlayers: 4, defaultPlayers: 2,
+    stepTime: 30, totalTime: 600, icon: '▦',
+    sides: [{icon:'red',label:'朱红'},{icon:'blue',label:'靛蓝'},{icon:'green',label:'松绿'},{icon:'purple',label:'紫棠'}],
+    colors: ['#a33e32','#355e91','#3d704d','#794e85'],
+    footer: '2–4 人 · 画边围格 · 每格 1 分 · 围成后继续行动',
+    rules: {
+      goal: '在 5×5 个点之间画边，争夺 16 个方格；所有 40 条边画完后，仍在场者中占格最多者获胜。',
+      steps: [
+        '朱红先手，按座位依次行动。点击两点之间的一条空边，只能连接水平或垂直相邻的点，不能重复画边。',
+        '画下一个方格的第四条边，就占有这个格子并得 1 分；前面三条边由谁画都不影响归属。',
+        '围成方格后由你继续画一条边，可以连续得分；一条共享边可以同时围成两格，得 2 分。没有围成格子时换到下一位。',
+        '40 条边画完后结算，最高分并列者共同获胜（双人局同分为平局）。每次画边有独立 30 秒步时，每方总时 10 分钟。',
+        '离场者停止行动且不参与排名；其已画边和已占格保留，其余人继续。只剩一人则该玩家立即获胜。'
+      ],
+      tips: ['没有得分机会时，尽量不要画出某格的第三条边，避免送给下一位。', '后半盘留意长链：拿下一格后仍能继续，有时一次让步会送出整串方格。', '颜色与数字共同标记座位；亮边是最近一步，格内数字是占格者。']
+    },
+    canvasWidth() { return 560; }, canvasHeight() { return 656; },
+    initialBoard() { return emptyBoard(9,9); },
+    isEdge(row,col) { return row>=0 && row<9 && col>=0 && col<9 && (row+col)%2===1; },
+    position(board, count) {
+      const scores=Array(count || 4).fill(0); let used=0;
+      for(let r=0;r<9;r++) for(let c=0;c<9;c++) {
+        const side=board[r]?.[c] || 0;
+        if(side && this.isEdge(r,c)) used++;
+        if(side && r%2===1 && c%2===1) scores[side-1]=(scores[side-1] || 0)+1;
+      }
+      return {scores,used};
+    },
+    draw(ctx,board,opts) {
+      const v=!opts.replaying && opts.view?.kind==='DOTS_BOXES' ? opts.view : null;
+      const count=v?.playerCount || opts.playerCount || Math.max(2,...board.flat());
+      const p=this.position(board,count), x=c=>this.padding+c*this.cell, y=r=>this.top+r*this.cell;
+      ctx.save(); ctx.fillStyle='#f0ebdf';ctx.fillRect(0,0,560,656);
+      ctx.fillStyle='#273c3a';ctx.textAlign='left';ctx.font='bold 22px Georgia,"Songti SC",serif';
+      ctx.fillText('点格棋',this.padding,35);
+      ctx.font='12px Georgia,serif';ctx.fillStyle='#68716a';ctx.textAlign='right';ctx.fillText('DOTS & BOXES',520,34);
+      const w=480/count;
+      for(let side=1;side<=count;side++) {
+        const left=this.padding+(side-1)*w;
+        ctx.fillStyle=this.colors[side-1];ctx.fillRect(left,52,w-8,3);
+        ctx.textAlign='left';ctx.font='14px "Noto Sans SC",sans-serif';
+        ctx.fillText(side+'号'+(v?.players[side-1]?.active===false?' · 退出':''),left,count>2?73:78);
+        ctx.textAlign='right';ctx.font=(count>2?'bold 20px':'bold 23px')+' Georgia,serif';
+        ctx.fillText(p.scores[side-1]+' 格',left+w-10,count>2?95:80);
+      }
+      ctx.fillStyle='#4c5b50';ctx.textAlign='left';ctx.font='14px "Noto Sans SC",sans-serif';
+      ctx.fillText(v?.continued ? '围成 '+v.lastCaptured+' 格，再画一条！' : '点击两点之间的空边',40,109);
+      ctx.textAlign='right';ctx.fillText('余 '+(40-p.used)+' 边 / '+(16-p.scores.reduce((a,b)=>a+b,0))+' 格',520,109);
+      for(let r=1;r<9;r+=2) for(let c=1;c<9;c+=2) if(board[r][c]) {
+        const side=board[r][c];ctx.globalAlpha=.13;ctx.fillStyle=this.colors[side-1];ctx.fillRect(x(c)-55,y(r)-55,110,110);
+        ctx.globalAlpha=1;ctx.fillStyle=this.colors[side-1];ctx.textAlign='center';ctx.font='bold 31px Georgia,serif';ctx.fillText(side,x(c),y(r)+11);
+      }
+      ctx.lineCap='round';
+      for(let r=0;r<9;r++) for(let c=0;c<9;c++) if(this.isEdge(r,c)) {
+        const side=board[r][c], horizontal=r%2===0;
+        const recent=opts.lastMove?.[0]===r && opts.lastMove?.[1]===c;
+        ctx.strokeStyle=side?this.colors[side-1]:'#a5ab9d';ctx.lineWidth=side?6:2;
+        ctx.setLineDash(side?[]:[3,7]);ctx.beginPath();
+        ctx.moveTo(x(c)-(horizontal?52:0),y(r)-(horizontal?0:52));
+        ctx.lineTo(x(c)+(horizontal?52:0),y(r)+(horizontal?0:52));ctx.stroke();ctx.setLineDash([]);
+        if(side) {
+          ctx.fillStyle=recent?'#253c36':this.colors[side-1];ctx.beginPath();ctx.arc(x(c),y(r),recent?13:10,0,Math.PI*2);ctx.fill();
+          ctx.fillStyle='#fffaf0';ctx.font='bold 13px Georgia,serif';ctx.textAlign='center';ctx.fillText(side,x(c),y(r)+4);
+        } else if(opts.hint && opts.myStone===opts.currentTurn && !opts.finished && !v?.over) {
+          ctx.fillStyle='#647568';ctx.beginPath();ctx.arc(x(c),y(r),3,0,Math.PI*2);ctx.fill();
+        }
+      }
+      for(let r=0;r<9;r+=2) for(let c=0;c<9;c+=2) {
+        ctx.fillStyle='#273c3a';ctx.beginPath();ctx.arc(x(c),y(r),5,0,Math.PI*2);ctx.fill();
+      }
+      ctx.restore();
+    },
+    hitTest(mx,my) {
+      let nearest=null, distance=45;
+      for(let row=0;row<9;row++) for(let col=0;col<9;col++) if(this.isEdge(row,col)) {
+        const d=Math.hypot(mx-this.padding-col*this.cell,my-this.top-row*this.cell);
+        if(d<distance) {distance=d;nearest={row,col};}
+      }
+      return nearest;
+    },
+    drawGhost(ctx,row,col,side) {
+      const horizontal=row%2===0,x=this.padding+col*this.cell,y=this.top+row*this.cell;
+      ctx.save();ctx.globalAlpha=.5;ctx.strokeStyle=this.colors[side-1] || '#273c3a';ctx.lineWidth=7;ctx.lineCap='round';ctx.beginPath();
+      ctx.moveTo(x-(horizontal?52:0),y-(horizontal?0:52));ctx.lineTo(x+(horizontal?52:0),y+(horizontal?0:52));ctx.stroke();ctx.restore();
+    },
+    isLegal(board,row,col,side,view) {
+      return view?.kind==='DOTS_BOXES' && !view.over && view.turn===side && this.isEdge(row,col)
+        && board[row]?.[col]===0 && view.legalMoves.some(m=>m[0]===row && m[1]===col);
+    },
+    applyEffects(board,effects) { for(const e of effects || []) if(board[e[0]]) board[e[0]][e[1]]=e[2];return null; }
+  };
+
+  // ============================================================
   // 终极井字棋
   // ============================================================
   const ULTIMATE_TTT = {
@@ -2187,6 +2285,6 @@
     drawGhost() {}, isLegal() { return false; }, applyEffects() {}, legalMoves() { return []; }
   };
 
-  window.GameModules = { HIGH_CARD, BLACKJACK, BOMB_CAT, DOUDIZHU, GOMOKU, REVERSI, GO9, XIANGQI, CHECKERS, JUNGLE, DARK_CHESS, FLIGHT_CHESS, CONNECT4, ULTIMATE_TTT, RPG, CARD, NIM, QUIZ, DICE_RACE, GEM_AUCTION, UNO };
+  window.GameModules = { HIGH_CARD, BLACKJACK, BOMB_CAT, DOUDIZHU, GOMOKU, REVERSI, GO9, XIANGQI, CHECKERS, JUNGLE, DARK_CHESS, FLIGHT_CHESS, CONNECT4, ULTIMATE_TTT, DOTS_BOXES, RPG, CARD, NIM, QUIZ, DICE_RACE, GEM_AUCTION, UNO };
 })();
 

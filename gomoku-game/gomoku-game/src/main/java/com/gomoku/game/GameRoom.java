@@ -182,6 +182,7 @@ public class GameRoom {
             case DARK_CHESS: return new DarkChessBoard();
             case CONNECT4: return new ConnectFourBoard();
             case ULTIMATE_TTT: return new UltimateTicTacToeBoard();
+            case DOTS_BOXES: return new DotsAndBoxesBoard();
             case RPG:      return new RpgBattleEngine();
             case CARD:     return new CardBattleEngine();
             case NIM:      return new NimBattleEngine();
@@ -209,6 +210,7 @@ public class GameRoom {
             case DARK_CHESS: return DarkChessAI.INSTANCE;
             case CONNECT4: return ConnectFourAI.INSTANCE;
             case ULTIMATE_TTT: return UltimateTicTacToeAI.INSTANCE;
+            case DOTS_BOXES: return DotsAndBoxesAI.INSTANCE;
             case RPG:      return RpgAI.INSTANCE;
             case CARD:     return CardAI.INSTANCE;
             case NIM:      return NimAI.INSTANCE;
@@ -1622,9 +1624,9 @@ public class GameRoom {
                         moveEffectsHistory.add(new ArrayList<>(engine.getLastMoveEffects()));
                     }
                 }
-                // 飞行棋的认输只淘汰一个座位，必须让大厅和聊天区明确看到
+                // 多人棋盘的认输只淘汰一个座位，必须让大厅和聊天区明确看到
                 // 谁离场；普通双人局仍由终局/离开提示承担同一信息。
-                if (engine instanceof FlightChessBoard) {
+                if (engine instanceof FlightChessBoard || engine instanceof DotsAndBoxesBoard) {
                     broadcastPlayerStatus(player.getName() + " 已退出本局", player);
                 }
                 broadcastMove(player, -1, -1, true);

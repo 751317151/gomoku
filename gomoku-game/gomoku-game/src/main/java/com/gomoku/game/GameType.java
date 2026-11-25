@@ -42,7 +42,9 @@ public enum GameType {
     /** 斗地主：3 人经典牌局，地主获得底牌，农民协作对抗地主 */
     DOUDIZHU("斗地主", 0, 0, false, 3, 3, 3),
     /** 终极井字棋：局部落点指定对手小盘，三个小盘连线获胜 */
-    ULTIMATE_TTT("终极井字棋", 9, 9, true);
+    ULTIMATE_TTT("终极井字棋", 9, 9, true),
+    /** 点格棋：2–4 人画边围格，完成格子得分并继续行动 */
+    DOTS_BOXES("点格棋", 9, 9, true, 2, 4, 2);
 
     private final String displayName;
     private final int rows;

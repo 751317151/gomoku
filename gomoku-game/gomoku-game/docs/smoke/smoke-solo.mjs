@@ -15,6 +15,7 @@ const GAMES = [
   { type: 'FLIGHT_CHESS', name: '飞行棋' },
   { type: 'CONNECT4', name: '四子棋' },
   { type: 'ULTIMATE_TTT', name: '终极井字棋' },
+  { type: 'DOTS_BOXES', name: '点格棋' },
   { type: 'RPG', name: '回合制对战' },
   { type: 'CARD', name: '卡牌对战' },
   { type: 'NIM', name: '取石子' },
