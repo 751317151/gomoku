@@ -1048,7 +1048,7 @@ function renderQuizPanel() {
   }
 }
 
-// 骰子竞速：所有玩家同时选策略，服务端揭晓后更新积分。
+// 骰子竞速的两个暗选窗口分别以服务端 legalActions 与 actionVersion 为准。
 function renderDiceRacePanel() {
   const progress = document.getElementById('dice-progress');
   const score = document.getElementById('dice-score');
@@ -1058,23 +1058,43 @@ function renderDiceRacePanel() {
   const logEl = document.getElementById('dice-log');
   if (!progress || !choicesEl || !rpgView || !rpgView.players) return;
   const v = rpgView;
+  const pressing = v.phase === 'PRESS';
+  const spectator = myId === 'SPECTATOR' || myStone <= 0;
   progress.textContent = '第 ' + v.round + ' / ' + v.totalRounds + ' 轮';
-  score.textContent = (v.players || []).map(p => p.name + ' ' + p.score).join('  ·  ');
   const me = v.players.find(p => p.side === myStone);
-  const waiting = !v.over && myStone > 0 && me && !me.answered && myId !== 'SPECTATOR';
-  status.textContent = v.over ? '本局结束' : waiting ? '选择你的策略，所有人提交后一起揭晓' : '等待其他玩家选择…';
-  const labels = ['稳健', '冒险', '追击'];
-  const desc = ['1d6，稳定拿分', '2d6，掷出 1 会爆掉', '落后时 +3，领先时 -1'];
-  choicesEl.innerHTML = labels.map((label, i) => {
-    let cls = 'dice-choice';
-    if (v.revealed) cls += ' revealed';
-    if (me && me.choice === i) cls += ' mine';
-    return '<button class="' + cls + '" data-choice="' + i + '"' + (waiting ? '' : ' disabled') + '>'
-      + '<strong>' + label + '</strong><small>' + desc[i] + '</small></button>';
+  const legal = v.legalActions || [];
+  const waiting = gameState === 'PLAYING' && !v.over && !spectator && me && me.active && !me.answered;
+  score.textContent = spectator ? '观战中' : me ? '你的总分 ' + me.score : '';
+  document.getElementById('dice-phases').innerHTML = '<span class="' + (!pressing && !v.over ? 'is-current' : '')
+    + '">01 暗选策略</span><span aria-hidden="true">→</span><span class="' + (pressing ? 'is-current' : '') + '">02 收分 / 加掷</span>';
+  const diceFaces = values => (values || []).filter(value => value > 0).map(value =>
+    '<span class="dice-face' + (value === 1 ? ' is-one' : '') + '" aria-label="' + value + ' 点">' + ['','⚀','⚁','⚂','⚃','⚄','⚅'][value] + '</span>').join('');
+  const stakes = document.getElementById('dice-stakes');
+  stakes.innerHTML = pressing
+    ? '<div><span class="dice-caption">首骰已揭晓</span><div class="dice-faces">' + (me ? diceFaces(me.dice) : '<b>等待冒险者决定</b>') + '</div></div>'
+      + '<div class="dice-pot"><span>本轮待收</span><strong>' + (me?.pendingScore ?? '—') + '<small> 分</small></strong></div>'
+      + '<p>加掷 1 颗：2–6 点加分，掷到 1 本轮归零。护盾可保住首骰分。</p>'
+    : '<div><span class="dice-caption">' + (v.over ? '竞速结束' : '先选路线，再看时机') + '</span><strong class="dice-intro">'
+      + (v.over ? '每一次取舍，都已计入总分' : '这一次，要稳稳拿下还是再搏一把？') + '</strong></div>'
+      + '<p>' + (me ? me.shieldAvailable ? '护盾剩余 1 次 · 仅保护冒险成功后的加掷' : '护盾已用完 · 加掷需要承担全部风险' : '策略和加掷决定都在所有人提交后揭晓') + '</p>';
+  status.textContent = v.over ? '六轮结束，查看最终排名' : spectator ? pressing ? '观战中 · 等待冒险者提交决定' : '观战中 · 等待玩家暗选策略'
+    : waiting ? pressing ? '收下眼前分数，还是再掷一次？每轮最多加掷一次。' : '选择你的策略，所有人提交后一起掷骰'
+    : pressing ? me?.choice === 1 && me?.pendingScore > 0 ? '你已决定，等待其他冒险者…' : '本轮无需再操作，等待冒险者决定…' : '你已选好策略，等待其他玩家…';
+  const options = pressing
+    ? [[3,'收分','保留首骰分，不再冒险'],[4,'加掷','再掷一颗，遇 1 本轮归零'],[5,'护盾加掷',me?.shieldAvailable ? '消耗唯一护盾，遇 1 仍保分' : '本局护盾已使用']]
+    : [[0,'稳健','掷 1 颗，点数即得分'],[1,'冒险','掷 2 颗，成功可收分或加掷'],[2,'追击','落后 +3，领先或并列 -1']];
+  choicesEl.innerHTML = options.map(([action,label,desc]) => {
+    const selected = me && (pressing ? me.decision : me.choice) === action;
+    return '<button class="dice-choice' + (selected ? ' mine' : '') + '" data-choice="' + action + '"'
+      + (waiting && legal.includes(action) ? '' : ' disabled') + '><strong>' + label + '</strong><small>' + desc + '</small></button>';
   }).join('');
-  playersEl.innerHTML = v.players.map(p => '<div class="dice-player-row"><b>' + escHtml(p.name) + '</b><span>'
-    + p.score + ' 分' + (p.lastRoundScore != null ? '（上轮 +' + p.lastRoundScore + '，掷出 ' + p.lastRoll + '）' : '')
-    + (p.answered ? ' · 已选' : '') + '</span></div>').join('');
+  const labels = ['稳健', '冒险', '追击'];
+  playersEl.innerHTML = v.players.map(p => '<div class="dice-racer' + (p.side === myStone ? ' is-you' : '') + (!p.active ? ' is-out' : '') + '">'
+    + '<div class="dice-racer-head"><b>' + escHtml(p.name) + (p.side === myStone ? '（你）' : '') + '</b><strong>' + p.score + '<small> 分</small></strong></div>'
+    + '<div class="dice-racer-meta"><span>' + (!p.active ? '已退出' : pressing ? labels[p.choice] + ' · 待收 ' + p.pendingScore + ' 分'
+      : p.lastRoundScore != null ? '第 ' + v.lastRound + ' 轮 +' + p.lastRoundScore : '准备出发') + '</span><span>' + (p.shieldAvailable ? '护盾 1' : '护盾已用') + '</span></div>'
+    + (pressing ? '<div class="dice-racer-roll">' + diceFaces(p.dice) + '<em>' + (!p.active ? '离场' : p.answered ? '已决定 / 无需行动' : '思考中') + '</em></div>'
+      : '<div class="dice-racer-roll">' + diceFaces(p.lastDice) + '<em>' + (v.over ? '已结算' : !p.active ? '离场' : p.answered ? '已选策略' : '选择中') + '</em></div>') + '</div>').join('');
   logEl.innerHTML = (v.log || []).map(line => '<div>' + escHtml(line) + '</div>').join('');
   logEl.scrollTop = logEl.scrollHeight;
 }
@@ -3978,7 +3998,7 @@ const GAME_OVER_GUIDES = {
     win: '你的累计总分最高。',
     lose: '你的累计总分没有领先；每轮的选择会改变最终得分。',
     draw: '最高总分出现并列。',
-    tip: '领先时选稳、落后时再冒险；不要把一次高点数当成整局优势。'
+    tip: '冒险成功后也可以收分；把一次护盾留给高分加掷或决胜轮，避免一次爆掉丢掉领先。'
   },
   GEM_AUCTION: {
     win: '五轮拍卖后你的宝石分最高。',
@@ -6195,10 +6215,13 @@ function replayActionText(type, mv) {
   if (!mv) return '';
   if (type === 'HIGH_CARD') return mv[1] < 0 ? '退出本局' : '暗选 ' + mv[1] + '（第 ' + mv[2] + ' 轮）';
   if (type === 'DICE_RACE') {
-    const names = ['稳健', '冒险', '追击'];
+    const names = ['稳健', '冒险', '追击', '收分', '加掷', '护盾加掷'];
     const choice = names[mv[1]] || ('策略 ' + mv[1]);
-    const score = mv[2] > 0 ? '，本轮 +' + mv[2] : '';
-    return choice + score + '（总分 ' + (mv[3] || 0) + '）';
+    const roll = mv.length >= 8 ? mv[1] >= 4 ? ' · 掷出 ' + mv[7] + (mv[7] === 1 ? mv[1] === 5 ? '，护盾保分' : '，本轮爆掉' : '')
+      : mv[1] < 3 ? ' · 首骰 ' + mv[5] + (mv[6] > 0 ? '+' + mv[6] : '') : '' : '';
+    const pending = mv.length >= 8 && mv[1] === 1 && mv[5] !== 1 && mv[6] !== 1;
+    return (mv[4] ? '第 ' + mv[4] + ' 轮 · ' : '') + choice + roll
+      + (pending ? '，等待收分/加掷决定' : '，本轮 +' + (mv[2] || 0)) + '（总分 ' + (mv[3] || 0) + '）';
   }
   if (type === 'GEM_AUCTION') {
     const gems = mv[2] > 0 ? '，拿下 ' + mv[2] + ' 分宝石' : '';

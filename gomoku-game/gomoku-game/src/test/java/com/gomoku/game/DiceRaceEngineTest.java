@@ -19,9 +19,16 @@ class DiceRaceEngineTest {
                 for (com.gomoku.model.Player player : room.getPlayers()) {
                     assertTrue(room.handleCommand(player, MoveCommand.action(round % DiceRaceEngine.CHOICES), -1));
                 }
+                for (com.gomoku.model.Player player : room.getPlayers()) {
+                    if (room.getEngine().isAwaitingAction(player.getStone())
+                            && ((DiceRaceEngine) room.getEngine()).isPressing()) {
+                        assertTrue(room.handleCommand(player, MoveCommand.action(DiceRaceEngine.ACTION_BANK), -1));
+                    }
+                }
             }
             assertEquals(GameRoom.State.FINISHED, room.getState());
-            assertEquals(DiceRaceEngine.ROUNDS * 4, room.getEngine().getMoveCount());
+            assertTrue(room.getEngine().getMoveCount() >= DiceRaceEngine.ROUNDS * 4);
+            assertTrue(room.getEngine().getMoveCount() <= DiceRaceEngine.ROUNDS * 8);
         } finally {
             room.notifyShutdown();
             for (com.gomoku.model.Player player : room.getPlayers()) {

@@ -2812,6 +2812,50 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 .bj-player-head { display:flex; justify-content:space-between; gap:6px; font-size:.75rem; margin-bottom:6px; }
 .dice-race-panel { display:flex; flex-direction:column; gap:14px; padding:20px; min-height:420px; }
 .dice-race-sub { color:var(--text-dim); text-align:center; font-size:.9rem; }
+#dice-race-panel { width:min(740px,100%); min-width:0; box-sizing:border-box; color:#eee6d6; background:linear-gradient(145deg,#152a35,#101b24 65%); border:1px solid #4a6066; border-radius:14px; gap:12px; }
+#dice-race-panel .quiz-head { flex-wrap:wrap; gap:8px; }
+.dice-eyebrow { color:#cbb67c; font-size:.7rem; letter-spacing:.18em; }
+.dice-phases { display:flex; align-items:center; justify-content:center; gap:12px; color:#8c9d9f; font-size:.76rem; }
+.dice-phases .is-current { color:#f4cf7d; border-bottom:2px solid #d0a951; padding-bottom:5px; }
+.dice-stakes { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; padding:16px; background:#0e1a23; border:1px solid #36525b; border-radius:10px; }
+.dice-caption { display:block; color:#a6bdbe; font-size:.72rem; margin-bottom:8px; }
+.dice-intro { display:block; font-size:1.04rem; line-height:1.5; }
+.dice-stakes p { flex:1 0 100%; margin:0; color:#a7b9b9; font-size:.76rem; line-height:1.6; }
+.dice-faces { display:flex; gap:8px; }
+.dice-face { display:inline-flex; align-items:center; justify-content:center; width:40px; height:40px; color:#152731; background:#e7dfc8; border:1px solid #b9b49f; border-radius:7px; font:34px 'Segoe UI Symbol',sans-serif; line-height:1; box-shadow:0 3px 0 #050d12; }
+.dice-face.is-one { color:#a23d32; }
+.dice-pot { display:flex; flex-direction:column; gap:4px; text-align:right; }
+.dice-pot > span { color:#a7b9b9; font-size:.72rem; }
+.dice-pot > strong { color:#f4cf7d; font:2.1rem Georgia,serif; }
+.dice-pot small { font:.75rem sans-serif; }
+#dice-race-panel .dice-choices { gap:8px; }
+#dice-race-panel .dice-choice { min-width:0; min-height:90px; background:#1c3440; border-color:#3d5b65; text-align:left; }
+#dice-race-panel .dice-choice strong { color:#f0d396; }
+#dice-race-panel .dice-choice small { color:#b2c2c1; }
+#dice-race-panel .dice-choice.mine { background:#314c48; border-color:#dab76f; }
+#dice-race-panel .dice-choice:disabled { opacity:.58; }
+#dice-players { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+.dice-racer { min-width:0; padding:10px; border:1px solid #344d57; border-radius:9px; background:#132630; }
+.dice-racer.is-you { border-color:#c5a35f; }
+.dice-racer.is-out { opacity:.5; }
+.dice-racer-head,.dice-racer-meta { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+.dice-racer-head b { min-width:0; font-size:.8rem; overflow-wrap:anywhere; }
+.dice-racer-head strong { flex-shrink:0; color:#f1ce81; font:1.3rem Georgia,serif; }
+.dice-racer-head small { font:.65rem sans-serif; }
+.dice-racer-meta { flex-wrap:wrap; color:#acbfc0; font-size:.65rem; margin-top:5px; }
+.dice-racer-roll { display:flex; align-items:center; flex-wrap:wrap; gap:5px; min-height:28px; margin-top:8px; }
+.dice-racer-roll .dice-face { width:24px; height:24px; border-radius:4px; font-size:22px; }
+.dice-racer-roll em { color:#b6c6c5; font-size:.65rem; font-style:normal; margin-left:auto; }
+#dice-race-panel .quiz-log { max-height:120px; color:#a9bbbc; overflow-wrap:anywhere; }
+@media (max-width:600px) {
+  #dice-race-panel { padding:12px; gap:10px; }
+  #dice-race-panel .dice-choices { grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; }
+  #dice-race-panel .dice-choice { padding:10px 7px; min-height:102px; }
+  #dice-race-panel .dice-choice strong { font-size:.85rem; }
+  #dice-race-panel .dice-choice small { font-size:.65rem; }
+  .dice-stakes { padding:12px; }
+  .dice-racer-head { align-items:flex-start; }
+}
 .dice-choices { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
 .gem-bids { display:grid; grid-template-columns:repeat(6,1fr); gap:8px; }
 .bomb-cat-panel { display:flex; flex-direction:column; gap:14px; width:min(780px,100%); min-height:520px; padding:22px; color:#f3ecdd; background:radial-gradient(circle at 50% 0,#382321 0,#1b1718 58%,#111315 100%); border:1px solid #825047; border-radius:18px; box-sizing:border-box; box-shadow:inset 0 0 80px #0a0808; }
