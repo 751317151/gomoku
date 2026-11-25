@@ -300,23 +300,12 @@ try {
   const target = await cdp.eval(
     "(() => { const card=document.querySelector('#recommendation-strip .recommendation-card');"
     + "return {text:card.textContent,icon:(card.querySelector('strong')||{}).textContent,"
-    + "name:GameModules[" + JSON.stringify(cleanType) + "].name};})()");
-  await cdp.eval(
-    "document.querySelector('#recommendation-strip .recommendation-card').click();");
-  check('点击推荐卡选中对应玩法', await waitUntil(() => cdp.eval(
-    "selectedGameType === " + JSON.stringify(cleanType)
-      + " && document.querySelector('#game-selector .game-card.selected').dataset.gameType"
-      + " === " + JSON.stringify(cleanType)), '选中推荐玩法'));
-  check('点击推荐卡切回「全部」分类', await cdp.eval(
-    "selectedCategory === 'ALL' && document.querySelector('#game-categories .selected').textContent === '全部'"));
-  check('点击推荐卡刷新为玩法对应房间',
-    await waitUntil(() => cdp.eval(
-      "Array.from(document.querySelectorAll('#room-list-container .room-item')).every("
-      + "r=>!r.dataset.gameType||r.dataset.gameType===" + JSON.stringify(cleanType) + ")"),
-      '房间列表过滤'));
+    + "name:GameModules[" + JSON.stringify(cleanType) + "].name,"
+    + "match:(card.querySelector('[data-recommend-play]')||{}).textContent};})()");
   check('推荐卡显示对应玩法图标、名称与原因',
     String(target.text || '').includes(target.name) && String(target.text || '').includes('等待'),
     JSON.stringify(target));
+  check('立即匹配按钮文案明确', String(target.match || '') === '立即匹配', target.match);
   await cdp.screenshot('recommendations-desktop.png');
 
   await cdp.send('Emulation.setDeviceMetricsOverride', {
@@ -329,12 +318,24 @@ try {
     + "const cards=Array.from(box.querySelectorAll('.recommendation-card'));"
     + "const rect=box.getBoundingClientRect();return {left:rect.left,right:rect.right,vw:innerWidth,"
     + "outer:box.scrollWidth>box.clientWidth+1,page:page.scrollWidth>page.clientWidth+1,"
-    + "minHeight:Math.min(...cards.map(c=>c.getBoundingClientRect().height))};})()");
+    + "minHeight:Math.min(...cards.map(c=>c.getBoundingClientRect().height)),"
+    + "matchHeight:(box.querySelector('[data-recommend-play]')||{}).getBoundingClientRect?.().height||0};})()");
   check('390px 推荐条与整页无横向溢出',
     mobile.left >= 0 && mobile.right <= mobile.vw + 1 && !mobile.outer && !mobile.page,
     JSON.stringify(mobile));
   check('390px 推荐卡触控高度至少 44px', mobile.minHeight >= 44, mobile.minHeight);
+  check('390px 推荐匹配按钮触控高度至少 44px', mobile.matchHeight >= 44, mobile.matchHeight);
   await cdp.screenshot('recommendations-mobile.png');
+
+  await cdp.send('Emulation.setDeviceMetricsOverride', {
+    width: 1280, height: 900, deviceScaleFactor: 1, mobile: false
+  });
+  await sleep(200);
+  await cdp.eval(
+    "document.querySelector('#recommendation-strip .recommendation-card [data-recommend-play]').click();");
+  check('点击立即匹配选中推荐玩法并进入等待房', await waitUntil(() => cdp.eval(
+    "gameState === 'WAITING' && roomId && selectedGameType === " + JSON.stringify(cleanType)
+      + " && lastMatchGameType === " + JSON.stringify(cleanType)), '推荐匹配等待房'));
   check('页面无脚本异常', await cdp.eval("(window.__errors||[]).length===0"),
     JSON.stringify(await cdp.eval("window.__errors||[]")));
 

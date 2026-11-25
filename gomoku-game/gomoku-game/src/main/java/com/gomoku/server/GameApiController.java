@@ -5,6 +5,7 @@ import com.gomoku.game.GameRecord;
 import com.gomoku.game.GameRecordService;
 import com.gomoku.game.GameRecommendationService;
 import com.gomoku.game.GuestIdentityService;
+import com.gomoku.game.ProductAnalyticsService;
 import com.gomoku.game.RoomManager;
 import com.gomoku.game.SeasonService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,16 +33,19 @@ public class GameApiController {
     private final SeasonService seasonService;
     private final GuestIdentityService guests;
     private final GameRecommendationService recommendations;
+    private final ProductAnalyticsService analytics;
 
     @Autowired
     public GameApiController(RoomManager roomManager, GameRecordService recordService,
                              SeasonService seasonService, GuestIdentityService guests,
-                             GameRecommendationService recommendations) {
+                             GameRecommendationService recommendations,
+                             ProductAnalyticsService analytics) {
         this.roomManager = roomManager;
         this.recordService = recordService;
         this.seasonService = seasonService;
         this.guests = guests;
         this.recommendations = recommendations;
+        this.analytics = analytics;
     }
 
     /**
@@ -70,9 +74,13 @@ public class GameApiController {
             @RequestHeader(value = "Authorization", required = false) String authorization,
             @RequestParam(required = false, defaultValue = "3") int limit) {
         String identityId = guests.resolve(token(authorization));
+        Map<String, Object> body = recommendations.nextGames(
+                identityId, roomManager.getMatchOverview(), limit);
+        analytics.recordRecommendationShown(identityId,
+                body.get("recommendations") instanceof List ? ((List<?>) body.get("recommendations")).size() : 0);
         return ResponseEntity.ok()
                 .cacheControl(org.springframework.http.CacheControl.noStore())
-                .body(recommendations.nextGames(identityId, roomManager.getMatchOverview(), limit));
+                .body(body);
     }
 
     /**

@@ -50,6 +50,7 @@ public class ProductAnalyticsService {
 
     public enum Stage {
         LOBBY_ENTER("lobbyEnter", "进入大厅"),
+        RECOMMEND_SHOWN("recommendShown", "推荐曝光"),
         MODE_SELECT("modeSelect", "选择玩法"),
         MATCH_START("matchStart", "成功入座"),
         GAME_START("gameStart", "开局"),
@@ -66,7 +67,8 @@ public class ProductAnalyticsService {
     }
 
     /** 入口模式：由客户端声明，服务端再按房间事实校正（有电脑即人机）。 */
-    public static final List<String> MODES = List.of("QUICK", "PRIVATE", "CODE", "AI", "PARTY", "DUEL");
+    public static final List<String> MODES = List.of(
+            "QUICK", "RECOMMENDED", "PRIVATE", "CODE", "AI", "PARTY", "DUEL");
 
     private final Path dir;
     private final Path saltPath;
@@ -132,6 +134,12 @@ public class ProductAnalyticsService {
 
     public void recordLobbyEnter(String identityId) {
         record(Stage.LOBBY_ENTER, identityId, null, 0);
+    }
+
+    /** 推荐已实际展示给当前身份；一次响应只记一条曝光事件。 */
+    public void recordRecommendationShown(String identityId, int games) {
+        if (games <= 0) return;
+        record(Stage.RECOMMEND_SHOWN, identityId, null, 0);
     }
 
     public void recordModeSelect(String identityId) {
@@ -248,6 +256,12 @@ public class ProductAnalyticsService {
         Map<String, Integer> matchFailReasons = new LinkedHashMap<>();
         int reconnectSuccess = 0;
         int reconnectFailure = 0;
+        Set<String> recommendationUsers = new HashSet<>();
+        Set<String> recommendedMatchUsers = new HashSet<>();
+        Set<String> recommendedFinishUsers = new HashSet<>();
+        int recommendationEvents = 0;
+        int recommendedStarts = 0;
+        int recommendedFinishes = 0;
         List<Map<String, Object>> dailyFunnel = new ArrayList<>();
 
         for (LocalDate d = from; !d.isAfter(today); d = d.plusDays(1)) {
@@ -263,6 +277,31 @@ public class ProductAnalyticsService {
             bucket.matchFailReasons.forEach((k, v) -> matchFailReasons.merge(k, v, Integer::sum));
             reconnectSuccess += bucket.reconnectSuccess;
             reconnectFailure += bucket.reconnectFailure;
+            Map<String, Set<String>> recommendationShown = bucket.users.get(Stage.RECOMMEND_SHOWN.key);
+            if (recommendationShown != null) {
+                for (Set<String> hashes : recommendationShown.values()) recommendationUsers.addAll(hashes);
+            }
+            Map<String, Integer> recommendationCounts = bucket.counts.get(Stage.RECOMMEND_SHOWN.key);
+            if (recommendationCounts != null) {
+                for (Integer amount : recommendationCounts.values()) recommendationEvents += amount;
+            }
+            Map<String, Set<String>> recommendedStages = bucket.users.get(Stage.MATCH_START.key);
+            if (recommendedStages != null) {
+                recommendedMatchUsers.addAll(recommendedStages.getOrDefault("RECOMMENDED", Set.of()));
+            }
+            recommendedStages = bucket.users.get(Stage.GAME_START.key);
+            if (recommendedStages != null) {
+                recommendedStarts += bucket.counts.getOrDefault(Stage.GAME_START.key, Map.of())
+                        .getOrDefault("RECOMMENDED", 0);
+            }
+            Map<String, Set<String>> recommendedFinishesByMode = bucket.users.get(Stage.GAME_FINISH.key);
+            if (recommendedFinishesByMode != null) {
+                recommendedFinishUsers.addAll(recommendedFinishesByMode.getOrDefault("RECOMMENDED", Set.of()));
+            }
+            Map<String, Integer> recommendedFinishCounts = bucket.counts.get(Stage.GAME_FINISH.key);
+            if (recommendedFinishCounts != null) {
+                recommendedFinishes += recommendedFinishCounts.getOrDefault("RECOMMENDED", 0);
+            }
 
             for (Stage stage : Stage.values()) {
                 Map<String, Set<String>> modes = bucket.users.get(stage.key);
@@ -318,6 +357,16 @@ public class ProductAnalyticsService {
         result.put("stages", stageRows(allUsers, allEvents, lobbyUsers));
         result.put("humanStages", stageRows(humanUsers, null, size(humanUsers.get(Stage.LOBBY_ENTER.key))));
         result.put("aiStages", stageRows(aiUsers, null, size(aiUsers.get(Stage.LOBBY_ENTER.key))));
+        Map<String, Object> recommendation = new LinkedHashMap<>();
+        recommendation.put("shownUsers", recommendationUsers.size());
+        recommendation.put("shownEvents", recommendationEvents);
+        recommendation.put("matchUsers", recommendedMatchUsers.size());
+        recommendation.put("matchRate", percent(recommendedMatchUsers.size(), recommendationUsers.size()));
+        recommendation.put("startEvents", recommendedStarts);
+        recommendation.put("finishUsers", recommendedFinishUsers.size());
+        recommendation.put("finishEvents", recommendedFinishes);
+        recommendation.put("finishRate", percent(recommendedFinishes, recommendedStarts));
+        result.put("recommendation", recommendation);
         result.put("gameModes", gameModeRows(usersByMode, gameStartEventsByMode, finishEventsByMode, rematchEventsByMode));
         result.put("wait", waitSummary(waitCount, waitTotal, waitBuckets));
         result.put("matchFail", matchFailSummary(matchFail, matchFailReasons, matchStartEventsByMode));
@@ -427,15 +476,21 @@ public class ProductAnalyticsService {
                 "漏斗按窗口内去重身份统计；身份仅保存加盐 SHA-256 前 16 位，不保存游客 ID",
                 "进入大厅 = 完成大厅身份绑定；选择玩法 = 提交带玩法的对局请求；成功入座 = 服务端接受并入座",
                 "开局/完局/再来一局 = 服务端实际开始、结束及同一房间再开，前端无法伪造",
+                "推荐曝光 = 服务端实际返回推荐；推荐入座/开局/完局只统计 entryMode=RECOMMENDED 的真实服务端事件",
                 "等待时长仅统计快速匹配、创建房间与房号加入，不含人机、组队和约战",
                 "匹配失败率 = 被服务端拒绝的入房请求 /（成功入座 + 被拒请求）",
                 "模式由客户端入口声明，服务端再按房间事实校正：只要座位上有电脑就归为人机"
         );
     }
 
+    private static double percent(long numerator, long denominator) {
+        return denominator <= 0 ? 0.0 : Math.round(numerator * 1000.0 / denominator) / 10.0;
+    }
+
     private static String modeLabel(String mode) {
         switch (mode) {
             case "QUICK": return "快速匹配";
+            case "RECOMMENDED": return "推荐匹配";
             case "PRIVATE": return "创建房间";
             case "CODE": return "房号加入";
             case "AI": return "人机对战";

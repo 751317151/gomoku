@@ -2284,14 +2284,25 @@ function maybeShowOnboarding() {
   setTimeout(showOnboarding, 600);
 }
 
-function quickMatch() {
+function quickMatch(entryMode) {
   matchRoomIsPublic = true;
   currentRoomPrivate = false;
-  send({ type: 'JOIN', playerName: myName, gameType: selectedGameType, createRoom: false, playerCount: selectedPlayerCount(), entryMode: 'QUICK' });
+  send({ type: 'JOIN', playerName: myName, gameType: selectedGameType, createRoom: false,
+    playerCount: selectedPlayerCount(), entryMode: entryMode || 'QUICK' });
   initGameModule(selectedGameType);
   lastMatchGameType = selectedGameType;
   showGame();
   setStatusMsg('正在匹配同玩法的在线玩家…', 'waiting');
+}
+
+/** 推荐卡的一键匹配：选择服务端建议的玩法并立刻进入公开匹配。 */
+function quickMatchRecommended(type) {
+  if (!GameModules[type]) return;
+  selectedGameType = type;
+  selectedCategory = 'ALL';
+  buildGameSelector();
+  updatePlayerCountSelector();
+  quickMatch('RECOMMENDED');
 }
 
 /** 结算页直接沿用刚才的公开匹配玩法，省掉返回大厅重选的折返。 */
@@ -2359,19 +2370,28 @@ function renderRecommendations(rows) {
     + '<span>按当前等待、你的体验与最近热度推荐</span></div>'
     + '<div class="recommendation-list">' + rows.map(row => {
       const module = GameModules[row.gameType] || {};
-      return '<button type="button" class="recommendation-card" data-recommend="' + escHtml(row.gameType) + '">'
+      return '<div class="recommendation-card" data-recommend="' + escHtml(row.gameType) + '">'
         + '<strong>' + escHtml(module.icon || '🎮') + ' ' + escHtml(row.name || row.gameType) + '</strong>'
         + '<small>' + escHtml(row.reason || '推荐玩法') + '</small>'
-        + '</button>';
+        + '<button type="button" class="recommendation-play" data-recommend-play="'
+        + escHtml(row.gameType) + '">立即匹配</button>'
+        + '</div>';
     }).join('') + '</div>';
-  el.querySelectorAll('[data-recommend]').forEach(button => {
-    button.onclick = function () {
-      selectedGameType = button.dataset.recommend;
+  el.querySelectorAll('.recommendation-card').forEach(card => {
+    card.onclick = function (event) {
+      if (event.target.closest('[data-recommend-play]')) return;
+      selectedGameType = card.dataset.recommend;
       selectedCategory = 'ALL';
       buildGameSelector();
       updatePlayerCountSelector();
       refreshRooms();
       window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+  });
+  el.querySelectorAll('[data-recommend-play]').forEach(button => {
+    button.onclick = function (event) {
+      event.stopPropagation();
+      quickMatchRecommended(button.dataset.recommendPlay);
     };
   });
 }
@@ -5633,6 +5653,20 @@ function renderOpsFunnel(funnel) {
           + '<td>' + (m.finishRate || 0) + '%</td><td>' + (m.rematchRate || 0) + '%</td></tr>').join('')
         + '</tbody></table>';
     }
+  }
+
+  const recommendationEl = document.getElementById('ops-recommendation');
+  if (recommendationEl) {
+    const recommendation = funnel.recommendation || {};
+    recommendationEl.innerHTML = [
+      ['推荐曝光', recommendation.shownUsers || 0, recommendation.shownEvents || 0],
+      ['推荐入座', recommendation.matchUsers || 0, (recommendation.matchRate || 0) + '%'],
+      ['推荐开局', recommendation.startEvents || 0, ''],
+      ['推荐完局', recommendation.finishEvents || 0, (recommendation.finishRate || 0) + '%']
+    ].map(([label, value, unit]) =>
+      '<div class="ops-card"><div class="ops-card-value">' + escHtml(String(value))
+      + '<small>' + escHtml(String(unit)) + '</small></div>'
+      + '<div class="ops-card-label">' + escHtml(label) + '</div></div>').join('');
   }
 
   const qualityEl = document.getElementById('ops-quality');

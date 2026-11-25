@@ -183,6 +183,44 @@ class ProductAnalyticsServiceTest {
     }
 
     @Test
+    void recommendationConversionIsSeparateFromGenericQuickMatch() {
+        FixedClock s = newService();
+        s.recordLobbyEnter("recommended-user");
+        s.recordRecommendationShown("recommended-user", 3);
+        s.recordRecommendationShown("recommended-user", 0);
+        s.recordModeSelect("recommended-user", "RECOMMENDED");
+        s.recordMatchStart("recommended-user", "RECOMMENDED");
+        s.recordGameStart("recommended-user", "RECOMMENDED", 450);
+        s.recordGameFinish("recommended-user", "RECOMMENDED");
+
+        s.recordLobbyEnter("quick-user");
+        s.recordMatchStart("quick-user", "QUICK");
+        s.recordGameStart("quick-user", "QUICK", 500);
+
+        Map<String, Object> result = s.overview(7);
+        @SuppressWarnings("unchecked") Map<String, Object> recommendation =
+                (Map<String, Object>) result.get("recommendation");
+        assertEquals(1, recommendation.get("shownUsers"));
+        assertEquals(1, recommendation.get("shownEvents"), "空推荐不产生曝光");
+        assertEquals(1, recommendation.get("matchUsers"));
+        assertEquals(100.0, recommendation.get("matchRate"));
+        assertEquals(1, recommendation.get("startEvents"));
+        assertEquals(1, recommendation.get("finishUsers"));
+        assertEquals(1, recommendation.get("finishEvents"));
+        assertEquals(100.0, recommendation.get("finishRate"));
+        assertEquals("RECOMMENDED", ProductAnalyticsService.normalizeMode(" recommended "));
+
+        @SuppressWarnings("unchecked") List<Map<String, Object>> modes =
+                (List<Map<String, Object>>) result.get("gameModes");
+        Map<String, Object> recommended = modes.stream()
+                .filter(row -> "RECOMMENDED".equals(row.get("mode"))).findFirst().orElseThrow();
+        assertEquals("推荐匹配", recommended.get("label"));
+        assertEquals(1, recommended.get("starts"));
+        assertEquals(1, recommended.get("finishes"));
+        assertEquals(100.0, recommended.get("finishRate"));
+    }
+
+    @Test
     void identityIsHashedAndSaltIsPersistedWithoutRawId() throws Exception {
         FixedClock s = newService();
         s.recordLobbyEnter("raw-secret-identity");
@@ -248,7 +286,7 @@ class ProductAnalyticsServiceTest {
         Map<String, Object> result = s.overview(7);
         assertEquals(7, result.get("windowDays"));
         assertEquals(TODAY.toString(), result.get("to"));
-        assertEquals(6, ((List<?>) result.get("stages")).size());
+        assertEquals(7, ((List<?>) result.get("stages")).size());
         assertEquals(7, ((List<?>) result.get("daily")).size(), "无事件也要按天补零");
         assertFalse(((List<?>) result.get("definitions")).isEmpty());
     }
@@ -304,7 +342,7 @@ class ProductAnalyticsServiceTest {
                 start.await();
                 for (int i = 0; i < 300; i++) {
                     Map<String, Object> result = s.overview(7);
-                    assertEquals(6, ((List<?>) result.get("stages")).size());
+                    assertEquals(7, ((List<?>) result.get("stages")).size());
                     assertEquals(7, ((List<?>) result.get("daily")).size());
                 }
                 return null;

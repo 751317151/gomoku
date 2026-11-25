@@ -1195,10 +1195,15 @@
   .recommendation-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-dim); font-size: .78rem; }
   .recommendation-head strong { color: #f0cf88; font: 1rem Georgia, 'Songti SC', serif; }
   .recommendation-list { display: flex; flex-wrap: wrap; gap: 8px; }
-  .recommendation-card { display: flex; flex-direction: column; gap: 3px; min-width: 150px; padding: 8px 10px; color: #e8eedf; text-align: left; background: #173426; border: 1px solid #496652; border-radius: 8px; cursor: pointer; }
+  .recommendation-card { display: flex; flex-direction: column; gap: 4px; min-width: 160px; padding: 8px 10px; color: #e8eedf; text-align: left; background: #173426; border: 1px solid #496652; border-radius: 8px; cursor: pointer; }
   .recommendation-card:hover { border-color: var(--accent); background: #1d402f; }
   .recommendation-card strong { color: #f2d38c; font-size: .88rem; }
   .recommendation-card small { color: #a9b8aa; font-size: .7rem; line-height: 1.4; }
+  .recommendation-play { min-height: 30px; margin-top: 2px; padding: 4px 9px; color: #102018; font-size: .72rem; font-weight: 700; background: var(--accent); border: 0; border-radius: 6px; cursor: pointer; }
+  .recommendation-play:hover { filter: brightness(1.08); }
+  @media (max-width: 520px) {
+    .recommendation-play { min-height: 44px; }
+  }
   .game-selector {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
