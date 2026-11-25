@@ -2,7 +2,7 @@ package com.gomoku.game;
 
 import java.util.concurrent.ThreadLocalRandom;
 
-/** 宝石拍卖 AI：根据金币和当前分数决定保守/抢高价值宝石。 */
+/** 只按公开图录、收藏组合、金币和上一轮出价估值，不读取本轮暗投。 */
 public final class GemAuctionAI implements GameAI {
     static final GemAuctionAI INSTANCE = new GemAuctionAI();
     private GemAuctionAI() {}
@@ -11,10 +11,20 @@ public final class GemAuctionAI implements GameAI {
         GemAuctionEngine auction = (GemAuctionEngine) engine;
         if (!auction.isAwaitingAction(side)) return null;
         int max = Math.min(GemAuctionEngine.MAX_BID, auction.getCoins(side));
-        int value = GemAuctionEngine.GEM_VALUES[Math.min(auction.getActionRound(), GemAuctionEngine.ROUNDS - 1)];
-        double chance = ThreadLocalRandom.current().nextDouble();
-        int bid = value >= 9 && difficulty >= 5 ? Math.min(max, 7 + ThreadLocalRandom.current().nextInt(4)) : Math.min(max, 2 + ThreadLocalRandom.current().nextInt(5));
-        if (difficulty <= 2 || chance < 0.2) bid = Math.min(max, ThreadLocalRandom.current().nextInt(max + 1));
-        return MoveCommand.action(bid);
+        if (difficulty <= 2) return MoveCommand.action(ThreadLocalRandom.current().nextInt(max + 1));
+        int remaining = GemAuctionEngine.ROUNDS - auction.getActionRound();
+        int bonus = auction.getBonusGain(side), value = auction.getCurrentValue() + bonus;
+        if (max == 0 || (max <= 4 && remaining > 1 && bonus == 0)) return MoveCommand.action(0);
+        int budget = (auction.getCoins(side) + remaining - 1) / remaining;
+        int target = remaining == 1 ? max : budget + (value >= 12 ? 3 : value >= 8 ? 1 : -2);
+        if (difficulty >= 6 && bonus > 0) {
+            int seen = 0;
+            for (int other = 1; other <= GemAuctionEngine.MAX_PLAYERS; other++) {
+                if (other != side && auction.isActive(other)) seen = Math.max(seen, auction.getLastBid(other));
+            }
+            target = Math.max(target, Math.min(budget + 3, seen + 1));
+        }
+        target += ThreadLocalRandom.current().nextInt(3) - 1;
+        return MoveCommand.action(Math.max(1, Math.min(max, target)));
     }
 }

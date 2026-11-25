@@ -2858,6 +2858,61 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 }
 .dice-choices { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
 .gem-bids { display:grid; grid-template-columns:repeat(6,1fr); gap:8px; }
+#gem-auction-panel { width:min(780px,100%); min-width:0; box-sizing:border-box; background:#eee8d8; color:#273d35; border:1px solid #b6b29a; border-radius:4px; gap:12px; }
+#gem-auction-panel .quiz-head { flex-wrap:wrap; gap:8px; }
+#gem-auction-panel .quiz-progress,#gem-auction-panel .quiz-score { color:#274e42; font-size:.8rem; }
+.gem-eyebrow { font-size:.67rem; letter-spacing:.15em; color:#627365; border-bottom:1px solid #c7c8b4; padding-bottom:10px; }
+.gem-catalog { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:5px; margin:0; padding:0; list-style:none; }
+.gem-catalog li { display:flex; flex-direction:column; align-items:center; gap:6px; border:1px solid #cccbb7; padding:9px 2px; text-align:center; min-width:0; }
+.gem-catalog li.is-current { background:#d7dfcc; border-color:#58715a; box-shadow:inset 0 -3px #4c6953; }
+.gem-catalog li.is-past { opacity:.78; }
+.gem-catalog small { font-size:.62rem; color:#647367; }
+.gem-catalog b { font-size:.65rem; font-weight:normal; }
+.gem-catalog li>span:last-child { font:.9rem Georgia,'Songti SC',serif; }
+.gem-stone { display:inline-block; flex-shrink:0; width:29px; height:28px; clip-path:polygon(28% 0,72% 0,100% 35%,50% 100%,0 35%); background:linear-gradient(135deg,#e49b88 0 30%,#b94f49 31% 60%,#71302d 61%); }
+.gem-stone.sapphire { background:linear-gradient(135deg,#8cb8d9 0 30%,#416b9b 31% 60%,#243d65 61%); }
+.gem-stone.emerald { background:linear-gradient(135deg,#9ec6a6 0 30%,#467c60 31% 60%,#204a38 61%); }
+.gem-lot { display:flex; align-items:center; justify-content:center; gap:24px; background:#e1e5d6; padding:20px 12px; border-block:1px solid #c2c9b8; }
+.gem-lot>.gem-stone { width:74px; height:72px; }
+.gem-caption { color:#667767; font-size:.68rem; letter-spacing:.1em; }
+.gem-lot h2 { font:1.8rem Georgia,'Songti SC',serif; color:#243f32; margin:6px 0; }
+.gem-lot p { font-size:.76rem; margin:0; line-height:1.7; }
+.gem-collection-rules { font-size:.72rem; line-height:1.7; text-align:center; color:#52654f; }
+#gem-auction-panel .dice-race-sub { color:#4b6054; font-size:.8rem; line-height:1.6; }
+#gem-auction-panel .gem-bid { min-width:0; min-height:60px; padding:8px 4px; background:#faf7ee; border:1px solid #bcc4b0; border-radius:3px; color:#294d3c; }
+#gem-auction-panel .gem-bid strong { font:1.2rem Georgia,'Songti SC',serif; }
+#gem-auction-panel .gem-bid small { color:#647463; }
+#gem-auction-panel .gem-bid.mine { outline:2px solid #4c6953; background:#d1dfc9; }
+#gem-auction-panel .gem-bid:disabled { opacity:.48; }
+#gem-auction-panel .gem-pass { background:#dce4d3; }
+#gem-players { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+.gem-collector { min-width:0; padding:12px; border:1px solid #c4c8b4; background:#f7f3e8; }
+.gem-collector.is-you { border-color:#6d8465; }
+.gem-collector.is-out { opacity:.5; }
+.gem-collector-head { display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
+.gem-collector-head>b { min-width:0; overflow-wrap:anywhere; font-size:.82rem; }
+.gem-collector-head>strong { flex-shrink:0; color:#294d3c; font:1.5rem Georgia,'Songti SC',serif; }
+.gem-collector-head small { font:.65rem sans-serif; }
+.gem-score-detail,.gem-collector>p { font-size:.66rem; color:#62705d; line-height:1.7; margin:6px 0 0; }
+.gem-inventory { display:flex; justify-content:space-between; gap:4px; margin-top:12px; }
+.gem-inventory>span { display:flex; align-items:center; gap:4px; min-width:0; }
+.gem-inventory .gem-stone { width:16px; height:16px; }
+.gem-inventory small { font-size:.6rem; }
+.gem-inventory b { font: .85rem Georgia,serif; }
+#gem-auction-panel .quiz-log { background:#e2e4d7; color:#435c4a; border-color:#c1c8b6; max-height:100px; overflow-wrap:anywhere; }
+#gem-auction-panel .quiz-log div:last-child { color:#244c34; }
+@media (max-width:600px) {
+  #gem-auction-panel { padding:12px; }
+  .gem-lot { gap:16px; padding:15px 10px; }
+  .gem-lot h2 { font-size:1.5rem; }
+  .gem-catalog b { font-size:.58rem; }
+  .gem-catalog small { font-size:.58rem; }
+  .gem-inventory { flex-wrap:wrap; gap:7px; }
+  .gem-inventory small { flex-basis:100%; text-align:center; order:3; }
+  .gem-inventory>span { flex:1; justify-content:center; flex-wrap:wrap; gap:3px; }
+  .gem-collector { padding:9px; }
+  #gem-auction-panel .gem-bid { min-height:58px; }
+}
 .bomb-cat-panel { display:flex; flex-direction:column; gap:14px; width:min(780px,100%); min-height:520px; padding:22px; color:#f3ecdd; background:radial-gradient(circle at 50% 0,#382321 0,#1b1718 58%,#111315 100%); border:1px solid #825047; border-radius:18px; box-sizing:border-box; box-shadow:inset 0 0 80px #0a0808; }
 .bomb-cat-head { display:flex; align-items:center; justify-content:space-between; gap:14px; }
 .bomb-cat-head > div:first-child > span { color:#e4a26c; font:.68rem monospace; letter-spacing:.18em; }

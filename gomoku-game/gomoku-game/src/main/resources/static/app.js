@@ -1106,11 +1106,33 @@ function renderGemAuctionPanel() {
   if (!progress || !bidsEl || !rpgView || !rpgView.players) return;
   const v = rpgView, me = v.players.find(p => p.side === myStone);
   progress.textContent = '第 ' + v.round + ' / ' + v.totalRounds + ' 轮';
-  score.textContent = '本轮宝石 ' + v.gemValue + ' 分';
-  const waiting = !v.over && myStone > 0 && me && !me.answered && myId !== 'SPECTATOR';
-  status.textContent = v.over ? '本局结束' : waiting ? '选择出价，所有人提交后揭晓' : '等待其他玩家暗投…';
-  bidsEl.innerHTML = Array.from({length: 11}, (_, i) => '<button class="dice-choice gem-bid" data-bid="' + i + '"' + (waiting && i <= (me?.coins || 0) ? '' : ' disabled') + '><strong>' + i + '</strong><small>金币</small></button>').join('');
-  playersEl.innerHTML = v.players.map(p => '<div class="dice-player-row"><b>' + escHtml(p.name) + '</b><span>' + p.gems + ' 宝石分 · ' + p.coins + ' 金币' + (p.answered ? ' · 已出价' : '') + ((v.revealed && p.bid != null) ? ' · 出价 ' + p.bid : '') + '</span></div>').join('');
+  const spectator = myId === 'SPECTATOR' || myStone <= 0;
+  const waiting = gameState === 'PLAYING' && !v.over && !spectator && me && me.active && !me.answered;
+  const names = ['红宝石','蓝宝石','祖母绿'], classes = ['ruby','sapphire','emerald'];
+  const stone = color => '<span class="gem-stone ' + (classes[color] || 'ruby') + '" aria-hidden="true"></span>';
+  score.textContent = me ? '你的预算 ' + me.coins + ' / 30 金币' : '观战中 · 出价揭晓后公开';
+  document.getElementById('gem-catalog').innerHTML = (v.lots || []).map(lot => '<li class="'
+    + (lot.round < v.round || v.over ? 'is-past' : lot.round === v.round ? 'is-current' : '') + '"'
+    + (lot.round === v.round && !v.over ? ' aria-current="step"' : '') + '><small>第 ' + lot.round + ' 轮</small>'
+    + stone(lot.color) + '<b>' + names[lot.color] + '</b><span>' + lot.value + ' 分</span></li>').join('');
+  document.getElementById('gem-lot').innerHTML = stone(v.color) + '<div><span class="gem-caption">'
+    + (v.over ? '拍卖结束' : '当前拍品') + '</span><h2>' + names[v.color] + '</h2><p>基础 <b>' + v.gemValue
+    + '</b> 分' + (!v.over && me ? ' · 你中标可另获 <b>+' + me.bonusGain + '</b> 组合分' : '') + '</p></div>';
+  status.textContent = v.over ? '本局结束，排名已包含收藏奖励' : spectator ? '观战中 · 等待全部出价揭晓'
+    : !me?.active ? '你已退出本局，其他玩家继续竞拍' : waiting ? '暗选你的出价；弃拍可回收金币，所有人提交后揭晓'
+    : me.bid === 0 ? '你已选择弃拍，等待其他玩家揭晓…' : '你已提交出价 ' + me.bid + '，等待其他玩家揭晓…';
+  bidsEl.innerHTML = Array.from({length: 11}, (_, i) => '<button class="dice-choice gem-bid'
+    + (!v.revealed && me?.bid === i ? ' mine' : '') + (i === 0 ? ' gem-pass' : '') + '" data-bid="' + i + '"'
+    + (waiting && (v.legalActions || []).includes(i) ? '' : ' disabled') + '><strong>' + (i === 0 ? '弃拍' : i)
+    + '</strong><small>' + (i === 0 ? '回收 ' + Math.min(2,30-(me?.coins ?? 30)) + ' 金币' : '金币') + '</small></button>').join('');
+  playersEl.innerHTML = v.players.map(p => '<article class="gem-collector' + (p.side === myStone ? ' is-you' : '') + (!p.active ? ' is-out' : '')
+    + '"><div class="gem-collector-head"><b>' + escHtml(p.name) + (p.side === myStone ? '（你）' : '') + '</b><strong>'
+    + p.gems + '<small> 分</small></strong></div><div class="gem-score-detail">基础 ' + p.baseScore + ' · 组合 +' + p.bonusScore
+    + ' · ' + p.coins + ' 金币</div><div class="gem-inventory">' + names.map((name,color) => '<span>' + stone(color)
+    + '<small>' + name + '</small><b>×' + (p.collection?.[color] || 0) + '</b></span>').join('') + '</div><p>'
+    + (!p.active ? '已退出' : v.over ? '已结算' : p.answered ? '已提交' : '考虑出价中')
+    + (p.lastBid != null ? ' · 上轮' + (p.lastBid === 0 ? '弃拍 / 回收 ' + p.lastRecovered : '出价 ' + p.lastBid + (p.lastWon ? ' / 中标' : ' / 未中标')) : '')
+    + (p.lastBonus > 0 ? ' · 组合 +' + p.lastBonus : '') + '</p></article>').join('');
   logEl.innerHTML = (v.log || []).map(line => '<div>' + escHtml(line) + '</div>').join(''); logEl.scrollTop = logEl.scrollHeight;
 }
 
@@ -4004,7 +4026,7 @@ const GAME_OVER_GUIDES = {
     win: '五轮拍卖后你的宝石分最高。',
     lose: '你的宝石分没有领先；暗投时既要考虑收益，也要计算剩余金币。',
     draw: '最高宝石分出现并列。',
-    tip: '前几轮控制出价，最后高价值宝石轮次留足金币再竞争。'
+    tip: '先看拍品图录与双方收藏：补齐三色可多得 8 分，不值得争抢时弃拍回收金币。'
   },
   BLACKJACK: {
     win: '你的点数比庄家更接近 21 点，或庄家爆点。',
@@ -6224,6 +6246,12 @@ function replayActionText(type, mv) {
       + (pending ? '，等待收分/加掷决定' : '，本轮 +' + (mv[2] || 0)) + '（总分 ' + (mv[3] || 0) + '）';
   }
   if (type === 'GEM_AUCTION') {
+    if (mv.length >= 10) {
+      const color = ['红宝石','蓝宝石','祖母绿'][mv[6]] || '宝石';
+      return '第 ' + mv[5] + ' 轮 · ' + color + ' · ' + (mv[1] === 0 ? '弃拍，回收 ' + mv[9] + ' 金币'
+        : '出价 ' + mv[1] + (mv[7] > 0 ? '，中标 +' + mv[7] + (mv[8] > 0 ? '，组合 +' + mv[8] : '') : '，未中标'))
+        + '（总分 ' + mv[4] + '，余 ' + mv[3] + ' 金币）';
+    }
     const gems = mv[2] > 0 ? '，拿下 ' + mv[2] + ' 分宝石' : '';
     return '出价 ' + mv[1] + ' 金币' + gems + '（余 ' + (mv[3] || 0) + ' 金币）';
   }

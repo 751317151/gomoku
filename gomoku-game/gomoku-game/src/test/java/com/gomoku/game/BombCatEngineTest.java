@@ -121,6 +121,8 @@ class BombCatEngineTest {
                 card(BombCatEngine.CardType.SHUFFLE),
                 card(BombCatEngine.CardType.SHUFFLE),
                 card(BombCatEngine.CardType.SHUFFLE)));
+        // 本例只验证行动上限和抽牌换手，不能随机抽中炸弹直接终局。
+        engine.setDeckForTest(List.of(card(BombCatEngine.CardType.SKIP)));
         engine.forceTurnForTest(1);
         for (int i = 0; i < BombCatEngine.MAX_PLAYS_PER_TURN; i++) {
             assertTrue(engine.applyMove(MoveCommand.action(0), 1));
@@ -133,10 +135,6 @@ class BombCatEngineTest {
         assertTrue(hand.stream().noneMatch(c -> Boolean.TRUE.equals(((Map<?, ?>) c).get("playable"))),
                 "行动次数用尽后所有手牌都应显示为不可出");
         assertTrue(engine.applyMove(MoveCommand.action(BombCatEngine.DRAW_ACTION), 1));
-        if (engine.getPendingReinsertSide() == 1) {
-            // 随机抽到炸弹且拆弹器生效：仍由本人放回，不能提前换手。
-            assertTrue(engine.applyMove(MoveCommand.action(BombCatEngine.REINSERT_MIDDLE), 1));
-        }
         assertEquals(2, engine.getCurrentTurn(), "抽牌后正常换手");
     }
 
