@@ -1,5 +1,5 @@
 // 玩法规则 UI 冒烟（真实浏览器）：
-// 1) 大厅 20 张玩法卡都有「规则」入口，且规则内容覆盖全部玩法；
+// 1) 大厅全部玩法卡都有「规则」入口，且规则内容覆盖全部玩法；
 // 2) 规则弹层展示目标/步骤/提示与计时人数，Esc、遮罩、关闭按钮均可关闭并恢复焦点；
 // 3) 对局内「查看玩法规则」按当前房间玩法打开，不出现会跳出对局的人机练习按钮；
 // 4) 桌面 1280 与手机 390 宽都不横向溢出，底部按钮可点；
@@ -24,7 +24,7 @@ async function waitUntil(fn, label, timeout = 12000) {
 }
 
 const EXPECTED = ['HIGH_CARD', 'BLACKJACK', 'GOMOKU', 'REVERSI', 'GO9', 'XIANGQI', 'CHECKERS', 'JUNGLE', 'DARK_CHESS', 'FLIGHT_CHESS', 'CONNECT4',
-  'RPG', 'CARD', 'NIM', 'QUIZ', 'DICE_RACE', 'GEM_AUCTION', 'UNO', 'BOMB_CAT', 'DOUDIZHU'];
+  'RPG', 'CARD', 'NIM', 'QUIZ', 'DICE_RACE', 'GEM_AUCTION', 'UNO', 'BOMB_CAT', 'DOUDIZHU', 'ULTIMATE_TTT'];
 const NAME = '规则UI' + Math.floor(Math.random() * 10000);
 
 async function getWsUrl() {
@@ -125,7 +125,7 @@ class Cdp {
     "Array.from(document.querySelectorAll('#game-selector .game-card')).map(c => ({type: c.dataset.gameType,"
     + " hasRules: !!c.querySelector('[data-rules]'), label: (c.querySelector('[data-rules]')||{}).textContent,"
     + " footer: (c.querySelector('.game-card-desc')||{}).textContent}))");
-  check('大厅 20 张玩法卡全部渲染', cards.length === 20, JSON.stringify(cards.map(c => c.type)));
+  check('大厅全部玩法卡渲染', cards.length === EXPECTED.length, JSON.stringify(cards.map(c => c.type)));
   check('每张卡都有规则入口', cards.every(c => c.hasRules && c.label === '规则'),
     JSON.stringify(cards.filter(c => !c.hasRules)));
 
@@ -133,7 +133,7 @@ class Cdp {
     "(() => { const out = {}; Object.keys(GameModules).forEach(t => { const r = GameModules[t].rules;"
     + " out[t] = { goal: !!(r && r.goal), steps: (r && r.steps || []).length, tips: (r && r.tips || []).length,"
     + " footer: GameModules[t].footer || '' }; }); return out; })()");
-  check('20 种玩法规则元数据齐全', EXPECTED.every(t => coverage[t] && coverage[t].goal && coverage[t].steps >= 2),
+  check('全部玩法规则元数据齐全', EXPECTED.every(t => coverage[t] && coverage[t].goal && coverage[t].steps >= 2),
     JSON.stringify(coverage));
   check('规则步骤与提示不含占位内容', Object.values(coverage).every(r =>
     r.steps >= 2 && r.tips >= 1 && r.footer.length > 4), JSON.stringify(coverage));

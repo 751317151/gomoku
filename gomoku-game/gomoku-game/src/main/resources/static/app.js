@@ -461,6 +461,8 @@ function drawBoard() {
     myStone,
     currentTurn,
     selected: selectedFrom,
+    replaying: replayMode,
+    finished: gameState === 'OVER' && !replayMode,
     hint: gameState === 'PLAYING',
     view: rpgView
   });
@@ -1390,7 +1392,7 @@ canvas.addEventListener('mousemove', function(e) {
   drawBoard();
   // 经 normalizeMove 换算成真实落点（四子棋会把任意格吸附到该列重力落点）
   const target = hit ? normalizeMove(hit) : null;
-  if (target && mod().isLegal(board, target.row, target.col, myStone)) {
+  if (target && mod().isLegal(board, target.row, target.col, myStone, rpgView)) {
     mod().drawGhost(ctx, target.row, target.col, myStone);
   }
 });
@@ -1415,9 +1417,10 @@ canvas.addEventListener('touchmove', function(e) {
 canvas.addEventListener('touchend', function(e) {
   if (gameState !== 'PLAYING' || currentTurn !== myStone) return;
   if (touchMoved) return; // 滑动不落子
+  if (e.cancelable) e.preventDefault();
   const touch = e.changedTouches[0];
   tryMoveFromPixel(touch.clientX, touch.clientY);
-});
+}, { passive: false });
 
 canvas.addEventListener('click', function(e) {
   if (gameState !== 'PLAYING' || currentTurn !== myStone) return;
@@ -1488,7 +1491,7 @@ function tryMoveFromPixel(clientX, clientY) {
   // 统一换算真实落点：四子棋点该列任意格都吸附到重力落点
   const target = normalizeMove(hit);
   if (!target) return;
-  if (!mod().isLegal(board, target.row, target.col, myStone)) return;
+  if (!mod().isLegal(board, target.row, target.col, myStone, rpgView)) return;
   sendMove(target.row, target.col);
 }
 
@@ -2816,7 +2819,7 @@ function startRematchCountdown() {
 // ============================================================
 const GAME_CATEGORY = {
   GOMOKU: 'board', REVERSI: 'board', GO9: 'board', XIANGQI: 'board', CHECKERS: 'board', JUNGLE: 'board', DARK_CHESS: 'board',
-  FLIGHT_CHESS: 'party', CONNECT4: 'board',
+  FLIGHT_CHESS: 'party', CONNECT4: 'board', ULTIMATE_TTT: 'board',
   CARD: 'card', UNO: 'card', HIGH_CARD: 'card', BLACKJACK: 'card', BOMB_CAT: 'card', DOUDIZHU: 'card',
   DICE_RACE: 'party', GEM_AUCTION: 'party',
   RPG: 'duel', NIM: 'duel', QUIZ: 'duel'
@@ -3856,7 +3859,8 @@ function handleGameMove(msg) {
   // 跳棋的合法走法与强制吃子信息随 MOVE 一起下发；保留给画布高亮。
   if ((currentGameType === 'CHECKERS' || currentGameType === 'JUNGLE'
       || currentGameType === 'DARK_CHESS'
-      || currentGameType === 'FLIGHT_CHESS') && moveData && moveData.view) rpgView = moveData.view;
+      || currentGameType === 'FLIGHT_CHESS'
+      || currentGameType === 'ULTIMATE_TTT') && moveData && moveData.view) rpgView = moveData.view;
 
     // 暗棋翻子会把新棋子身份放进 effects；走子/吃子也要同步最新公开盘面。
     // 服务端 MOVE 目前只带坐标与 effects，三阶段吃子需要清目标/落终点，
@@ -3939,6 +3943,12 @@ const GAME_OVER_GUIDES = {
     lose: '对手先连成四子；注意竖直、横线和斜线同时出现的威胁。',
     draw: '棋盘下满，双方都没能连成四子。',
     tip: '中路能通向更多线路；优先制造上、中、下三层的双重威胁。'
+  },
+  ULTIMATE_TTT: {
+    win: '你赢下了大盘中三个连线的小盘。',
+    lose: '对手先赢下三个连线小盘；局部三连之外，还要看下一手会被送去哪里。',
+    draw: '九个小盘全部封闭，双方都没有完成大盘连线。',
+    tip: '落子前先看目的小盘是否会让对手立即获胜；关键时刻宁可放弃一个小盘，也要保住大盘防线。'
   },
   RPG: {
     win: '对手生命值先归零，或终局时你的生命值更高。',
@@ -4316,6 +4326,9 @@ function updateTurnStatus() {
     ? rpgView.players.filter(p => p.active !== false && !p.answered).map(p => p.side)
     : [currentTurn];
   const isMyTurn = pendingSides.includes(myStone);
+  const ultimateRegion = currentGameType === 'ULTIMATE_TTT' && rpgView?.kind === 'ULTIMATE_TTT'
+    ? rpgView.nextBoard < 0 ? '可任选尚未封闭的小盘' : '请在「' + mod().regions[rpgView.nextBoard] + '」小盘落子'
+    : null;
   pendingSides.forEach(side => {
     const turnEl = document.getElementById('turn-' + side);
     if (turnEl) turnEl.style.display = 'block';
@@ -4325,6 +4338,7 @@ function updateTurnStatus() {
     const flightPhase = currentGameType === 'FLIGHT_CHESS' ? rpgView?.phase : null;
     const hint = simultaneous ? '同时选择中 · 提交后停止计时'
       : currentGameType === 'GO9' ? '你的回合（点击落子或停一手）'
+      : ultimateRegion ? '你的回合 · ' + ultimateRegion
       : flightPhase === 'SKIP' ? '掷出 ' + (rpgView?.dice || '—') + ' 点，无棋可走，请点「跳过本回合」'
       : flightPhase === 'MOVE' ? '掷出 ' + (rpgView?.dice || '—') + ' 点，选择要点亮的棋子，再点目标格'
       : mod().moveSelect ? '你的回合（先点己方棋子，再点目标点）'
@@ -4336,6 +4350,7 @@ function updateTurnStatus() {
       ? rpgView.players.find(p => p.side === currentTurn) : null;
     setStatusMsg(simultaneous
       ? myId === 'SPECTATOR' ? '观战中 · 等待玩家提交' : '已提交或已退出，等待其他玩家'
+      : ultimateRegion ? (myId === 'SPECTATOR' ? '观战中 · ' : '等待对方 · ') + ultimateRegion
       : flightTurn ? '等待 ' + flightTurn.name + ' 掷骰或走子...' : '等待对方行棋...', 'opponent-turn');
     if (!mod().html) canvas.style.cursor = 'not-allowed';
   }
@@ -4598,6 +4613,7 @@ const GAME_TYPE_LABEL = {
   DARK_CHESS: '暗棋',
   FLIGHT_CHESS: '飞行棋',
   CONNECT4: '四子棋',
+  ULTIMATE_TTT: '终极井字棋',
   RPG: '回合制对战',
   // 之前漏了这三个，记录页会显示「CARD 复盘」这种英文标题
   CARD: '卡牌对战',

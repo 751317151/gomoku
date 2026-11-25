@@ -1562,6 +1562,164 @@
   }
 
   // ============================================================
+  // 终极井字棋
+  // ============================================================
+  const ULTIMATE_TTT = {
+    name: '终极井字棋',
+    rows: 9, cols: 9,
+    cell: 52, padding: 24, top: 64,
+    stepTime: 45, totalTime: 600,
+    icon: '⊞',
+    sides: [{ icon: 'red', label: '叉' }, { icon: 'cyan', label: '圈' }],
+    footer: '九宫套九宫 · 落点决定对手区域 · 赢下三个连线小盘',
+    regions: ['左上', '上中', '右上', '左中', '中央', '右中', '左下', '下中', '右下'],
+    lines: [[0,1,2], [3,4,5], [6,7,8], [0,3,6], [1,4,7], [2,5,8], [0,4,8], [2,4,6]],
+    rules: {
+      goal: '先赢下大盘中横、竖或斜线上的三个小盘。赢的小盘多不等于获胜。',
+      steps: [
+        '叉方先手，首手可选任意格。九个小盘各自按井字棋规则，三子连线即赢下该小盘。',
+        '你在小盘内落子的相对位置，决定对手下一手必须去哪个小盘。例如落在小盘右上格，对手就去大盘右上小盘。',
+        '小盘获胜或填满后立即封闭，剩余空格也不能再下。若被指定的小盘已封闭，对手可任选尚未封闭的小盘。',
+        '先赢下三个连线小盘即获胜。九个小盘全部封闭仍无大盘连线，则平局。'
+      ],
+      tips: ['不要只看眼前的三连，先检查这一手会把对手送到哪里。', '亮边框标出本回合区域，点状提示标出你的合法空格；已封闭小盘会显示大号叉、圈或和。']
+    },
+
+    canvasWidth() { return this.padding * 2 + this.cell * 9; },
+    canvasHeight() { return this.top + this.cell * 9 + this.padding; },
+    initialBoard() { return emptyBoard(9, 9); },
+
+    position(board, lastMove) {
+      const subBoards = emptyBoard(3, 3);
+      for (let region = 0; region < 9; region++) {
+        const startRow = Math.floor(region / 3) * 3, startCol = region % 3 * 3;
+        const values = Array.from({ length: 9 }, (_, index) => board[startRow + Math.floor(index / 3)][startCol + index % 3]);
+        const line = this.lines.find(indices => values[indices[0]] > 0
+          && values[indices[0]] === values[indices[1]] && values[indices[1]] === values[indices[2]]);
+        subBoards[Math.floor(region / 3)][region % 3] = line ? values[line[0]] : values.every(Boolean) ? 3 : 0;
+      }
+      const flat = subBoards.flat();
+      const winning = this.lines.find(line => flat[line[0]] > 0 && flat[line[0]] < 3
+        && flat[line[0]] === flat[line[1]] && flat[line[1]] === flat[line[2]]);
+      const target = lastMove ? lastMove[0] % 3 * 3 + lastMove[1] % 3 : -1;
+      const over = !!winning || flat.every(Boolean);
+      return { subBoards, nextBoard: !over && target >= 0 && flat[target] === 0 ? target : -1,
+        over, wonBoards: [flat.filter(value => value === 1).length, flat.filter(value => value === 2).length] };
+    },
+
+    drawMark(ctx, x, y, radius, side) {
+      ctx.strokeStyle = side === 1 ? '#f0ba78' : '#83dccd';
+      ctx.lineWidth = Math.max(3, radius * 0.19);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      if (side === 1) {
+        ctx.moveTo(x - radius, y - radius); ctx.lineTo(x + radius, y + radius);
+        ctx.moveTo(x + radius, y - radius); ctx.lineTo(x - radius, y + radius);
+      } else ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.stroke();
+    },
+
+    draw(ctx, board, opts) {
+      let view = !opts.replaying && opts.view?.kind === 'ULTIMATE_TTT'
+        ? opts.view : this.position(board, opts.lastMove);
+      if (opts.finished) view = { ...view, over: true };
+      const width = this.canvasWidth(), cell = this.cell, span = cell * 3;
+      ctx.save();
+      ctx.fillStyle = '#0b241e';
+      ctx.fillRect(0, 0, width, this.canvasHeight());
+      ctx.textAlign = 'left';
+      ctx.font = 'bold 18px "Noto Sans SC", sans-serif';
+      ctx.fillStyle = '#f0ba78';
+      ctx.fillText('× ' + view.wonBoards[0], this.padding, 34);
+      ctx.fillStyle = '#83dccd';
+      ctx.fillText('○ ' + view.wonBoards[1], this.padding + 76, 34);
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#c6d9ce';
+      ctx.font = '15px "Noto Sans SC", sans-serif';
+      ctx.fillText(view.over ? '大盘已结束' : view.nextBoard < 0 ? '自由选择小盘'
+        : '本手区域 · ' + this.regions[view.nextBoard], width - this.padding, 34);
+
+      for (let region = 0; region < 9; region++) {
+        const subRow = Math.floor(region / 3), subCol = region % 3;
+        const value = view.subBoards[subRow][subCol];
+        const active = !view.over && value === 0 && (view.nextBoard < 0 || view.nextBoard === region);
+        const left = this.padding + subCol * span, top = this.top + subRow * span;
+        ctx.fillStyle = active ? '#24473a' : '#102e26';
+        ctx.fillRect(left + 4, top + 4, span - 8, span - 8);
+        ctx.strokeStyle = active ? '#e9c784' : '#3b584a';
+        ctx.lineWidth = active ? 2.5 : 1;
+        ctx.strokeRect(left + 4, top + 4, span - 8, span - 8);
+        ctx.strokeStyle = '#496253';
+        ctx.lineWidth = 1;
+        for (let divider = 1; divider < 3; divider++) {
+          ctx.beginPath();
+          ctx.moveTo(left + divider * cell, top + 12); ctx.lineTo(left + divider * cell, top + span - 12);
+          ctx.moveTo(left + 12, top + divider * cell); ctx.lineTo(left + span - 12, top + divider * cell);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = value ? 0.22 : 1;
+        for (let index = 0; index < 9; index++) {
+          const row = subRow * 3 + Math.floor(index / 3), col = subCol * 3 + index % 3;
+          const x = this.padding + (col + 0.5) * cell, y = this.top + (row + 0.5) * cell;
+          if (board[row][col]) this.drawMark(ctx, x, y, cell * 0.24, board[row][col]);
+          else if (active && opts.hint && opts.myStone === opts.currentTurn) {
+            ctx.fillStyle = '#d8d3b7';
+            ctx.beginPath(); ctx.arc(x, y, 2.7, 0, Math.PI * 2); ctx.fill();
+          }
+        }
+        ctx.globalAlpha = 1;
+        if (value === 1 || value === 2) this.drawMark(ctx, left + span / 2, top + span / 2, span * 0.29, value);
+        else if (value === 3) {
+          ctx.fillStyle = '#c6d9ce';
+          ctx.textAlign = 'center';
+          ctx.font = 'bold 36px "Noto Sans SC", sans-serif';
+          ctx.fillText('和', left + span / 2, top + span / 2 + 13);
+        }
+      }
+      if (opts.lastMove) {
+        ctx.strokeStyle = '#fff6da';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(this.padding + opts.lastMove[1] * cell + 7, this.top + opts.lastMove[0] * cell + 7, cell - 14, cell - 14);
+      }
+      const flat = view.subBoards.flat();
+      const winning = this.lines.find(line => flat[line[0]] > 0 && flat[line[0]] < 3
+        && flat[line[0]] === flat[line[1]] && flat[line[1]] === flat[line[2]]);
+      if (winning) {
+        ctx.strokeStyle = '#fff0af';
+        ctx.lineWidth = 7;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(this.padding + (winning[0] % 3 + 0.5) * span, this.top + (Math.floor(winning[0] / 3) + 0.5) * span);
+        ctx.lineTo(this.padding + (winning[2] % 3 + 0.5) * span, this.top + (Math.floor(winning[2] / 3) + 0.5) * span);
+        ctx.stroke();
+      }
+      ctx.restore();
+    },
+
+    hitTest(mx, my) {
+      const row = Math.floor((my - this.top) / this.cell), col = Math.floor((mx - this.padding) / this.cell);
+      return row >= 0 && row < 9 && col >= 0 && col < 9 ? { row, col } : null;
+    },
+
+    drawGhost(ctx, row, col, side) {
+      ctx.save();
+      ctx.globalAlpha = 0.4;
+      this.drawMark(ctx, this.padding + (col + 0.5) * this.cell, this.top + (row + 0.5) * this.cell, this.cell * 0.24, side);
+      ctx.restore();
+    },
+
+    isLegal(board, row, col, side, view) {
+      return view?.kind === 'ULTIMATE_TTT' && !view.over && view.turn === side
+        && board[row]?.[col] === 0 && view.legalMoves.some(move => move[0] === row && move[1] === col);
+    },
+
+    applyEffects(board, effects) {
+      for (const effect of effects || []) board[effect[0]][effect[1]] = effect[2];
+      return null;
+    }
+  };
+
+  // ============================================================
   // 四子棋
   // ============================================================
   const CONNECT4 = {
@@ -2024,6 +2182,6 @@
     drawGhost() {}, isLegal() { return false; }, applyEffects() {}, legalMoves() { return []; }
   };
 
-  window.GameModules = { HIGH_CARD, BLACKJACK, BOMB_CAT, DOUDIZHU, GOMOKU, REVERSI, GO9, XIANGQI, CHECKERS, JUNGLE, DARK_CHESS, FLIGHT_CHESS, CONNECT4, RPG, CARD, NIM, QUIZ, DICE_RACE, GEM_AUCTION, UNO };
+  window.GameModules = { HIGH_CARD, BLACKJACK, BOMB_CAT, DOUDIZHU, GOMOKU, REVERSI, GO9, XIANGQI, CHECKERS, JUNGLE, DARK_CHESS, FLIGHT_CHESS, CONNECT4, ULTIMATE_TTT, RPG, CARD, NIM, QUIZ, DICE_RACE, GEM_AUCTION, UNO };
 })();
 

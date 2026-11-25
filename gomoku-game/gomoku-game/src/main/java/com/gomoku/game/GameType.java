@@ -40,7 +40,9 @@ public enum GameType {
     /** 炸弹猫：2–8 人轮流出牌/抽牌，抽到炸弹且无拆弹器即出局 */
     BOMB_CAT("炸弹猫", 0, 0, false, 2, 8, 4),
     /** 斗地主：3 人经典牌局，地主获得底牌，农民协作对抗地主 */
-    DOUDIZHU("斗地主", 0, 0, false, 3, 3, 3);
+    DOUDIZHU("斗地主", 0, 0, false, 3, 3, 3),
+    /** 终极井字棋：局部落点指定对手小盘，三个小盘连线获胜 */
+    ULTIMATE_TTT("终极井字棋", 9, 9, true);
 
     private final String displayName;
     private final int rows;

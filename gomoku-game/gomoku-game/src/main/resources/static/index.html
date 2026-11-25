@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="棋战大厅">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="style.css?v=102">
+<link rel="stylesheet" href="style.css?v=103">
 </head>
 <body>
 
@@ -221,7 +221,7 @@
 <div class="onboard-overlay" id="onboard-overlay">
   <div class="onboard-box">
     <div class="onboard-title">欢迎来到棋战大厅</div>
-    <div class="onboard-sub">20 种玩法 · 2–8 人在线同桌</div>
+    <div class="onboard-sub">21 种玩法 · 2–8 人在线同桌</div>
     <div class="onboard-steps">
       <div class="onboard-step"><span>1</span><div><b>选玩法</b><p>用分类找玩法；点「查看规则」先读懂目标与操作。</p></div></div>
       <div class="onboard-step"><span>2</span><div><b>一键开局</b><p>「人机对战」随时练习，「快速匹配」找在线玩家。</p></div></div>
@@ -800,11 +800,11 @@
     </div>
     <!-- 回放控制栏 -->
     <div id="replay-bar" style="display:none;padding:8px 0;">
-      <div style="display:flex;align-items:center;gap:8px;justify-content:center;">
+      <div class="replay-controls">
         <button class="btn-outline" style="padding:4px 10px;font-size:0.8rem;" onclick="replayStep(-1)">|&lt;</button>
         <button class="btn-outline" style="padding:4px 10px;font-size:0.8rem;" id="replay-play-btn" onclick="toggleReplayPlay()">▶</button>
         <button class="btn-outline" style="padding:4px 10px;font-size:0.8rem;" onclick="replayStep(1)">>|</button>
-        <input type="range" id="replay-slider" min="0" max="0" value="0" style="flex:1;" oninput="replaySeek(this.value)">
+        <input type="range" id="replay-slider" min="0" max="0" value="0" oninput="replaySeek(this.value)">
         <span id="replay-step-text" style="font-size:0.8rem;min-width:60px;text-align:center;">0/0</span>
         <select id="replay-speed" style="font-size:0.75rem;padding:2px;" onchange="changeReplaySpeed()">
           <option value="1000">1x</option>
@@ -846,7 +846,7 @@
 
 </main>
 
-<script src="js/games.js?v=102"></script>
-<script src="app.js?v=102"></script>
+<script src="js/games.js?v=103"></script>
+<script src="app.js?v=103"></script>
 </body>
 </html>

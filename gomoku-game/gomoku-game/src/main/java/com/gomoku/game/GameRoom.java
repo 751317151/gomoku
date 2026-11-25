@@ -181,6 +181,7 @@ public class GameRoom {
             case JUNGLE:   return new JungleBoard();
             case DARK_CHESS: return new DarkChessBoard();
             case CONNECT4: return new ConnectFourBoard();
+            case ULTIMATE_TTT: return new UltimateTicTacToeBoard();
             case RPG:      return new RpgBattleEngine();
             case CARD:     return new CardBattleEngine();
             case NIM:      return new NimBattleEngine();
@@ -207,6 +208,7 @@ public class GameRoom {
             case JUNGLE:   return JungleAI.INSTANCE;
             case DARK_CHESS: return DarkChessAI.INSTANCE;
             case CONNECT4: return ConnectFourAI.INSTANCE;
+            case ULTIMATE_TTT: return UltimateTicTacToeAI.INSTANCE;
             case RPG:      return RpgAI.INSTANCE;
             case CARD:     return CardAI.INSTANCE;
             case NIM:      return NimAI.INSTANCE;

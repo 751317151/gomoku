@@ -5,7 +5,7 @@ const APP = process.env.APP_URL || 'http://127.0.0.1:19000/';
 const REST = process.env.REST_URL || 'http://127.0.0.1:19000';
 const WS_URL = process.env.WS_URL || 'ws://127.0.0.1:19001';
 const OUT = process.env.OUT_DIR || 'F:/tmp/shot';
-const TOTAL = 32; // 基础 11 + 全模式制霸 + 20 种玩法首胜
+const TOTAL = 33;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0, failed = 0;
 function check(name, cond, detail) {
@@ -146,7 +146,7 @@ async function serverProgress() {
   console.log('== 成就墙 UI（真实浏览器）==');
   console.log('   APP=' + APP + ' WS=' + WS_URL + ' CDP=' + CDP_PORT);
 
-  // 1. 全新游客：32 项成就，全部未解锁
+  // 1. 全新游客：全部成就均未解锁
   const guest = await (await fetch(REST + '/api/guest', { method: 'POST' })).json();
   token = guest.token;
   check('游客身份签发', !!token);
@@ -187,20 +187,20 @@ async function serverProgress() {
   await waitUntil(() => cdp.eval("document.getElementById('achv-modal').classList.contains('show')"), '成就墙打开');
   let wall = await evalJson(cdp, wallState());
   check('成就墙已打开', wall.show);
-  check('成就墙展示 32 张卡片', wall.cards.length === TOTAL, 'cards=' + wall.cards.length);
-  check('新账号副标题为 已解锁 0 / 32', wall.sub.indexOf('已解锁 0 / ' + TOTAL) === 0, wall.sub);
+  check('成就墙展示全部卡片', wall.cards.length === TOTAL, 'cards=' + wall.cards.length);
+  check('新账号副标题显示未解锁总数', wall.sub.indexOf('已解锁 0 / ' + TOTAL) === 0, wall.sub);
   check('新账号全部卡片未解锁', wall.cards.every(c => !c.unlocked));
 
-  // 4. 筛选：已解锁 → 空态；未解锁 → 32；回到全部 → 32
+  // 4. 筛选：已解锁为空；未解锁与全部展示所有卡片
   await clickTab(cdp, 'unlocked');
   wall = await evalJson(cdp, wallState());
   check('已解锁筛选显示空态', wall.cards.length === 0 && wall.empty.indexOf('还没有已解锁成就') >= 0, JSON.stringify(wall));
   await clickTab(cdp, 'locked');
   wall = await evalJson(cdp, wallState());
-  check('未解锁筛选显示 32 张', wall.cards.length === TOTAL, 'cards=' + wall.cards.length);
+  check('未解锁筛选显示全部卡片', wall.cards.length === TOTAL, 'cards=' + wall.cards.length);
   await clickTab(cdp, 'all');
   wall = await evalJson(cdp, wallState());
-  check('全部筛选恢复 32 张', wall.cards.length === TOTAL, 'cards=' + wall.cards.length);
+  check('全部筛选恢复所有卡片', wall.cards.length === TOTAL, 'cards=' + wall.cards.length);
 
   // 5. 布局几何：多列排布、卡片有足够高度但不成竖条
   const c0 = wall.cards[0], c1 = wall.cards[1];
@@ -248,7 +248,7 @@ async function serverProgress() {
   }, '成就墙数据与服务器同步', 8000);
   wall = await evalJson(cdp, wallState());
   check('刷新后副标题与服务器一致', wall.sub.indexOf('已解锁 ' + unlockedCount + ' / ' + TOTAL) === 0, wall.sub);
-  check('刷新后卡片仍为 32 张', wall.cards.length === TOTAL, 'cards=' + wall.cards.length);
+  check('刷新后卡片总数不变', wall.cards.length === TOTAL, 'cards=' + wall.cards.length);
   const firstGameCard = await findCard(cdp, '初出茅庐');
   check('初出茅庐显示为已解锁', !!firstGameCard && firstGameCard.unlocked, JSON.stringify(firstGameCard));
   const modeWinCard = await findCard(cdp, '五子棋·首胜');

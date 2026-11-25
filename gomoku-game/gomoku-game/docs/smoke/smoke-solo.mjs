@@ -1,4 +1,4 @@
-// 单机模式冒烟：20 个玩法逐个「建房 + 补满电脑」，断言都能直接开局
+// 单机模式冒烟：全部玩法逐个「建房 + 补满电脑」，断言都能直接开局
 // 这条覆盖的是一个曾经的致命缺陷：一个人进房间后「添加电脑」按钮从不渲染，
 // 导致所有玩法都只能干等另一个真人加入。
 const WS_URL = process.env.WS_URL || 'ws://127.0.0.1:19001';
@@ -14,6 +14,7 @@ const GAMES = [
   { type: 'DARK_CHESS', name: '暗棋' },
   { type: 'FLIGHT_CHESS', name: '飞行棋' },
   { type: 'CONNECT4', name: '四子棋' },
+  { type: 'ULTIMATE_TTT', name: '终极井字棋' },
   { type: 'RPG', name: '回合制对战' },
   { type: 'CARD', name: '卡牌对战' },
   { type: 'NIM', name: '取石子' },
